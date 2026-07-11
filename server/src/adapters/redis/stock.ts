@@ -1,7 +1,8 @@
 // Redis adapter for the `stock:remaining` key — reads for the sale-status
-// service, plus the interim pre-listen() boot seed (SETNX only: a warm restart
-// against surviving Redis state touches nothing; full AD-4 reconciliation
-// replaces this in Story 1.4). Zero business rules (AD-7).
+// service. Writes to this key happen only via the AD-1 Lua script (serving),
+// the AD-4 boot rebuild in reconcile.ts (pre-listen()), or the offline reset
+// script; the Story-1.2 interim SETNX seed was retired by Story 1.4.
+// Zero business rules (AD-7).
 //
 // Fail closed (AD-5, NFR-9): every command is bounded by config's
 // redisCommandTimeoutMs; a timeout OR any command rejection surfaces as
@@ -25,7 +26,6 @@ export class RedisUnavailableError extends Error {
 /** Narrow command surface — structurally satisfied by node-redis RedisClientType. */
 export interface StockCommands {
   get(key: string): Promise<string | null>;
-  setNX(key: string, value: string): Promise<unknown>;
 }
 
 export interface StockStoreOptions {
@@ -36,12 +36,11 @@ export interface StockStore {
   /** Current remaining stock. Throws RedisUnavailableError when Redis is
    *  unreachable, a command times out, or the key is missing (fail closed). */
   getRemaining(): Promise<number>;
-  /** Interim boot seed: SETNX stock:remaining <quantity>. Idempotent — never
-   *  overwrites surviving state (AD-1/AD-4 writer discipline). */
-  seedIfAbsent(quantity: number): Promise<void>;
 }
 
-async function bounded<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+/** Bound a command by the AD-5 per-command timeout, wrapping timeout AND any
+ *  command rejection into RedisUnavailableError. Shared with reconcile.ts. */
+export async function bounded<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([
@@ -67,15 +66,11 @@ export function createStockStore(
     async getRemaining(): Promise<number> {
       const raw = await bounded(client.get(STOCK_KEY), commandTimeoutMs);
       if (raw === null) {
-        // Key lost mid-run (pre-1.4 reconciliation): never fabricate a number —
-        // 0 would lie "sold_out". Fail closed; a restart re-seeds.
+        // Key lost mid-run: never fabricate a number — 0 would lie "sold_out".
+        // Fail closed; the next boot's AD-4 cold rebuild restores truth.
         throw new RedisUnavailableError(new Error(`${STOCK_KEY} key is missing`));
       }
       return Number.parseInt(raw, 10);
-    },
-
-    async seedIfAbsent(quantity: number): Promise<void> {
-      await bounded(client.setNX(STOCK_KEY, String(quantity)), commandTimeoutMs);
     },
   };
 }

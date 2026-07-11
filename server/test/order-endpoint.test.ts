@@ -10,6 +10,7 @@ import request from "supertest";
 import { pino } from "pino";
 import { bootstrap, type BootstrapOverrides } from "../src/bootstrap.ts";
 import { createFakeRedis, orderSetSize, type FakeRedis } from "./helpers/fake-redis.ts";
+import { createFakeMongo } from "./helpers/fake-mongo.ts";
 
 const SALE_START = "2026-07-10T04:00:00Z";
 const SALE_END = "2026-07-10T05:00:00Z";
@@ -32,6 +33,8 @@ async function boot(opts: { nowMs: number; stock?: string; stockQuantity?: strin
     disconnectRedis: vi.fn(async () => {}),
     connectMongoDb: vi.fn(async () => {}),
     disconnectMongoDb: vi.fn(async () => {}),
+    // Story 1.4: boot runs the AD-4 seed + reconcile over the mongo model ops.
+    mongoModelOps: createFakeMongo().ops,
   };
   const { app } = await bootstrap(overrides);
   return { fake, app };
@@ -249,6 +252,7 @@ async function bootWithSurvivingState(fake: FakeRedis, nowMs: number) {
     disconnectRedis: vi.fn(async () => {}),
     connectMongoDb: vi.fn(async () => {}),
     disconnectMongoDb: vi.fn(async () => {}),
+    mongoModelOps: createFakeMongo().ops,
   };
   const { app } = await bootstrap(overrides);
   return app;

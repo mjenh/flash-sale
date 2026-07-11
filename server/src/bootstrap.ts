@@ -1,18 +1,23 @@
 // Shared init used by index.ts AND (from Story 1.2 on) integration tests —
 // tests never re-implement boot. Order, strictly before listen():
 //   config (fail fast, AD-6) -> Redis connect (AD-5) -> Mongo connect ->
-//   Lua order-script registration (AD-1, Story 1.3) -> app.
-// Reserved slots: AD-4 seed + cold-start rebuild (Story 1.4), sale-events
-// subscriber + timers (Story 1.6).
+//   Lua order-script registration (AD-1, Story 1.3) ->
+//   AD-4 seed upserts + warm/cold reconcile (Story 1.4) -> app.
+// Reserved slot: sale-events subscriber + timers (Story 1.6).
 import { pino, type Logger } from "pino";
 import type { Express } from "express";
 import { loadConfig, type AppConfig } from "./adapters/config.ts";
 import { createRedisClient, type RedisClient } from "./adapters/redis/client.ts";
 import { createStockStore } from "./adapters/redis/stock.ts";
 import { createOrderStore } from "./adapters/redis/orders.ts";
+import { createReconciler } from "./adapters/redis/reconcile.ts";
 import { connectMongo, disconnectMongo } from "./adapters/mongo/client.ts";
+import { createOrderRecorder, mongoAuditModelOps, type AuditModelOps } from "./adapters/mongo/audit.ts";
+import { createDomainSeeder, mongoSeedModelOps, type SeedModelOps } from "./adapters/mongo/seed.ts";
+import { noopPaymentProvider } from "./adapters/payment/noop.ts";
 import { createSaleStatusService } from "./services/sale-status.ts";
 import { createOrderService } from "./services/order.ts";
+import type { PaymentProvider } from "./services/payment.ts";
 import { systemClock, type Clock } from "./services/clock.ts";
 import { createApiRouter } from "./routes/index.ts";
 import { createApp } from "./app.ts";
@@ -27,6 +32,9 @@ export interface BootstrapOverrides {
   disconnectRedis?: (client: RedisClient) => Promise<void>;
   connectMongoDb?: (uri: string) => Promise<unknown>;
   disconnectMongoDb?: () => Promise<void>;
+  /** Story 1.4 seams — tests run the REAL recorder/seeder over fake model ops. */
+  mongoModelOps?: { audit: AuditModelOps; seed: SeedModelOps };
+  payment?: PaymentProvider;
 }
 
 export interface BootstrapResult {
@@ -81,12 +89,38 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
     commandTimeoutMs: config.redisCommandTimeoutMs,
   });
   await orderStore.register();
-  // Interim cold-Redis seed (Story 1.2) — SETNX only, strictly before listen();
-  // replaced by the full AD-4 seed upserts + cold-start rebuild in Story 1.4.
+
+  // AD-4 durable audit + restart safety (Story 1.4), strictly before listen():
+  // idempotent seed upserts, then the warm/cold gate on stock:remaining.
+  const mongoOps = overrides.mongoModelOps ?? { audit: mongoAuditModelOps, seed: mongoSeedModelOps };
+  const seeder = createDomainSeeder(mongoOps.seed);
+  const saleRefs = await seeder.seed(config);
+  const reconciler = createReconciler(redis, {
+    commandTimeoutMs: config.redisCommandTimeoutMs,
+  });
+  if (await reconciler.hasStockKey()) {
+    // Warm start: surviving Redis state is authoritative — touch nothing.
+    // A changed STOCK_QUANTITY against surviving state is thereby a no-op;
+    // a sale reset happens only via the explicit offline reset script (AD-4).
+  } else {
+    // Cold start: rebuild Redis FROM MongoDB truth — never the reverse.
+    const emails = await seeder.listConfirmedOrderEmails(saleRefs.saleId);
+    const remaining = Math.max(0, config.stockQuantity - emails.length);
+    if (config.stockQuantity - emails.length < 0) {
+      logger.warn(
+        { stockQuantity: config.stockQuantity, confirmedOrders: emails.length },
+        "cold rebuild: confirmed orders exceed STOCK_QUANTITY; clamping stock:remaining to 0",
+      );
+    }
+    await reconciler.rebuild(emails, remaining);
+    logger.info(
+      { confirmedOrders: emails.length, remaining },
+      "cold start: rebuilt Redis order state from MongoDB (AD-4)",
+    );
+  }
   const stockStore = createStockStore(redis, {
     commandTimeoutMs: config.redisCommandTimeoutMs,
   });
-  await stockStore.seedIfAbsent(config.stockQuantity);
   // (Story 1.6) sale-events subscriber (duplicated connection) + window timers here.
 
   // 4. App assembly.
@@ -98,7 +132,16 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
     endIso: config.saleEndIso,
   };
   const saleStatus = createSaleStatusService({ clock, stock: stockStore, window });
-  const orderService = createOrderService({ clock, window, orders: orderStore });
+  const orderService = createOrderService({
+    clock,
+    window,
+    orders: orderStore,
+    audit: createOrderRecorder(saleRefs, mongoOps.audit),
+    payment: overrides.payment ?? noopPaymentProvider,
+    reportSideEffectFailure: (effect, err) => {
+      logger.error({ err, effect }, "post-accept side effect failed (never alters the HTTP outcome)");
+    },
+  });
   const app = createApp({
     logger,
     apiRouter: createApiRouter({ saleStatus, orderService }),

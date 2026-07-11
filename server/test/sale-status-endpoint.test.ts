@@ -1,56 +1,23 @@
-// Endpoint tests through the REAL bootstrap() (AC 1, 2, 3, 5) — tests never
-// re-implement boot. The Redis client is an injected in-memory fake exposing
-// the exact command surface the stock adapter uses (get/setNX); swap it for a
-// real client against compose-run Redis and this file runs unchanged
-// (compose validation deferred — Docker unavailable in this environment).
+// Endpoint tests through the REAL bootstrap() — tests never re-implement
+// boot. Redis is the shared in-memory fake and Mongo is the shared model-ops
+// fake; swap them for real clients against compose-run stores and this file
+// runs unchanged (compose validation deferred — Docker unavailable in this
+// environment). Cold/warm boot expectations flow through the Story-1.4 AD-4
+// reconcile (which replaced the Story-1.2 interim SETNX seed).
 import { describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { pino } from "pino";
 import { bootstrap, type BootstrapOverrides } from "../src/bootstrap.ts";
-import type { RedisClient } from "../src/adapters/redis/client.ts";
+import { createFakeRedis, type FakeRedis } from "./helpers/fake-redis.ts";
+import { createFakeMongo } from "./helpers/fake-mongo.ts";
 
 const SALE_START = "2026-07-10T04:00:00Z";
 const SALE_END = "2026-07-10T05:00:00Z";
 const startMs = Date.parse(SALE_START);
 const endMs = Date.parse(SALE_END);
 
-interface FakeRedis {
-  kv: Map<string, string>;
-  failing: boolean;
-}
-
-function boot(opts: { nowMs: number; kv?: Map<string, string>; stock?: string }) {
-  const fake: FakeRedis = {
-    kv: opts.kv ?? new Map(opts.stock === undefined ? [] : [["stock:remaining", opts.stock]]),
-    failing: false,
-  };
-  const client = {
-    isOpen: true,
-    get: async (key: string) => {
-      if (fake.failing) {
-        throw new Error("The client is closed");
-      }
-      return fake.kv.get(key) ?? null;
-    },
-    setNX: async (key: string, value: string) => {
-      if (fake.failing) {
-        throw new Error("The client is closed");
-      }
-      if (fake.kv.has(key)) {
-        return 0;
-      }
-      fake.kv.set(key, value);
-      return 1;
-    },
-    // Story 1.3: bootstrap registers the AD-1 order script before listen().
-    scriptLoad: async () => {
-      if (fake.failing) {
-        throw new Error("The client is closed");
-      }
-      return "fake-sha";
-    },
-  } as unknown as RedisClient;
-
+function boot(opts: { nowMs: number; stock?: string }) {
+  const fake: FakeRedis = createFakeRedis(opts.stock === undefined ? {} : { stock: opts.stock });
   const overrides: BootstrapOverrides = {
     env: {
       SALE_START_TIME: SALE_START,
@@ -59,17 +26,18 @@ function boot(opts: { nowMs: number; kv?: Map<string, string>; stock?: string })
     },
     logger: pino({ level: "silent" }),
     clock: () => opts.nowMs,
-    createRedis: () => client,
+    createRedis: () => fake.client,
     connectRedis: vi.fn(async () => {}),
     disconnectRedis: vi.fn(async () => {}),
     connectMongoDb: vi.fn(async () => {}),
     disconnectMongoDb: vi.fn(async () => {}),
+    mongoModelOps: createFakeMongo().ops,
   };
   return { fake, result: bootstrap(overrides) };
 }
 
 describe("GET /api/sale/status (booted via bootstrap())", () => {
-  it("cold Redis: boot seeds stock:remaining to STOCK_QUANTITY and reports upcoming (FR-1 body)", async () => {
+  it("cold Redis: boot rebuilds stock:remaining to STOCK_QUANTITY and reports upcoming (FR-1 body)", async () => {
     const { fake, result } = boot({ nowMs: startMs - 60_000 });
     const { app } = await result;
     expect(fake.kv.get("stock:remaining")).toBe("100");

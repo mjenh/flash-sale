@@ -1,7 +1,8 @@
 // Shared in-memory fake Redis client for endpoint tests. Exposes exactly the
-// command surface production code uses (get/setNX/sIsMember/scriptLoad/
-// evalSha/eval) so tests boot through the REAL bootstrap(); swap it for a real
-// client against compose-run Redis and the endpoint test files run unchanged.
+// command surface production code uses (get/set/exists/del/sAdd/sIsMember/
+// scriptLoad/evalSha/eval) so tests boot through the REAL bootstrap(); swap it
+// for a real client against compose-run Redis and the endpoint test files run
+// unchanged.
 //
 // evalSha/eval execute a faithful, line-for-line JS port of order.lua — the
 // .lua file remains the single authoritative implementation (its keys and
@@ -19,8 +20,19 @@ export interface FakeRedis {
   failing: boolean;
   /** Simulates SCRIPT FLUSH: EVALSHA answers NOSCRIPT until re-loaded. */
   flushScripts(): void;
-  /** Command spies for negative-space assertions. */
-  calls: { evalSha: number; eval: number; sIsMember: number };
+  /** Simulates a full Redis wipe (FLUSHALL + restart without AOF) — the
+   *  AD-4 cold-restart precondition. */
+  flush(): void;
+  /** Command spies for negative-space assertions (warm boots write nothing). */
+  calls: {
+    evalSha: number;
+    eval: number;
+    sIsMember: number;
+    exists: number;
+    del: number;
+    set: number;
+    sAdd: number;
+  };
   client: RedisClient;
 }
 
@@ -31,13 +43,18 @@ export function createFakeRedis(initial?: { stock?: string }): FakeRedis {
   }
   const sets = new Map<string, Set<string>>();
   const scripts = new Map<string, string>();
-  const calls = { evalSha: 0, eval: 0, sIsMember: 0 };
+  const calls = { evalSha: 0, eval: 0, sIsMember: 0, exists: 0, del: 0, set: 0, sAdd: 0 };
 
   const fake: FakeRedis = {
     kv,
     sets,
     failing: false,
     flushScripts: () => scripts.clear(),
+    flush: () => {
+      kv.clear();
+      sets.clear();
+      scripts.clear();
+    },
     calls,
     client: undefined as unknown as RedisClient,
   };
@@ -81,13 +98,37 @@ export function createFakeRedis(initial?: { stock?: string }): FakeRedis {
       assertUp();
       return kv.get(key) ?? null;
     },
-    setNX: async (key: string, value: string) => {
+    set: async (key: string, value: string) => {
       assertUp();
-      if (kv.has(key)) {
-        return 0;
-      }
+      calls.set += 1;
       kv.set(key, value);
-      return 1;
+      return "OK";
+    },
+    exists: async (key: string) => {
+      assertUp();
+      calls.exists += 1;
+      return kv.has(key) || sets.has(key) ? 1 : 0;
+    },
+    del: async (key: string) => {
+      assertUp();
+      calls.del += 1;
+      const had = kv.delete(key);
+      const hadSet = sets.delete(key);
+      return had || hadSet ? 1 : 0;
+    },
+    sAdd: async (key: string, members: string[]) => {
+      assertUp();
+      calls.sAdd += 1;
+      const set = sets.get(key) ?? new Set<string>();
+      let added = 0;
+      for (const member of members) {
+        if (!set.has(member)) {
+          set.add(member);
+          added += 1;
+        }
+      }
+      sets.set(key, set);
+      return added;
     },
     sIsMember: async (key: string, member: string) => {
       assertUp();
@@ -128,4 +169,9 @@ export function createFakeRedis(initial?: { stock?: string }): FakeRedis {
 /** Set-size helper for count assertions. */
 export function orderSetSize(fake: FakeRedis): number {
   return (fake.sets.get("orders:users") ?? new Set()).size;
+}
+
+/** Membership helper for AD-4 rebuild assertions. */
+export function orderSetMembers(fake: FakeRedis): string[] {
+  return [...(fake.sets.get("orders:users") ?? new Set<string>())].sort();
 }

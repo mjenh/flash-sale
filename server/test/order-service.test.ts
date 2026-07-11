@@ -1,7 +1,8 @@
-// Unit tests for the order service (AC 1, 2, 3, 4) — injected clock + fake
-// port, zero I/O. Proves the AD-2 precedence and the AD-6 [start, end)
-// boundaries: outside the window ONE SISMEMBER decides already-vs-inactive
-// and the script never runs; inside it the script decides everything.
+// Unit tests for the order service (Story 1.3 AC 1-4 + Story 1.4 AC 1-2) —
+// injected clock + fake ports, zero I/O. Proves the AD-2 precedence, the AD-6
+// [start, end) boundaries, and the Story-1.4 post-accept side effects: audit
+// + payment fire-and-forget after OK only, failures reported, outcome never
+// altered or delayed (AD-3/AD-10).
 import { describe, expect, it, vi } from "vitest";
 import { createOrderService, type OrderAttemptPort } from "../src/services/order.ts";
 
@@ -14,13 +15,43 @@ const window = {
   endIso: "2026-07-10T05:00:00.000Z",
 };
 
-function build(nowMs: number, port: Partial<OrderAttemptPort> = {}) {
+/** Drain the microtask/immediate queue so fire-and-forget effects settle. */
+const drain = () => new Promise((resolve) => setImmediate(resolve));
+
+function build(
+  nowMs: number,
+  opts: {
+    port?: Partial<OrderAttemptPort>;
+    recordOrder?: (email: string) => Promise<void>;
+    charge?: (email: string) => Promise<{ approved: boolean; reference: string }>;
+  } = {},
+) {
   const orders = {
     attempt: vi.fn(async () => ({ verdict: "OK" as const, remaining: 99 })),
     hasOrdered: vi.fn(async () => false),
-    ...port,
+    ...opts.port,
   };
-  return { orders, service: createOrderService({ clock: () => nowMs, window, orders }) };
+  const audit = { recordOrder: vi.fn(opts.recordOrder ?? (async () => {})) };
+  const payment = {
+    charge: vi.fn(
+      opts.charge ?? (async (email: string) => ({ approved: true, reference: `noop:${email}` })),
+    ),
+  };
+  const report = vi.fn();
+  return {
+    orders,
+    audit,
+    payment,
+    report,
+    service: createOrderService({
+      clock: () => nowMs,
+      window,
+      orders,
+      audit,
+      payment,
+      reportSideEffectFailure: report,
+    }),
+  };
 }
 
 describe("order service — AD-2 precedence on the injected clock", () => {
@@ -40,7 +71,7 @@ describe("order service — AD-2 precedence on the injected clock", () => {
       });
 
       it(`${label}, prior order -> already (order holder always wins)`, async () => {
-        const { orders, service } = build(now, { hasOrdered: vi.fn(async () => true) });
+        const { orders, service } = build(now, { port: { hasOrdered: vi.fn(async () => true) } });
         expect(await service.attempt("held@x.com")).toEqual({ outcome: "already" });
         expect(orders.attempt).not.toHaveBeenCalled();
       });
@@ -57,21 +88,21 @@ describe("order service — AD-2 precedence on the injected clock", () => {
 
     it("maps OK -> created with remaining passed through", async () => {
       const { service } = build(startMs + 1000, {
-        attempt: vi.fn(async () => ({ verdict: "OK" as const, remaining: 0 })),
+        port: { attempt: vi.fn(async () => ({ verdict: "OK" as const, remaining: 0 })) },
       });
       expect(await service.attempt("last@x.com")).toEqual({ outcome: "created", remaining: 0 });
     });
 
     it("maps ALREADY -> already", async () => {
       const { service } = build(startMs + 1000, {
-        attempt: vi.fn(async () => ({ verdict: "ALREADY" as const, remaining: 42 })),
+        port: { attempt: vi.fn(async () => ({ verdict: "ALREADY" as const, remaining: 42 })) },
       });
       expect(await service.attempt("dup@x.com")).toEqual({ outcome: "already", remaining: 42 });
     });
 
     it("maps SOLD_OUT -> sold_out", async () => {
       const { service } = build(startMs + 1000, {
-        attempt: vi.fn(async () => ({ verdict: "SOLD_OUT" as const, remaining: 0 })),
+        port: { attempt: vi.fn(async () => ({ verdict: "SOLD_OUT" as const, remaining: 0 })) },
       });
       expect(await service.attempt("late@x.com")).toEqual({ outcome: "sold_out", remaining: 0 });
     });
@@ -80,10 +111,89 @@ describe("order service — AD-2 precedence on the injected clock", () => {
   it("port rejections propagate untouched (the 503 signal is the adapter's)", async () => {
     const boom = new Error("redis gone");
     const { service } = build(startMs + 1, {
-      attempt: vi.fn(async () => {
+      port: {
+        attempt: vi.fn(async () => {
+          throw boom;
+        }),
+      },
+    });
+    await expect(service.attempt("a@x.com")).rejects.toBe(boom);
+  });
+});
+
+describe("order service — Story 1.4 post-accept side effects (AD-3/AD-10)", () => {
+  it("OK -> audit.recordOrder and payment.charge each fire once with the email", async () => {
+    const { audit, payment, report, service } = build(startMs + 1000);
+    await service.attempt("winner@x.com");
+    await drain();
+    expect(audit.recordOrder).toHaveBeenCalledExactlyOnceWith("winner@x.com");
+    expect(payment.charge).toHaveBeenCalledExactlyOnceWith("winner@x.com");
+    expect(report).not.toHaveBeenCalled();
+  });
+
+  it("an audit rejection is reported, never thrown — outcome stays created (AC 2)", async () => {
+    const boom = new Error("mongo down");
+    const { report, service } = build(startMs + 1000, {
+      recordOrder: vi.fn(async () => {
         throw boom;
       }),
     });
-    await expect(service.attempt("a@x.com")).rejects.toBe(boom);
+    expect(await service.attempt("winner@x.com")).toEqual({ outcome: "created", remaining: 99 });
+    await drain();
+    expect(report).toHaveBeenCalledExactlyOnceWith("audit", boom);
+  });
+
+  it("a payment rejection is reported, never thrown — outcome stays created", async () => {
+    const boom = new Error("gateway down");
+    const { report, service } = build(startMs + 1000, {
+      charge: vi.fn(async () => {
+        throw boom;
+      }),
+    });
+    expect(await service.attempt("winner@x.com")).toEqual({ outcome: "created", remaining: 99 });
+    await drain();
+    expect(report).toHaveBeenCalledExactlyOnceWith("payment", boom);
+  });
+
+  it("a declined payment is reported — outcome stays created (AD-10: cannot fail an order)", async () => {
+    const { report, service } = build(startMs + 1000, {
+      charge: vi.fn(async () => ({ approved: false, reference: "declined:x" })),
+    });
+    expect(await service.attempt("winner@x.com")).toEqual({ outcome: "created", remaining: 99 });
+    await drain();
+    expect(report).toHaveBeenCalledTimes(1);
+    expect(report.mock.calls[0]?.[0]).toBe("payment");
+  });
+
+  it("a never-settling audit write does not delay the verdict (fire-and-forget, AD-8)", async () => {
+    const { service } = build(startMs + 1000, {
+      recordOrder: vi.fn(() => new Promise<void>(() => {})),
+    });
+    // If the service awaited the audit promise this would time out.
+    expect(await service.attempt("winner@x.com")).toEqual({ outcome: "created", remaining: 99 });
+  });
+
+  it("ALREADY and SOLD_OUT verdicts never touch audit or payment (negative space)", async () => {
+    for (const verdict of ["ALREADY", "SOLD_OUT"] as const) {
+      const { audit, payment, service } = build(startMs + 1000, {
+        port: { attempt: vi.fn(async () => ({ verdict, remaining: 0 })) },
+      });
+      await service.attempt("x@x.com");
+      await drain();
+      expect(audit.recordOrder).not.toHaveBeenCalled();
+      expect(payment.charge).not.toHaveBeenCalled();
+    }
+  });
+
+  it("outside-window paths (inactive AND already) never touch audit or payment", async () => {
+    for (const hasOrdered of [false, true]) {
+      const { audit, payment, service } = build(endMs + 1, {
+        port: { hasOrdered: vi.fn(async () => hasOrdered) },
+      });
+      await service.attempt("x@x.com");
+      await drain();
+      expect(audit.recordOrder).not.toHaveBeenCalled();
+      expect(payment.charge).not.toHaveBeenCalled();
+    }
   });
 });
