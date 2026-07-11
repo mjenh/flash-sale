@@ -42,6 +42,13 @@ function boot(opts: { nowMs: number; kv?: Map<string, string>; stock?: string })
       fake.kv.set(key, value);
       return 1;
     },
+    // Story 1.3: bootstrap registers the AD-1 order script before listen().
+    scriptLoad: async () => {
+      if (fake.failing) {
+        throw new Error("The client is closed");
+      }
+      return "fake-sha";
+    },
   } as unknown as RedisClient;
 
   const overrides: BootstrapOverrides = {

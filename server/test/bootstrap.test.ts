@@ -13,7 +13,8 @@ const validEnv = {
 };
 
 function fakeOverrides(env: Record<string, string | undefined>) {
-  // In-memory command surface for the stock adapter (get/setNX) + isOpen for teardown.
+  // In-memory command surface for the stock adapter (get/setNX), the order
+  // store's boot-time registration (scriptLoad) + isOpen for teardown.
   const kv = new Map<string, string>();
   const fakeRedis = {
     isOpen: false,
@@ -25,6 +26,7 @@ function fakeOverrides(env: Record<string, string | undefined>) {
       kv.set(key, value);
       return 1;
     }),
+    scriptLoad: vi.fn(async () => "fake-sha"),
   } as unknown as RedisClient;
   const overrides = {
     env,
@@ -68,6 +70,14 @@ describe("bootstrap", () => {
     const setNX = (fakeRedis as unknown as { setNX: ReturnType<typeof vi.fn> }).setNX;
     await bootstrap(overrides);
     expect(setNX).toHaveBeenCalledWith("stock:remaining", "100");
+  });
+
+  it("registers the AD-1 order script (SCRIPT LOAD) during bootstrap — before any listen()", async () => {
+    const { fakeRedis, overrides } = fakeOverrides(validEnv);
+    const scriptLoad = (fakeRedis as unknown as { scriptLoad: ReturnType<typeof vi.fn> }).scriptLoad;
+    await bootstrap(overrides);
+    expect(scriptLoad).toHaveBeenCalledTimes(1);
+    expect(String(scriptLoad.mock.calls[0]?.[0])).toContain("SISMEMBER");
   });
 
   it("teardown disconnects both stores", async () => {
