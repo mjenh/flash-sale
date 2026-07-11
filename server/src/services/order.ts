@@ -38,6 +38,11 @@ export type OrderOutcome =
 
 export interface OrderService {
   attempt(email: string): Promise<OrderOutcome>;
+  /** FR-4 (Story 1.5): does this email already hold a confirmed order?
+   *  Answered from Redis membership only — never Mongo (AD-3) — and never
+   *  clock-gated: membership is a standing fact, honest before, during, and
+   *  after the window (AD-2's order-holder truth; AD-8's convenience read). */
+  hasOrdered(email: string): Promise<boolean>;
 }
 
 export interface OrderServiceDeps {
@@ -98,6 +103,12 @@ export function createOrderService({
         case "SOLD_OUT":
           return { outcome: "sold_out", remaining };
       }
+    },
+
+    async hasOrdered(email: string): Promise<boolean> {
+      // Pure read (AD-8): no clock, no script, no side effects.
+      // RedisUnavailableError rejections propagate untouched (AD-5 -> 503).
+      return orders.hasOrdered(email);
     },
   };
 }

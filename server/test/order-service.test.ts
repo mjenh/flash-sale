@@ -1,8 +1,10 @@
-// Unit tests for the order service (Story 1.3 AC 1-4 + Story 1.4 AC 1-2) —
-// injected clock + fake ports, zero I/O. Proves the AD-2 precedence, the AD-6
-// [start, end) boundaries, and the Story-1.4 post-accept side effects: audit
-// + payment fire-and-forget after OK only, failures reported, outcome never
-// altered or delayed (AD-3/AD-10).
+// Unit tests for the order service (Story 1.3 AC 1-4 + Story 1.4 AC 1-2 +
+// Story 1.5 AC 1/2/4) — injected clock + fake ports, zero I/O. Proves the
+// AD-2 precedence, the AD-6 [start, end) boundaries, the Story-1.4
+// post-accept side effects (audit + payment fire-and-forget after OK only,
+// failures reported, outcome never altered or delayed — AD-3/AD-10), and the
+// Story-1.5 hasOrdered read (pure delegation: no clock, no script, no side
+// effects).
 import { describe, expect, it, vi } from "vitest";
 import { createOrderService, type OrderAttemptPort } from "../src/services/order.ts";
 
@@ -195,5 +197,66 @@ describe("order service — Story 1.4 post-accept side effects (AD-3/AD-10)", ()
       expect(audit.recordOrder).not.toHaveBeenCalled();
       expect(payment.charge).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe("order service — Story 1.5 hasOrdered (FR-4 read)", () => {
+  /** hasOrdered must be clock-free (AD-2/AD-8) — a throwing clock proves it. */
+  function buildReadOnly(hasOrderedResult: () => Promise<boolean>) {
+    const clock = vi.fn(() => {
+      throw new Error("hasOrdered must never consult the clock");
+    });
+    const orders = {
+      attempt: vi.fn(async () => ({ verdict: "OK" as const, remaining: 99 })),
+      hasOrdered: vi.fn(hasOrderedResult),
+    };
+    const audit = { recordOrder: vi.fn(async () => {}) };
+    const payment = {
+      charge: vi.fn(async (email: string) => ({ approved: true, reference: `noop:${email}` })),
+    };
+    return {
+      clock,
+      orders,
+      audit,
+      payment,
+      service: createOrderService({
+        clock,
+        window,
+        orders,
+        audit,
+        payment,
+        reportSideEffectFailure: vi.fn(),
+      }),
+    };
+  }
+
+  it("passes true through with the exact email — clock never read", async () => {
+    const { clock, orders, service } = buildReadOnly(async () => true);
+    expect(await service.hasOrdered("held@x.com")).toBe(true);
+    expect(orders.hasOrdered).toHaveBeenCalledExactlyOnceWith("held@x.com");
+    expect(clock).not.toHaveBeenCalled();
+  });
+
+  it("passes false through with the exact email", async () => {
+    const { orders, service } = buildReadOnly(async () => false);
+    expect(await service.hasOrdered("new@x.com")).toBe(false);
+    expect(orders.hasOrdered).toHaveBeenCalledExactlyOnceWith("new@x.com");
+  });
+
+  it("port rejections propagate untouched (the 503 signal is the adapter's)", async () => {
+    const boom = new Error("redis gone");
+    const { service } = buildReadOnly(async () => {
+      throw boom;
+    });
+    await expect(service.hasOrdered("x@x.com")).rejects.toBe(boom);
+  });
+
+  it("is a pure read: never runs the script, never audits, never charges", async () => {
+    const { orders, audit, payment, service } = buildReadOnly(async () => true);
+    await service.hasOrdered("held@x.com");
+    await drain();
+    expect(orders.attempt).not.toHaveBeenCalled();
+    expect(audit.recordOrder).not.toHaveBeenCalled();
+    expect(payment.charge).not.toHaveBeenCalled();
   });
 });
