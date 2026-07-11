@@ -2,3 +2,7 @@
 
 _bmad*
 .claude
+
+node_modules/
+dist/
+.env
