@@ -1,0 +1,8 @@
+{
+  "name": "stress",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "stress": "node -e \"console.error('stress harness lands in Story 3.1: stop API -> reset.ts -> start API -> k6-order.js -> verify.ts'); process.exit(1)\""
+  }
+}

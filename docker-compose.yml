@@ -1,28 +1,24 @@
 services:
-  frontend:
-    build: ./frontend
-    ports:
-      - "8080:80"
-    depends_on:
-      backend:
-        condition: service_started
-
-  backend:
-    build: ./backend
+  api:
+    build: .
     environment:
       PORT: "3000"
       REDIS_URL: redis://redis:6379
-      MONGO_URL: mongodb://mongodb:27017/flash-sale
+      MONGODB_URI: mongodb://mongo:27017/flash-sale
+      # Overridable sale config; defaults give an already-active sale for inspection.
+      SALE_START_TIME: ${SALE_START_TIME:-2026-01-01T00:00:00Z}
+      SALE_END_TIME: ${SALE_END_TIME:-2027-01-01T00:00:00Z}
+      STOCK_QUANTITY: ${STOCK_QUANTITY:-100}
     ports:
       - "3000:3000"
     depends_on:
       redis:
         condition: service_healthy
-      mongodb:
+      mongo:
         condition: service_healthy
 
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis-data:/data
@@ -32,8 +28,8 @@ services:
       timeout: 3s
       retries: 5
 
-  mongodb:
-    image: mongo:7
+  mongo:
+    image: mongo:8
     volumes:
       - mongo-data:/data/db
     healthcheck:

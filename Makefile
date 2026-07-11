@@ -1,43 +1,34 @@
-.PHONY: install build build-backend build-frontend test test-backend test-frontend \
-        typecheck deploy up down restart logs ps clean
+.PHONY: install dev up-stores test typecheck build deploy up down restart logs ps stress clean
 
 COMPOSE := docker compose
 
 ## ---- Local dev ----
 
-install: ## npm install in both services
-	cd backend && npm install
-	cd frontend && npm install
+install: ## npm install (all workspaces, single root lockfile)
+	npm install
 
-typecheck: ## tsc --noEmit in both services
-	cd backend && npm run typecheck
-	cd frontend && npm run typecheck
+up-stores: ## start just redis + mongo for the local dev loop
+	$(COMPOSE) up -d redis mongo
 
-## ---- Build ----
+dev: ## concurrently: server :3000 + Vite client :5173 (/api proxied)
+	npm run dev
 
-build: build-backend build-frontend ## build both Docker images
+## ---- Gates ----
 
-build-backend:
-	$(COMPOSE) build backend
+test: ## vitest across all workspaces
+	npm test
 
-build-frontend:
-	$(COMPOSE) build frontend
+typecheck: ## tsc --noEmit in server and client
+	npm run typecheck
 
-## ---- Test ----
+## ---- Docker stack ----
 
-test: test-backend test-frontend ## run all tests
+build: ## build the api image
+	$(COMPOSE) build
 
-test-backend:
-	cd backend && npm test
-
-test-frontend:
-	cd frontend && npm test
-
-## ---- Deploy (local Docker) ----
-
-deploy: build ## build images and start the full stack
+deploy: build ## build and start the full stack
 	$(COMPOSE) up -d
-	@echo "frontend: http://localhost:8080  |  api: http://localhost:3000/api/health"
+	@echo "app + api: http://localhost:3000"
 
 up: ## start the stack (no rebuild)
 	$(COMPOSE) up -d
@@ -52,6 +43,11 @@ logs:
 
 ps:
 	$(COMPOSE) ps
+
+## ---- Validation ----
+
+stress: ## 5000-vs-100 stress harness (lands in Story 3.1)
+	npm run stress
 
 clean: ## stop stack and remove volumes + images
 	$(COMPOSE) down -v --rmi local

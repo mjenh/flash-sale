@@ -1,0 +1,16 @@
+**/node_modules
+**/dist
+.git
+.claude
+_bmad
+_bmad-output
+design-artifacts
+docs
+*.md
+.env
+.env.example
+Makefile
+docker-compose.yml
+**/*.test.ts
+**/*.test.tsx
+server/test
