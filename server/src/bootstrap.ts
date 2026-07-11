@@ -7,13 +7,18 @@ import { pino, type Logger } from "pino";
 import type { Express } from "express";
 import { loadConfig, type AppConfig } from "./adapters/config.ts";
 import { createRedisClient, type RedisClient } from "./adapters/redis/client.ts";
+import { createStockStore } from "./adapters/redis/stock.ts";
 import { connectMongo, disconnectMongo } from "./adapters/mongo/client.ts";
+import { createSaleStatusService } from "./services/sale-status.ts";
+import { systemClock, type Clock } from "./services/clock.ts";
 import { createApiRouter } from "./routes/index.ts";
 import { createApp } from "./app.ts";
 
 export interface BootstrapOverrides {
   env?: Record<string, string | undefined>;
   logger?: Logger;
+  /** AD-6 injection seam — integration tests pin the window state. */
+  clock?: Clock;
   createRedis?: (config: AppConfig, onError: (err: Error) => void) => RedisClient;
   connectRedis?: (client: RedisClient) => Promise<void>;
   disconnectRedis?: (client: RedisClient) => Promise<void>;
@@ -68,13 +73,29 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
   await (overrides.connectMongoDb ?? connectMongo)(config.mongodbUri);
 
   // (Story 1.3) register the AD-1 Lua order script here.
-  // (Story 1.4) idempotent seed upserts + AD-4 cold-start rebuild here.
+  // Interim cold-Redis seed (Story 1.2) — SETNX only, strictly before listen();
+  // replaced by the full AD-4 seed upserts + cold-start rebuild in Story 1.4.
+  const stockStore = createStockStore(redis, {
+    commandTimeoutMs: config.redisCommandTimeoutMs,
+  });
+  await stockStore.seedIfAbsent(config.stockQuantity);
   // (Story 1.6) sale-events subscriber (duplicated connection) + window timers here.
 
   // 4. App assembly.
+  const clock = overrides.clock ?? systemClock;
+  const saleStatus = createSaleStatusService({
+    clock,
+    stock: stockStore,
+    window: {
+      startMs: config.saleStartMs,
+      endMs: config.saleEndMs,
+      startIso: config.saleStartIso,
+      endIso: config.saleEndIso,
+    },
+  });
   const app = createApp({
     logger,
-    apiRouter: createApiRouter(),
+    apiRouter: createApiRouter({ saleStatus }),
     clientDistDir: env.CLIENT_DIST_DIR,
   });
 

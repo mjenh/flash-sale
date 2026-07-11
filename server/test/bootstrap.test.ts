@@ -13,7 +13,19 @@ const validEnv = {
 };
 
 function fakeOverrides(env: Record<string, string | undefined>) {
-  const fakeRedis = { isOpen: false } as unknown as RedisClient;
+  // In-memory command surface for the stock adapter (get/setNX) + isOpen for teardown.
+  const kv = new Map<string, string>();
+  const fakeRedis = {
+    isOpen: false,
+    get: vi.fn(async (key: string) => kv.get(key) ?? null),
+    setNX: vi.fn(async (key: string, value: string) => {
+      if (kv.has(key)) {
+        return 0;
+      }
+      kv.set(key, value);
+      return 1;
+    }),
+  } as unknown as RedisClient;
   const overrides = {
     env,
     logger: pino({ level: "silent" }),
@@ -49,6 +61,13 @@ describe("bootstrap", () => {
     const res = await request(app).get("/api/anything");
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ success: false, error: "Not found." });
+  });
+
+  it("seeds stock:remaining via SETNX during bootstrap — before any listen() (interim AD-4)", async () => {
+    const { fakeRedis, overrides } = fakeOverrides(validEnv);
+    const setNX = (fakeRedis as unknown as { setNX: ReturnType<typeof vi.fn> }).setNX;
+    await bootstrap(overrides);
+    expect(setNX).toHaveBeenCalledWith("stock:remaining", "100");
   });
 
   it("teardown disconnects both stores", async () => {

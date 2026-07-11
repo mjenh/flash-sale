@@ -6,6 +6,7 @@ import request from "supertest";
 import { Router, type Request, type Response } from "express";
 import { pino, type Logger } from "pino";
 import { createApp } from "../src/app.ts";
+import { RedisUnavailableError } from "../src/adapters/redis/stock.ts";
 
 function captureLogger(): { lines: string[]; logger: Logger } {
   const lines: string[] = [];
@@ -30,6 +31,9 @@ function buildTestApp() {
     const err = new Error("I'm a teapot.") as Error & { status: number };
     err.status = 418;
     throw err;
+  });
+  router.get("/redis-down", async () => {
+    throw new RedisUnavailableError();
   });
   router.post("/echo", (req: Request, res: Response) => {
     res.json({ success: true, body: req.body as unknown });
@@ -58,6 +62,13 @@ describe("createApp", () => {
     const res = await request(app).get("/api/reject");
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ success: false, error: "Internal server error." });
+  });
+
+  it("keeps the exposed 503 fail-closed message (AD-5/NFR-9) while plain 5xx still collapse", async () => {
+    const { app } = buildTestApp();
+    const res = await request(app).get("/api/redis-down");
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({ success: false, error: "Service temporarily unavailable." });
   });
 
   it("honours err.status and keeps 4xx messages in the envelope", async () => {

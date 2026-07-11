@@ -23,6 +23,9 @@ export interface AppDeps {
 interface HttpishError extends Error {
   status?: number;
   statusCode?: number;
+  /** http-errors convention: an exposed error keeps its message even at 5xx
+   *  (e.g. RedisUnavailableError's 503 "Service temporarily unavailable."). */
+  expose?: boolean;
 }
 
 export function createApp({ logger, apiRouter, clientDistDir }: AppDeps): Express {
@@ -43,7 +46,8 @@ export function createApp({ logger, apiRouter, clientDistDir }: AppDeps): Expres
 
   app.use((err: HttpishError, req: Request, res: Response, _next: NextFunction) => {
     const status = err.status ?? err.statusCode ?? 500;
-    const message = status < 500 && err.message !== "" ? err.message : "Internal server error.";
+    const keepMessage = (status < 500 || err.expose === true) && err.message !== "";
+    const message = keepMessage ? err.message : "Internal server error.";
     if (status >= 500) {
       req.log.error({ err }, "unhandled error");
     } else {

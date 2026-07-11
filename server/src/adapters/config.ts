@@ -18,6 +18,8 @@ export interface AppConfig {
   saleEndIso: string;
   /** Bounded Redis connect timeout (AD-5: fail closed, never hang). */
   redisConnectTimeoutMs: number;
+  /** Bounded per-command Redis timeout (AD-5: a timeout is treated as unreachable). */
+  redisCommandTimeoutMs: number;
 }
 
 type Env = Record<string, string | undefined>;
@@ -69,5 +71,6 @@ export function loadConfig(env: Env = process.env): AppConfig {
     saleStartIso: new Date(saleStartMs).toISOString(),
     saleEndIso: new Date(saleEndMs).toISOString(),
     redisConnectTimeoutMs: 2000,
+    redisCommandTimeoutMs: 1000,
   };
 }

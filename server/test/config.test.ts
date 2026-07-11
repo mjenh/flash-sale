@@ -27,6 +27,11 @@ describe("loadConfig", () => {
     expect(config.redisConnectTimeoutMs).toBeGreaterThan(0);
   });
 
+  it("carries a bounded per-command Redis timeout (AD-5)", () => {
+    const config = loadConfig(valid);
+    expect(config.redisCommandTimeoutMs).toBe(1000);
+  });
+
   it("normalizes timezone offsets to UTC (PRD open question 2 resolution)", () => {
     const config = loadConfig({
       SALE_START_TIME: "2026-07-10T09:00:00+08:00",
