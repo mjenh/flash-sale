@@ -16,10 +16,24 @@ services:
         condition: service_healthy
       mongo:
         condition: service_healthy
+    # The stress harness needs a truth signal for "the API is back up" after the
+    # reset restart; `docker compose start api` returns before the boot sequence
+    # (AD-4 reconcile) has finished.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/sale/status').then(r => process.exit(r.status === 200 ? 0 : 1), () => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   redis:
     image: redis:8-alpine
     command: ["redis-server", "--appendonly", "yes"]
+    # Published for the documented dev loop (`npm run dev` against
+    # redis://localhost:6379) and for the stress harness's reset/verify steps,
+    # which run on the host and speak to the stores directly.
+    ports:
+      - "6379:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -30,6 +44,8 @@ services:
 
   mongo:
     image: mongo:8
+    ports:
+      - "27017:27017"
     volumes:
       - mongo-data:/data/db
     healthcheck:

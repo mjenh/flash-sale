@@ -6,3 +6,4 @@ _bmad*
 node_modules/
 dist/
 .env
+stress/.out/

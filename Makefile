@@ -46,7 +46,7 @@ ps:
 
 ## ---- Validation ----
 
-stress: ## 5000-vs-100 stress harness (lands in Story 3.1)
+stress: ## 5000-vs-100 fairness proof: stop api -> reset -> start api -> k6 -> verifier -> window check
 	npm run stress
 
 clean: ## stop stack and remove volumes + images

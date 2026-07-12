@@ -2,7 +2,25 @@
   "name": "stress",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
-    "stress": "node -e \"console.error('stress harness lands in Story 3.1: stop API -> reset.ts -> start API -> k6-order.js -> verify.ts'); process.exit(1)\""
+    "stress": "node run.ts",
+    "reset": "node reset.ts",
+    "verify": "node verify.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "mongoose": "^9.0.0",
+    "redis": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^6.0.0",
+    "vitest": "^4.1.0"
   }
 }
