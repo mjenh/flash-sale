@@ -1,0 +1,38 @@
+/* Full-bleed ink band, noon-yellow marquee text crawling right-to-left on a
+ * 22s linear loop. Two identical runs translated by -50% make the loop
+ * seamless with no JS. Under reduced motion the animation stops and the first
+ * run sits static — the rules stay readable. */
+
+.marquee-band {
+  background: var(--ink);
+  color: var(--noon-yellow);
+  overflow: hidden;
+  padding: calc(var(--sp-unit) * 1.25) 0;
+  white-space: nowrap;
+}
+
+.marquee-band__track {
+  display: flex;
+  width: max-content;
+  animation: marquee-crawl var(--marquee-loop) linear infinite;
+}
+
+.marquee-band__run {
+  padding-right: var(--sp-zone);
+}
+
+@keyframes marquee-crawl {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marquee-band__track {
+    animation: none;
+    transform: none;
+  }
+}

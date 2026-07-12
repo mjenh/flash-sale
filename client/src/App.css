@@ -1,0 +1,132 @@
+/* The poster composition: ≈1160px frame centered on the noon-yellow field with
+ * 48px gutters, a two-column ≈1.35:1 split with a 40px gap. Below 1160px the
+ * columns stack (status above the form) — every band and zone persists,
+ * nothing hides, and the type scales before anything truncates. Below 768px:
+ * no promises, and deliberately no breakpoint. */
+
+.frame {
+  max-width: var(--frame-max);
+  margin: 0 auto;
+  padding: 0 var(--sp-gutter) var(--sp-gutter);
+}
+
+.poster {
+  display: grid;
+  grid-template-columns: 1.35fr 1fr;
+  gap: var(--sp-zone);
+  align-items: start;
+}
+
+/* ── Left column: headline, sub-copy, status panel ───────────────────── */
+
+.hero__headline {
+  margin: 0;
+  font-size: clamp(56px, 7vw, var(--display-size));
+  color: var(--ink);
+}
+
+/* The hollow variant: noon-yellow fill with a 3px ink stroke on one word. */
+.hero__hollow {
+  color: var(--noon-yellow);
+  -webkit-text-stroke: 3px var(--ink);
+  paint-order: stroke fill;
+}
+
+.hero__sub {
+  margin: var(--sp-stack) 0 var(--sp-zone);
+  max-width: 34em;
+  color: var(--ink-soft);
+}
+
+.status-panel__headline {
+  margin: 0;
+  color: var(--ink);
+}
+
+/* ── Right column: product tile, form panel, verdict slot ────────────── */
+
+.poster__action {
+  display: flex;
+  flex-direction: column;
+}
+
+.form-panel__label {
+  display: block;
+  color: var(--ink);
+}
+
+.identifier-input {
+  display: block;
+  width: 100%;
+  margin-top: var(--sp-unit);
+  padding: calc(var(--sp-unit) * 1.5);
+  font-size: 15px;
+  background: var(--paper-white);
+  color: var(--ink);
+  border: var(--border-ink);
+  border-radius: var(--r-md);
+}
+
+.identifier-input::placeholder {
+  color: var(--sand-mute);
+}
+
+.form-panel__help {
+  margin: var(--sp-unit) 0 var(--sp-stack);
+  color: var(--olive-deep);
+}
+
+/* ── Buy Now. Label is exactly "Buy Now" — never CSS-uppercased. ─────── */
+
+.buy-now-zone {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-stack);
+}
+
+.buy-now {
+  flex: 1;
+  padding: calc(var(--sp-unit) * 1.75) var(--sp-stack);
+  background: var(--tomato);
+  color: var(--cream);
+  border: var(--border-ink);
+  border-bottom-color: var(--tomato-deep);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-action);
+  cursor: pointer;
+}
+
+.buy-now.pressable:active:not(:disabled) {
+  transform: translate(6px, 6px);
+}
+
+/* Disabled must LOOK asleep: dashed border, cream face, sand-mute text, no
+ * shadow. No fake affordance, no disappearing act. */
+.buy-now:disabled {
+  background: var(--cream);
+  color: var(--sand-mute);
+  border: var(--border-disabled);
+  box-shadow: none;
+  cursor: default;
+}
+
+.not-yet-tag {
+  background: var(--ink);
+  color: var(--noon-yellow);
+  border-radius: var(--r-sm);
+  padding: calc(var(--sp-unit) * 0.75) var(--sp-unit);
+  transform: rotate(-3deg);
+  white-space: nowrap;
+}
+
+/* ── Reflow floor: 768–1159px. Nothing hides. ───────────────────────── */
+
+@media (max-width: 1159px) {
+  .poster {
+    grid-template-columns: 1fr;
+  }
+
+  .frame {
+    padding: 0 var(--sp-panel) var(--sp-panel);
+  }
+}

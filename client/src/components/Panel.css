@@ -1,0 +1,22 @@
+/* Flat print depth: 3px ink border, xl radius, 8px hard ink offset shadow,
+ * 28px padding — always. Panels never rotate. */
+
+.panel {
+  position: relative;
+  border: var(--border-ink);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-panel);
+  padding: var(--sp-panel);
+}
+
+.panel--cream {
+  background: var(--cream);
+}
+
+.panel--yellow-lifted {
+  background: var(--yellow-lifted);
+}
+
+.panel--poster {
+  background-color: var(--noon-yellow);
+}

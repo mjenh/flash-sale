@@ -1,0 +1,25 @@
+/* Brand line left (label role at 18px), date line right in mono/olive-deep. */
+
+.masthead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-stack);
+  padding: var(--sp-zone) 0 var(--sp-panel);
+}
+
+.masthead__brand {
+  font-size: 18px;
+  color: var(--ink);
+}
+
+.masthead__date {
+  color: var(--olive-deep);
+  text-align: right;
+}
+
+@media (max-width: 1159px) {
+  .masthead {
+    padding: var(--sp-panel) 0 var(--sp-stack);
+  }
+}

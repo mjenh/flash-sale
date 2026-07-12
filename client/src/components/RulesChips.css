@@ -1,0 +1,18 @@
+/* Cream chips, 2.5px ink border (the smallest border in the system). */
+
+.rules-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-unit);
+  list-style: none;
+  margin: var(--sp-stack) 0 0;
+  padding: 0;
+}
+
+.rules-chips__chip {
+  background: var(--cream);
+  color: var(--ink);
+  border: var(--border-ink-chip);
+  border-radius: var(--r-md);
+  padding: calc(var(--sp-unit) * 0.75) var(--sp-unit);
+}

@@ -1,0 +1,101 @@
+/* Noon Poster design tokens — the single source of the visual system.
+ * Canonical values: DESIGN.md frontmatter. Nothing in the client hard-codes a
+ * hex, a size, or a shadow; everything reads from here.
+ * Light mode only, by decision. True #000 never appears. */
+
+:root {
+  /* ── Colors (12, exact) ─────────────────────────────────────────────── */
+  --ink: #1a1408;
+  --noon-yellow: #ffcf33;
+  --yellow-lifted: #ffdd66;
+  --cream: #fff3d6;
+  --tomato: #e8481f;
+  --tomato-deep: #c03a17;
+  --pool-teal: #1f7a8c;
+  --paper-white: #ffffff;
+  --ink-soft: #3d3312;
+  --olive-deep: #5c4f22;
+  --olive-shade: #6b5a28;
+  --sand-mute: #9c8f63;
+
+  /* ── Type stacks (system only — no webfonts) ────────────────────────── */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* ── Type roles (10) ────────────────────────────────────────────────── */
+  --display-size: 84px;
+  --display-weight: 900;
+  --display-line: 0.95;
+  --display-tracking: -3px;
+
+  --numeral-size: 118px;
+  --numeral-weight: 900;
+  --numeral-line: 0.85;
+  --numeral-tracking: -5px;
+
+  --headline-size: 56px;
+  --headline-weight: 900;
+  --headline-line: 0.95;
+  --headline-tracking: -2px;
+
+  --action-size: 26px;
+  --action-weight: 900;
+  --action-tracking: 0.5px;
+
+  --label-size: 15px;
+  --label-weight: 900;
+  --label-tracking: 1.5px;
+
+  --body-size: 17px;
+  --body-weight: 600;
+  --body-line: 1.5;
+
+  --meta-size: 13px;
+  --meta-weight: 600;
+  --meta-line: 1.55;
+
+  --mono-size: 16px;
+  --mono-weight: 700;
+  --mono-tracking: 0.5px;
+
+  --marquee-size: 13px;
+  --marquee-weight: 800;
+  --marquee-tracking: 3px;
+
+  --chip-size: 11.5px;
+  --chip-weight: 900;
+  --chip-tracking: 1px;
+
+  /* ── Radii ──────────────────────────────────────────────────────────── */
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 10px;
+  --r-xl: 12px;
+  --r-full: 9999px;
+  --r-tile: 34px;
+
+  /* ── Spacing ────────────────────────────────────────────────────────── */
+  --sp-unit: 8px;
+  --sp-stack: 16px;
+  --sp-panel: 28px;
+  --sp-zone: 40px;
+  --sp-gutter: 48px;
+
+  /* ── Depth: hard ink offsets, zero blur, down-right. Ramp 8 / 6 / 4. ── */
+  --shadow-panel: 8px 8px 0 var(--ink);
+  --shadow-action: 6px 6px 0 var(--ink);
+  --shadow-sticker: 4px 4px 0 var(--ink);
+
+  /* ── Borders (dashed means disabled — the only dashed line) ─────────── */
+  --border-ink: 3px solid var(--ink);
+  --border-ink-chip: 2.5px solid var(--ink);
+  --border-ink-tile: 4px solid var(--ink);
+  --border-disabled: 3px dashed var(--ink);
+
+  /* ── Frame ──────────────────────────────────────────────────────────── */
+  --frame-max: 1160px;
+
+  /* ── Motion ─────────────────────────────────────────────────────────── */
+  --marquee-loop: 22s;
+  --blip-step: 1.2s;
+}

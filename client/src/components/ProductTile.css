@@ -1,0 +1,25 @@
+/* 190px cream keycap face: 4px ink border, oversized 34px radius (it's a
+ * keycap), −4° rotation, hard under-shadow. Rotation is reserved for stickers,
+ * tags, and this tile. */
+
+.product-tile {
+  width: 190px;
+  height: 190px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--cream);
+  border: var(--border-ink-tile);
+  border-radius: var(--r-tile);
+  box-shadow: var(--shadow-panel);
+  transform: rotate(-4deg);
+  margin: var(--sp-unit) auto var(--sp-zone);
+}
+
+.product-tile__mark {
+  font-family: var(--font-sans);
+  font-size: 64px;
+  font-weight: 900;
+  letter-spacing: -2px;
+  color: var(--ink);
+}

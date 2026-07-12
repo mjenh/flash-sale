@@ -1,0 +1,149 @@
+/* Global base: reset, the noon-yellow field, the ONE focus rule, the type-role
+ * utilities, and the waiting-state stripe texture. Everything else is
+ * colocated with its component. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--noon-yellow);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The one focus rule. Pool-teal is the single palette color legible against
+ * both the yellow field and the ink band. Never lighten it, never darken the
+ * field (≈3.2:1 non-text floor). No component overrides this. */
+:focus-visible {
+  outline: 3px solid var(--pool-teal);
+  outline-offset: 2px;
+}
+
+/* ── Type roles. Uppercase is restricted to display/headline/label/marquee/chip. */
+
+.t-display {
+  font-family: var(--font-sans);
+  font-size: var(--display-size);
+  font-weight: var(--display-weight);
+  line-height: var(--display-line);
+  letter-spacing: var(--display-tracking);
+  text-transform: uppercase;
+}
+
+.t-numeral {
+  font-family: var(--font-sans);
+  font-size: var(--numeral-size);
+  font-weight: var(--numeral-weight);
+  line-height: var(--numeral-line);
+  letter-spacing: var(--numeral-tracking);
+}
+
+.t-headline {
+  font-family: var(--font-sans);
+  font-size: var(--headline-size);
+  font-weight: var(--headline-weight);
+  line-height: var(--headline-line);
+  letter-spacing: var(--headline-tracking);
+  text-transform: uppercase;
+}
+
+.t-action {
+  font-family: var(--font-sans);
+  font-size: var(--action-size);
+  font-weight: var(--action-weight);
+  letter-spacing: var(--action-tracking);
+}
+
+.t-label {
+  font-family: var(--font-sans);
+  font-size: var(--label-size);
+  font-weight: var(--label-weight);
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+}
+
+.t-body {
+  font-family: var(--font-sans);
+  font-size: var(--body-size);
+  font-weight: var(--body-weight);
+  line-height: var(--body-line);
+}
+
+.t-meta {
+  font-family: var(--font-sans);
+  font-size: var(--meta-size);
+  font-weight: var(--meta-weight);
+  line-height: var(--meta-line);
+}
+
+/* The machine-truth role: every verbatim API/status string renders in mono. */
+.t-mono {
+  font-family: var(--font-mono);
+  font-size: var(--mono-size);
+  font-weight: var(--mono-weight);
+  letter-spacing: var(--mono-tracking);
+}
+
+.t-marquee {
+  font-family: var(--font-sans);
+  font-size: var(--marquee-size);
+  font-weight: var(--marquee-weight);
+  letter-spacing: var(--marquee-tracking);
+  text-transform: uppercase;
+}
+
+.t-chip {
+  font-family: var(--font-sans);
+  font-size: var(--chip-size);
+  font-weight: var(--chip-weight);
+  letter-spacing: var(--chip-tracking);
+  text-transform: uppercase;
+}
+
+/* ── Waiting-state texture: 12% ink stripes at 135°. Never behind reading text
+ * (panels apply it to their own background, and reading text sits on an
+ * opaque child). */
+.stripes {
+  background-image: repeating-linear-gradient(
+    135deg,
+    rgb(26 20 8 / 12%) 0 6px,
+    transparent 6px 14px
+  );
+}
+
+/* ── Pressed feedback: the element translates INTO its own shadow. Disabled
+ * elements cast none and never move. */
+.pressable {
+  transition: transform 80ms ease-out, box-shadow 80ms ease-out;
+}
+
+.pressable:active:not(:disabled) {
+  transform: translate(4px, 4px);
+  box-shadow: none;
+}
+
+.pressable:disabled {
+  box-shadow: none;
+  transform: none;
+}
+
+/* Motion is garnish. Nothing informational is lost when it stops. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
