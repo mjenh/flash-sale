@@ -71,6 +71,29 @@
   color: var(--sand-mute);
 }
 
+/* The empty-submit error: tomato border and mark, message text in INK beside
+ * it. Never color alone. It lives at the field — never in the verdict panel. */
+.identifier-input--error {
+  border-color: var(--tomato);
+}
+
+.identifier-error {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-unit);
+  margin: var(--sp-unit) 0 0;
+  color: var(--ink);
+}
+
+.identifier-error__mark {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  background: var(--tomato);
+  border: var(--border-ink-chip);
+  border-radius: var(--r-sm);
+}
+
 .form-panel__help {
   margin: var(--sp-unit) 0 var(--sp-stack);
   color: var(--olive-deep);
@@ -108,6 +131,37 @@
   border: var(--border-disabled);
   box-shadow: none;
   cursor: default;
+}
+
+/* The processing beat: the face lifts, the shadow collapses, an ink spinner
+ * turns beside the label. The button visibly YIELDS — and keeps focus. It is
+ * aria-busy rather than disabled, because disabling a focused control blurs it. */
+.buy-now--processing,
+.buy-now--processing:disabled {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-unit);
+  background: var(--yellow-lifted);
+  color: var(--ink);
+  border: var(--border-ink);
+  box-shadow: none;
+  cursor: progress;
+}
+
+.buy-now__spinner {
+  width: 18px;
+  height: 18px;
+  border: 3px solid var(--ink);
+  border-right-color: var(--yellow-lifted);
+  border-radius: var(--r-full);
+  animation: buy-now-spin 900ms linear infinite;
+}
+
+@keyframes buy-now-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* A disabled control always states its reason in full-contrast ink beside it —

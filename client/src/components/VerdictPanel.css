@@ -1,0 +1,74 @@
+/* Cream panel (chrome from Panel), a short accent bar down the left edge, the
+ * warm frame at headline-family scale in sentence case, and the verbatim string
+ * in its own bordered mono chip. Accent + composition — never color alone. */
+
+.verdict-focus {
+  margin-top: var(--sp-zone);
+  outline: none;
+}
+
+.verdict-panel {
+  overflow: visible;
+}
+
+.verdict-panel::before {
+  content: "";
+  position: absolute;
+  top: var(--sp-stack);
+  bottom: var(--sp-stack);
+  left: calc(var(--sp-unit) * -0.5);
+  width: var(--sp-unit);
+  border: var(--border-ink);
+  border-radius: var(--r-sm);
+}
+
+.verdict-panel--success::before {
+  background: var(--pool-teal);
+}
+
+.verdict-panel--reject::before {
+  background: var(--ink);
+}
+
+.verdict-panel--error::before {
+  background: var(--tomato);
+}
+
+.verdict-panel__flag {
+  display: inline-block;
+  margin-bottom: var(--sp-stack);
+  padding: var(--sp-unit) calc(var(--sp-unit) * 1.5);
+  background: var(--pool-teal);
+  color: var(--cream);
+  border: var(--border-ink);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-sticker);
+  transform: rotate(-3deg);
+}
+
+.verdict-panel__frame {
+  margin: 0 0 var(--sp-stack);
+  font-family: var(--font-sans);
+  font-size: 24px;
+  font-weight: var(--headline-weight);
+  line-height: var(--body-line);
+  color: var(--ink);
+}
+
+/* The machine's exact words, visibly distinct from the warmth around them. */
+.verdict-panel__string {
+  margin: 0;
+  padding: calc(var(--sp-unit) * 1.25) var(--sp-stack);
+  background: var(--paper-white);
+  color: var(--ink);
+  border: var(--border-ink);
+  border-radius: var(--r-md);
+}
+
+.verdict-panel--success .verdict-panel__string {
+  border-color: var(--pool-teal);
+}
+
+.verdict-panel--error .verdict-panel__string {
+  border-color: var(--tomato);
+}
