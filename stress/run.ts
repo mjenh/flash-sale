@@ -12,6 +12,7 @@
 // Every phase prints as it starts and hard-fails the run on error. The combined
 // exit code is the pass/fail signal: 0 only when every phase passed.
 import { spawnSync } from "node:child_process";
+import { mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve as resolvePath } from "node:path";
 import { loadStressConfig, type StressConfig } from "./config.ts";
@@ -80,10 +81,31 @@ async function waitForApiStopped(config: StressConfig, timeoutMs = 30_000): Prom
   return false;
 }
 
+/** k6's exit code for "a threshold was breached" — every other non-zero code
+ *  means the RUNNER failed (image not found, daemon down, script error), which
+ *  is a completely different fact and must never be reported as a threshold
+ *  breach. That conflation is exactly what turned a missing image into
+ *  "a threshold failed (5xx …)" on the first live run. */
+const K6_THRESHOLD_EXIT = 99;
+
+/** Overridable: `K6_IMAGE=grafana/k6:latest npm run stress`. The spine pins k6
+ *  2.1 — the image TAG for that release is `2.1.0`, not `2.1` (a `2.1` tag has
+ *  never existed, which is why the first live run could not pull it). */
+const K6_IMAGE = process.env.K6_IMAGE ?? "grafana/k6:2.1.0";
+
+interface K6Result {
+  /** The burst ran and every threshold held. */
+  ok: boolean;
+  /** The burst never ran at all — the runner itself failed. */
+  runnerFailed: boolean;
+  runner: string;
+  detail?: string;
+}
+
 /** k6 runs from a host binary when one exists; otherwise from its official
  *  image — "Docker available" is this story's only stated prerequisite, so
  *  requiring a host k6 install would break the one-command promise. */
-function runK6(config: StressConfig): { ok: boolean; runner: string } {
+function runK6(config: StressConfig): K6Result {
   const env = {
     API_URL: config.apiUrl,
     ATTEMPTS: String(config.attempts),
@@ -92,6 +114,9 @@ function runK6(config: StressConfig): { ok: boolean; runner: string } {
     RUN_TAG: String(Date.now()),
   };
 
+  // handleSummary() writes here; k6 will not create the directory itself.
+  mkdirSync(resolvePath(HERE, ".out"), { recursive: true });
+
   const hasK6 = spawnSync("k6", ["version"], { stdio: "ignore" }).status === 0;
   if (hasK6) {
     const res = spawnSync("k6", ["run", "k6-order.js"], {
@@ -99,7 +124,7 @@ function runK6(config: StressConfig): { ok: boolean; runner: string } {
       stdio: "inherit",
       env: { ...process.env, ...env },
     });
-    return { ok: res.status === 0, runner: "k6 (host binary)" };
+    return classify(res.status, "k6 (host binary)");
   }
 
   // Container path. --network host lets the container reach the API on
@@ -121,12 +146,32 @@ function runK6(config: StressConfig): { ok: boolean; runner: string } {
       "-e",
       `${k}=${v}`,
     ]),
-    "grafana/k6:2.1",
+    K6_IMAGE,
     "run",
     "k6-order.js",
   ];
   const res = spawnSync("docker", dockerArgs, { stdio: "inherit" });
-  return { ok: res.status === 0, runner: "k6 (grafana/k6:2.1 container)" };
+  return classify(res.status, `k6 (${K6_IMAGE} container)`);
+}
+
+function classify(status: number | null, runner: string): K6Result {
+  if (status === 0) {
+    return { ok: true, runnerFailed: false, runner };
+  }
+  if (status === K6_THRESHOLD_EXIT) {
+    return {
+      ok: false,
+      runnerFailed: false,
+      runner,
+      detail: "a k6 threshold was breached (a 5xx, or a status outside {201, 409})",
+    };
+  }
+  return {
+    ok: false,
+    runnerFailed: true,
+    runner,
+    detail: `the burst never ran — ${runner} exited ${status ?? "on a signal"} (image not found? docker daemon down? script error?). No conclusion about fairness can be drawn from this run.`,
+  };
 }
 
 /** SM-3 / NFR-13: attempts outside the window are ALL rejected with
@@ -180,9 +225,17 @@ async function main(): Promise<void> {
     `stress harness — ${config.attempts} unique emails · ${config.vus} VUs · STOCK_QUANTITY=${config.stockQuantity} · api ${config.apiUrl}`,
   );
 
-  announce("1/6 stop API");
+  announce("1/6 stop API (and bring the stores up)");
   if (compose(["stop", "api"]) !== 0) {
     record("stop API", false, "docker compose stop api failed");
+    return finish();
+  }
+  // The reset speaks to Redis and Mongo directly, from the host — so the
+  // stores must be up BEFORE it runs. On a fresh clone (or after `make clean`)
+  // nothing is running at all, and the reset would otherwise hang against a
+  // socket that will never answer.
+  if (compose(["up", "-d", "--wait", "redis", "mongo"]) !== 0) {
+    record("stop API", false, "redis/mongo could not be started (docker compose up -d --wait redis mongo)");
     return finish();
   }
   if (!(await waitForApiStopped(config))) {
@@ -202,7 +255,7 @@ async function main(): Promise<void> {
   }
 
   announce("3/6 start API");
-  if (compose(["up", "-d", "api"]) !== 0 || !(await waitForApi(config))) {
+  if (compose(["up", "-d", "--wait", "api"]) !== 0 || !(await waitForApi(config))) {
     record("start API", false, "the api never became ready");
     return finish();
   }
@@ -211,7 +264,15 @@ async function main(): Promise<void> {
   announce("4/6 k6 burst");
   const k6 = runK6(config);
   console.log(`runner: ${k6.runner}`);
-  record("k6 thresholds", k6.ok, k6.ok ? undefined : "a threshold failed (5xx, or a status outside {201, 409})");
+  record(k6.runnerFailed ? "k6 burst (RUNNER FAILED — no burst happened)" : "k6 thresholds", k6.ok, k6.detail);
+
+  // A burst that never ran tells us nothing about fairness. Running the
+  // verifier anyway would print a confident UNDER-ACCEPTED against an empty
+  // database — a real-looking failure caused entirely by the harness.
+  if (k6.runnerFailed) {
+    record("verifier", false, "skipped — the burst never ran, so there is nothing to verify");
+    return finish();
+  }
 
   announce("5/6 verifier");
   try {
