@@ -8,11 +8,15 @@
 // outside it, ONE SISMEMBER distinguishes already from inactive — the script
 // never runs outside the window (AD-2).
 //
-// Post-accept side effects (Story 1.4, AD-3/AD-10): after OK — and ONLY after
-// OK — the Mongo audit write and the payment charge fire-and-forget. Neither
-// is awaited; neither can alter the HTTP outcome; failures are reported via
-// the injected callback (bootstrap wires it to logger.error) and are NEVER
-// rolled back — no INCR/SREM compensation exists anywhere (AD-1).
+// Post-accept side effects (Story 1.4, AD-3/AD-10; Story 1.6, AD-9): after
+// OK — and ONLY after OK — the Mongo audit write, the payment charge, and the
+// type-only event publishes fire-and-forget. None is awaited; none can alter
+// the HTTP outcome; failures are reported via the injected callback
+// (bootstrap wires it to logger.error) and are NEVER rolled back — no
+// INCR/SREM compensation exists anywhere (AD-1). sale.sold_out publishes
+// exactly once: by the request whose script returns OK with remaining === 0
+// (this service is the sole consumer of AD-1's stock return for that signal);
+// SOLD_OUT verdicts never publish (AD-9).
 import type { Clock } from "./clock.ts";
 import type { SaleWindow } from "./sale-status.ts";
 import type { PaymentProvider } from "./payment.ts";
@@ -28,7 +32,13 @@ export interface OrderAuditPort {
   recordOrder(email: string): Promise<void>;
 }
 
-export type OrderSideEffect = "audit" | "payment";
+/** Port satisfied by adapters/redis/events.ts (AD-9's sale:events publisher).
+ *  Type-only events; the order path only ever emits these two. */
+export interface OrderEventsPort {
+  publish(event: "order.accepted" | "sale.sold_out"): Promise<void>;
+}
+
+export type OrderSideEffect = "audit" | "payment" | "publish";
 
 export type OrderOutcome =
   | { outcome: "created"; remaining: number }
@@ -51,6 +61,7 @@ export interface OrderServiceDeps {
   orders: OrderAttemptPort;
   audit: OrderAuditPort;
   payment: PaymentProvider;
+  events: OrderEventsPort;
   /** Keeps the service framework-free: failures are reported, never thrown. */
   reportSideEffectFailure: (effect: OrderSideEffect, err: unknown) => void;
 }
@@ -61,6 +72,7 @@ export function createOrderService({
   orders,
   audit,
   payment,
+  events,
   reportSideEffectFailure,
 }: OrderServiceDeps): OrderService {
   return {
@@ -95,8 +107,18 @@ export function createOrderService({
             .catch((err: unknown) => {
               reportSideEffectFailure("payment", err);
             });
-          // (Story 1.6) publish order.accepted — and sale.sold_out exactly
-          // once when remaining === 0. Neither alters the outcome.
+          // Story 1.6 (AD-9): type-only consequence events. order.accepted
+          // on every accept; sale.sold_out exactly once — by THIS request,
+          // the one whose script drained stock to 0. Fire-and-forget:
+          // publish failures never alter the HTTP outcome.
+          void events.publish("order.accepted").catch((err: unknown) => {
+            reportSideEffectFailure("publish", err);
+          });
+          if (remaining === 0) {
+            void events.publish("sale.sold_out").catch((err: unknown) => {
+              reportSideEffectFailure("publish", err);
+            });
+          }
           return { outcome: "created", remaining };
         case "ALREADY":
           return { outcome: "already", remaining };

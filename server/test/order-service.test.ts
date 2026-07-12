@@ -1,10 +1,12 @@
 // Unit tests for the order service (Story 1.3 AC 1-4 + Story 1.4 AC 1-2 +
-// Story 1.5 AC 1/2/4) — injected clock + fake ports, zero I/O. Proves the
-// AD-2 precedence, the AD-6 [start, end) boundaries, the Story-1.4
-// post-accept side effects (audit + payment fire-and-forget after OK only,
-// failures reported, outcome never altered or delayed — AD-3/AD-10), and the
-// Story-1.5 hasOrdered read (pure delegation: no clock, no script, no side
-// effects).
+// Story 1.5 AC 1/2/4 + Story 1.6 AC 1/5) — injected clock + fake ports, zero
+// I/O. Proves the AD-2 precedence, the AD-6 [start, end) boundaries, the
+// Story-1.4 post-accept side effects (audit + payment fire-and-forget after
+// OK only, failures reported, outcome never altered or delayed — AD-3/AD-10),
+// the Story-1.5 hasOrdered read (pure delegation: no clock, no script, no
+// side effects), and the Story-1.6 publishes (order.accepted on every OK;
+// sale.sold_out exactly once, by the draining request; SOLD_OUT verdicts
+// never publish; publish failures never alter the outcome — AD-9).
 import { describe, expect, it, vi } from "vitest";
 import { createOrderService, type OrderAttemptPort } from "../src/services/order.ts";
 
@@ -26,6 +28,7 @@ function build(
     port?: Partial<OrderAttemptPort>;
     recordOrder?: (email: string) => Promise<void>;
     charge?: (email: string) => Promise<{ approved: boolean; reference: string }>;
+    publish?: (event: "order.accepted" | "sale.sold_out") => Promise<void>;
   } = {},
 ) {
   const orders = {
@@ -39,11 +42,13 @@ function build(
       opts.charge ?? (async (email: string) => ({ approved: true, reference: `noop:${email}` })),
     ),
   };
+  const events = { publish: vi.fn(opts.publish ?? (async () => {})) };
   const report = vi.fn();
   return {
     orders,
     audit,
     payment,
+    events,
     report,
     service: createOrderService({
       clock: () => nowMs,
@@ -51,6 +56,7 @@ function build(
       orders,
       audit,
       payment,
+      events,
       reportSideEffectFailure: report,
     }),
   };
@@ -200,6 +206,93 @@ describe("order service — Story 1.4 post-accept side effects (AD-3/AD-10)", ()
   });
 });
 
+describe("order service — Story 1.6 publishes on accept (AD-9)", () => {
+  it("OK with remaining > 0 -> exactly one publish('order.accepted'), zero sale.sold_out", async () => {
+    const { events, report, service } = build(startMs + 1000);
+    expect(await service.attempt("winner@x.com")).toEqual({ outcome: "created", remaining: 99 });
+    await drain();
+    expect(events.publish).toHaveBeenCalledExactlyOnceWith("order.accepted");
+    expect(report).not.toHaveBeenCalled();
+  });
+
+  it("OK with remaining === 0 -> both published; sale.sold_out exactly once, by the draining request", async () => {
+    const { events, service } = build(startMs + 1000, {
+      port: { attempt: vi.fn(async () => ({ verdict: "OK" as const, remaining: 0 })) },
+    });
+    expect(await service.attempt("last@x.com")).toEqual({ outcome: "created", remaining: 0 });
+    await drain();
+    expect(events.publish.mock.calls).toEqual([["order.accepted"], ["sale.sold_out"]]);
+  });
+
+  it("a SECOND attempt after the draining one (ALREADY verdict) publishes nothing more", async () => {
+    const attempt = vi
+      .fn()
+      .mockResolvedValueOnce({ verdict: "OK" as const, remaining: 0 })
+      .mockResolvedValueOnce({ verdict: "ALREADY" as const, remaining: 0 });
+    const { events, service } = build(startMs + 1000, { port: { attempt } });
+    await service.attempt("last@x.com");
+    await service.attempt("last@x.com");
+    await drain();
+    expect(events.publish.mock.calls).toEqual([["order.accepted"], ["sale.sold_out"]]);
+  });
+
+  it("SOLD_OUT verdicts NEVER publish — not even sale.sold_out (negative space)", async () => {
+    const { events, service } = build(startMs + 1000, {
+      port: { attempt: vi.fn(async () => ({ verdict: "SOLD_OUT" as const, remaining: 0 })) },
+    });
+    expect(await service.attempt("late@x.com")).toEqual({ outcome: "sold_out", remaining: 0 });
+    await drain();
+    expect(events.publish).not.toHaveBeenCalled();
+  });
+
+  it("outside-window paths (inactive AND already) publish zero events", async () => {
+    for (const hasOrdered of [false, true]) {
+      const { events, service } = build(endMs + 1, {
+        port: { hasOrdered: vi.fn(async () => hasOrdered) },
+      });
+      await service.attempt("x@x.com");
+      await drain();
+      expect(events.publish).not.toHaveBeenCalled();
+    }
+  });
+
+  it("a publish rejection is reported as 'publish', never thrown — outcome stays exactly created", async () => {
+    const boom = new Error("redis publish gone");
+    const { report, service } = build(startMs + 1000, {
+      publish: vi.fn(async () => {
+        throw boom;
+      }),
+    });
+    expect(await service.attempt("winner@x.com")).toEqual({ outcome: "created", remaining: 99 });
+    await drain();
+    expect(report).toHaveBeenCalledExactlyOnceWith("publish", boom);
+  });
+
+  it("both publishes rejecting on the draining request -> two 'publish' reports, outcome still created", async () => {
+    const boom = new Error("redis publish gone");
+    const { report, service } = build(startMs + 1000, {
+      port: { attempt: vi.fn(async () => ({ verdict: "OK" as const, remaining: 0 })) },
+      publish: vi.fn(async () => {
+        throw boom;
+      }),
+    });
+    expect(await service.attempt("last@x.com")).toEqual({ outcome: "created", remaining: 0 });
+    await drain();
+    expect(report.mock.calls).toEqual([
+      ["publish", boom],
+      ["publish", boom],
+    ]);
+  });
+
+  it("a never-settling publish does not delay the outcome (fire-and-forget, AD-8)", async () => {
+    const { service } = build(startMs + 1000, {
+      publish: vi.fn(() => new Promise<void>(() => {})),
+    });
+    // If the service awaited the publish promise this would time out.
+    expect(await service.attempt("winner@x.com")).toEqual({ outcome: "created", remaining: 99 });
+  });
+});
+
 describe("order service — Story 1.5 hasOrdered (FR-4 read)", () => {
   /** hasOrdered must be clock-free (AD-2/AD-8) — a throwing clock proves it. */
   function buildReadOnly(hasOrderedResult: () => Promise<boolean>) {
@@ -214,17 +307,20 @@ describe("order service — Story 1.5 hasOrdered (FR-4 read)", () => {
     const payment = {
       charge: vi.fn(async (email: string) => ({ approved: true, reference: `noop:${email}` })),
     };
+    const events = { publish: vi.fn(async () => {}) };
     return {
       clock,
       orders,
       audit,
       payment,
+      events,
       service: createOrderService({
         clock,
         window,
         orders,
         audit,
         payment,
+        events,
         reportSideEffectFailure: vi.fn(),
       }),
     };
@@ -251,12 +347,13 @@ describe("order service — Story 1.5 hasOrdered (FR-4 read)", () => {
     await expect(service.hasOrdered("x@x.com")).rejects.toBe(boom);
   });
 
-  it("is a pure read: never runs the script, never audits, never charges", async () => {
-    const { orders, audit, payment, service } = buildReadOnly(async () => true);
+  it("is a pure read: never runs the script, never audits, never charges, never publishes", async () => {
+    const { orders, audit, payment, events, service } = buildReadOnly(async () => true);
     await service.hasOrdered("held@x.com");
     await drain();
     expect(orders.attempt).not.toHaveBeenCalled();
     expect(audit.recordOrder).not.toHaveBeenCalled();
     expect(payment.charge).not.toHaveBeenCalled();
+    expect(events.publish).not.toHaveBeenCalled();
   });
 });

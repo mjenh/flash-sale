@@ -2,8 +2,10 @@
 // tests never re-implement boot. Order, strictly before listen():
 //   config (fail fast, AD-6) -> Redis connect (AD-5) -> Mongo connect ->
 //   Lua order-script registration (AD-1, Story 1.3) ->
-//   AD-4 seed upserts + warm/cold reconcile (Story 1.4) -> app.
-// Reserved slot: sale-events subscriber + timers (Story 1.6).
+//   AD-4 seed upserts + warm/cold reconcile (Story 1.4) ->
+//   sale-events init (Story 1.6, AD-9): publisher + broadcaster + subscriber
+//   on a dedicated duplicated connection + future-boundary window timers ->
+//   app. Teardown unwinds in reverse (timers, broadcaster, subscriber, stores).
 import { pino, type Logger } from "pino";
 import type { Express } from "express";
 import { loadConfig, type AppConfig } from "./adapters/config.ts";
@@ -11,11 +13,13 @@ import { createRedisClient, type RedisClient } from "./adapters/redis/client.ts"
 import { createStockStore } from "./adapters/redis/stock.ts";
 import { createOrderStore } from "./adapters/redis/orders.ts";
 import { createReconciler } from "./adapters/redis/reconcile.ts";
+import { createEventPublisher, createSaleEventsSubscription } from "./adapters/redis/events.ts";
 import { connectMongo, disconnectMongo } from "./adapters/mongo/client.ts";
 import { createOrderRecorder, mongoAuditModelOps, type AuditModelOps } from "./adapters/mongo/audit.ts";
 import { createDomainSeeder, mongoSeedModelOps, type SeedModelOps } from "./adapters/mongo/seed.ts";
 import { noopPaymentProvider } from "./adapters/payment/noop.ts";
 import { createSaleStatusService } from "./services/sale-status.ts";
+import { armWindowTimers, createSaleEventsBroadcaster } from "./services/sale-events.ts";
 import { createOrderService } from "./services/order.ts";
 import type { PaymentProvider } from "./services/payment.ts";
 import { systemClock, type Clock } from "./services/clock.ts";
@@ -35,6 +39,8 @@ export interface BootstrapOverrides {
   /** Story 1.4 seams — tests run the REAL recorder/seeder over fake model ops. */
   mongoModelOps?: { audit: AuditModelOps; seed: SeedModelOps };
   payment?: PaymentProvider;
+  /** Story 1.6 seam — the dedicated sale:events subscriber connection (AD-9). */
+  duplicateRedis?: (client: RedisClient) => RedisClient;
 }
 
 export interface BootstrapResult {
@@ -121,9 +127,9 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
   const stockStore = createStockStore(redis, {
     commandTimeoutMs: config.redisCommandTimeoutMs,
   });
-  // (Story 1.6) sale-events subscriber (duplicated connection) + window timers here.
 
-  // 4. App assembly.
+  // Shared clock + window + status service (AD-6): the same instances feed
+  // HTTP, the order service, and the SSE broadcaster (AD-9's single composer).
   const clock = overrides.clock ?? systemClock;
   const window = {
     startMs: config.saleStartMs,
@@ -132,19 +138,57 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
     endIso: config.saleEndIso,
   };
   const saleStatus = createSaleStatusService({ clock, stock: stockStore, window });
+
+  // Sale-events realtime layer (Story 1.6, AD-9): PUBLISH rides the main
+  // client; SUBSCRIBE runs on a dedicated duplicated connection; boot arms
+  // window timers for FUTURE boundaries only. Subscriber failure here rejects
+  // bootstrap() — fail-fast strictly before listen() (AD-5).
+  const eventPublisher = createEventPublisher(redis, {
+    commandTimeoutMs: config.redisCommandTimeoutMs,
+  });
+  const saleEvents = createSaleEventsBroadcaster({
+    saleStatus,
+    clock,
+    reportBroadcastFailure: (err) => {
+      logger.error({ err }, "sse broadcast failed; closing open streams (AD-5)");
+    },
+  });
+  const duplicateRedis = overrides.duplicateRedis ?? ((client: RedisClient) => client.duplicate());
+  const subscription = await createSaleEventsSubscription(duplicateRedis(redis), {
+    onEvent: (event) => {
+      saleEvents.onDomainEvent(event);
+    },
+    onConnectionLost: (err) => {
+      logger.error({ err }, "sale:events subscriber connection lost; closing open streams (AD-5)");
+      saleEvents.closeAll();
+    },
+    connectTimeoutMs: config.redisConnectTimeoutMs * 5,
+  });
+  const windowTimers = armWindowTimers({
+    clock,
+    startMs: config.saleStartMs,
+    endMs: config.saleEndMs,
+    publish: (event) => eventPublisher.publish(event),
+    onPublishFailure: (err) => {
+      logger.error({ err }, "window-boundary event publish failed (AD-9: logged, never thrown)");
+    },
+  });
+
+  // 4. App assembly.
   const orderService = createOrderService({
     clock,
     window,
     orders: orderStore,
     audit: createOrderRecorder(saleRefs, mongoOps.audit),
     payment: overrides.payment ?? noopPaymentProvider,
+    events: eventPublisher,
     reportSideEffectFailure: (effect, err) => {
       logger.error({ err, effect }, "post-accept side effect failed (never alters the HTTP outcome)");
     },
   });
   const app = createApp({
     logger,
-    apiRouter: createApiRouter({ saleStatus, orderService }),
+    apiRouter: createApiRouter({ saleStatus, saleEvents, orderService }),
     clientDistDir: env.CLIENT_DIST_DIR,
   });
 
@@ -157,6 +201,9 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
     });
 
   const teardown = async (): Promise<void> => {
+    windowTimers.cancel();
+    saleEvents.stop();
+    await subscription.close();
     await (overrides.disconnectMongoDb ?? disconnectMongo)();
     await disconnectRedis(redis);
   };

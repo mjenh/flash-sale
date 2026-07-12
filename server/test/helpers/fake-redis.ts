@@ -1,8 +1,17 @@
 // Shared in-memory fake Redis client for endpoint tests. Exposes exactly the
 // command surface production code uses (get/set/exists/del/sAdd/sIsMember/
-// scriptLoad/evalSha/eval) so tests boot through the REAL bootstrap(); swap it
-// for a real client against compose-run Redis and the endpoint test files run
-// unchanged.
+// scriptLoad/evalSha/eval/publish/duplicate) so tests boot through the REAL
+// bootstrap(); swap it for a real client against compose-run Redis and the
+// endpoint test files run unchanged.
+//
+// Story 1.6 pub/sub bus: publish() delivers synchronously to listeners
+// subscribed through duplicate()d subscriber clients (all duplicates share
+// one bus). Test seams: deliver() injects an event at the subscription
+// without a publish (drives the broadcaster while `failing` blocks the bus),
+// emitSubscriberError() fires the subscriber connection's error listeners
+// (the AD-5 connection-lost trigger), and failingPublish fails ONLY
+// publishes (proves publish failures never alter HTTP outcomes while reads
+// stay healthy).
 //
 // evalSha/eval execute a faithful, line-for-line JS port of order.lua — the
 // .lua file remains the single authoritative implementation (its keys and
@@ -18,6 +27,16 @@ export interface FakeRedis {
   sets: Map<string, Set<string>>;
   /** When true, every command rejects (AD-5 fail-closed path). */
   failing: boolean;
+  /** When true, ONLY publish rejects — reads stay healthy (Story 1.6 AC 5:
+   *  publish failures never alter HTTP outcomes). */
+  failingPublish: boolean;
+  /** Messages successfully published to any channel, in order. */
+  published: string[];
+  /** Inject an event at the subscription as if it had been published —
+   *  drives the broadcaster without touching the publisher. */
+  deliver(channel: string, message: string): void;
+  /** Fire the subscriber connection's registered error listeners (AD-5). */
+  emitSubscriberError(err: Error): void;
   /** Simulates SCRIPT FLUSH: EVALSHA answers NOSCRIPT until re-loaded. */
   flushScripts(): void;
   /** Simulates a full Redis wipe (FLUSHALL + restart without AOF) — the
@@ -32,6 +51,7 @@ export interface FakeRedis {
     del: number;
     set: number;
     sAdd: number;
+    publish: number;
   };
   client: RedisClient;
 }
@@ -43,12 +63,28 @@ export function createFakeRedis(initial?: { stock?: string }): FakeRedis {
   }
   const sets = new Map<string, Set<string>>();
   const scripts = new Map<string, string>();
-  const calls = { evalSha: 0, eval: 0, sIsMember: 0, exists: 0, del: 0, set: 0, sAdd: 0 };
+  const calls = { evalSha: 0, eval: 0, sIsMember: 0, exists: 0, del: 0, set: 0, sAdd: 0, publish: 0 };
+
+  // Pub/sub bus shared by the main client and every duplicate()d subscriber.
+  const channelListeners = new Map<string, Set<(message: string) => void>>();
+  const subscriberErrorListeners = new Set<(err: Error) => void>();
 
   const fake: FakeRedis = {
     kv,
     sets,
     failing: false,
+    failingPublish: false,
+    published: [],
+    deliver: (channel, message) => {
+      for (const listener of [...(channelListeners.get(channel) ?? [])]) {
+        listener(message);
+      }
+    },
+    emitSubscriberError: (err) => {
+      for (const listener of [...subscriberErrorListeners]) {
+        listener(err);
+      }
+    },
     flushScripts: () => scripts.clear(),
     flush: () => {
       kv.clear();
@@ -160,6 +196,59 @@ export function createFakeRedis(initial?: { stock?: string }): FakeRedis {
         throw new Error("fake-redis only implements order.lua");
       }
       return runOrderScript(options.keys, options.arguments);
+    },
+    publish: async (channel: string, message: string) => {
+      assertUp();
+      calls.publish += 1;
+      if (fake.failingPublish) {
+        throw new Error("publish rejected (failingPublish)");
+      }
+      fake.published.push(message);
+      const listeners = channelListeners.get(channel) ?? new Set();
+      for (const listener of [...listeners]) {
+        listener(message);
+      }
+      return listeners.size;
+    },
+    duplicate: () => {
+      // Subscriber-side fake client sharing the bus; its commands honor
+      // `failing` like every other command on the fake.
+      const mine = new Map<string, (message: string) => void>();
+      const subscriber = {
+        isOpen: false,
+        connect: async () => {
+          assertUp();
+          subscriber.isOpen = true;
+        },
+        subscribe: async (channel: string, listener: (message: string) => void) => {
+          assertUp();
+          mine.set(channel, listener);
+          const listeners = channelListeners.get(channel) ?? new Set();
+          listeners.add(listener);
+          channelListeners.set(channel, listeners);
+        },
+        unsubscribe: async (channel: string) => {
+          assertUp();
+          const listener = mine.get(channel);
+          if (listener !== undefined) {
+            channelListeners.get(channel)?.delete(listener);
+            mine.delete(channel);
+          }
+        },
+        on: (event: string, listener: (err: Error) => void) => {
+          if (event === "error") {
+            subscriberErrorListeners.add(listener);
+          }
+          return subscriber;
+        },
+        destroy: () => {
+          subscriber.isOpen = false;
+        },
+        close: async () => {
+          subscriber.isOpen = false;
+        },
+      };
+      return subscriber as unknown as RedisClient;
     },
   } as unknown as RedisClient;
 

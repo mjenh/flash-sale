@@ -2,6 +2,9 @@
 // bootstrap() integration tests use against compose-run stores (Story 1.2+).
 // Story 1.4: boot now runs the AD-4 seed upserts + warm/cold reconcile
 // strictly before returning (hence before any listen()).
+// Story 1.6: boot wires the sale:events realtime layer — the subscriber on a
+// dedicated duplicate()d connection (subscribed before returning) and
+// future-boundaries-only window timers; teardown closes the subscriber.
 import { describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { pino } from "pino";
@@ -15,12 +18,33 @@ const validEnv = {
   SALE_END_TIME: "2026-07-10T05:00:00Z",
 };
 
+function fakeSubscriber() {
+  const subscriber = {
+    isOpen: false,
+    connect: vi.fn(async () => {
+      subscriber.isOpen = true;
+    }),
+    subscribe: vi.fn(async (_channel: string, _listener: (message: string) => void) => {}),
+    unsubscribe: vi.fn(async (_channel: string) => {}),
+    on: vi.fn((_event: string, _listener: (err: Error) => void) => {}),
+    destroy: vi.fn(() => {
+      subscriber.isOpen = false;
+    }),
+    close: vi.fn(async () => {
+      subscriber.isOpen = false;
+    }),
+  };
+  return subscriber;
+}
+
 function fakeOverrides(env: Record<string, string | undefined>, initialKv?: Map<string, string>) {
   // In-memory command surface for the stock adapter (get), the order store's
   // boot-time registration (scriptLoad), the AD-4 reconciler (exists/del/
-  // sAdd/set) + isOpen for teardown.
+  // sAdd/set), the sale:events publisher (publish) + the duplicate()d
+  // subscriber connection (Story 1.6) + isOpen for teardown.
   const kv = initialKv ?? new Map<string, string>();
   const sets = new Map<string, Set<string>>();
+  const subscriber = fakeSubscriber();
   const fakeRedis = {
     isOpen: false,
     get: vi.fn(async (key: string) => kv.get(key) ?? null),
@@ -43,6 +67,8 @@ function fakeOverrides(env: Record<string, string | undefined>, initialKv?: Map<
       return members.length;
     }),
     scriptLoad: vi.fn(async () => "fake-sha"),
+    publish: vi.fn(async () => 1),
+    duplicate: vi.fn(() => subscriber),
   } as unknown as RedisClient;
   const mongo = createFakeMongo();
   const overrides = {
@@ -55,7 +81,7 @@ function fakeOverrides(env: Record<string, string | undefined>, initialKv?: Map<
     disconnectMongoDb: vi.fn(async () => {}),
     mongoModelOps: mongo.ops,
   } satisfies BootstrapOverrides;
-  return { fakeRedis, kv, sets, mongo, overrides };
+  return { fakeRedis, subscriber, kv, sets, mongo, overrides };
 }
 
 describe("bootstrap", () => {
@@ -143,5 +169,50 @@ describe("bootstrap", () => {
     await teardown();
     expect(overrides.disconnectMongoDb).toHaveBeenCalledTimes(1);
     expect(overrides.disconnectRedis).toHaveBeenCalledWith(fakeRedis);
+  });
+
+  it("subscribes the duplicated connection to exactly sale:events during bootstrap() — error listener before connect (Story 1.6)", async () => {
+    const { fakeRedis, subscriber, overrides } = fakeOverrides(validEnv);
+    await bootstrap(overrides);
+
+    const duplicate = (fakeRedis as unknown as { duplicate: ReturnType<typeof vi.fn> }).duplicate;
+    expect(duplicate).toHaveBeenCalledTimes(1);
+    expect(subscriber.connect).toHaveBeenCalledTimes(1);
+    expect(subscriber.subscribe).toHaveBeenCalledTimes(1);
+    expect(subscriber.subscribe.mock.calls[0]?.[0]).toBe("sale:events");
+
+    // The error listener (the AD-5 connection-lost trigger) is wired first.
+    const onOrder = subscriber.on.mock.invocationCallOrder[0];
+    const connectOrder = subscriber.connect.mock.invocationCallOrder[0];
+    expect(subscriber.on).toHaveBeenCalledWith("error", expect.any(Function));
+    expect(onOrder).toBeLessThan(connectOrder as number);
+  });
+
+  it("a subscriber connect failure rejects bootstrap() — fail-fast strictly before listen() (AD-5)", async () => {
+    const { subscriber, overrides } = fakeOverrides(validEnv);
+    subscriber.connect = vi.fn(async () => {
+      throw new Error("subscriber refused");
+    }) as typeof subscriber.connect;
+    await expect(bootstrap(overrides)).rejects.toThrow("Service temporarily unavailable.");
+  });
+
+  it("teardown closes the sale:events subscriber (unsubscribe + close)", async () => {
+    const { subscriber, overrides } = fakeOverrides(validEnv);
+    const { teardown } = await bootstrap(overrides);
+    await teardown();
+    expect(subscriber.unsubscribe).toHaveBeenCalledExactlyOnceWith("sale:events");
+    expect(subscriber.close).toHaveBeenCalledTimes(1);
+    // Subscriber teardown runs before the store disconnects.
+    const closeOrder = subscriber.close.mock.invocationCallOrder[0];
+    const mongoOrder = overrides.disconnectMongoDb.mock.invocationCallOrder[0];
+    expect(closeOrder).toBeLessThan(mongoOrder as number);
+  });
+
+  it("a boot pinned after endMs arms NO boundary timers — zero publishes ever (AC 2 negative space)", async () => {
+    const { fakeRedis, overrides } = fakeOverrides(validEnv);
+    await bootstrap({ ...overrides, clock: () => Date.parse(validEnv.SALE_END_TIME) + 60_000 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const publish = (fakeRedis as unknown as { publish: ReturnType<typeof vi.fn> }).publish;
+    expect(publish).not.toHaveBeenCalled();
   });
 });
