@@ -1,0 +1,12 @@
+/* Cream face, 3px ink border, md radius, mono. The chip is the system's one
+ * container for verbatim machine truth — warm framing lives outside it. */
+
+.status-chip {
+  display: inline-block;
+  margin: 0;
+  padding: calc(var(--sp-unit) * 1.25) var(--sp-stack);
+  background: var(--cream);
+  color: var(--ink);
+  border: var(--border-ink);
+  border-radius: var(--r-md);
+}

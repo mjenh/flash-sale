@@ -1,0 +1,38 @@
+/* Tomato numeral, ink unit label. At zero it turns ink. When the page can't
+ * vouch for the number it drops to olive-shade and the honest line beside it
+ * carries full contrast. */
+
+.stock-numeral {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-unit);
+  margin: 0 0 var(--sp-stack);
+  color: var(--tomato);
+}
+
+.stock-numeral--drained {
+  color: var(--ink);
+}
+
+.stock-numeral--stale {
+  color: var(--olive-shade);
+}
+
+.stock-numeral__unit {
+  font-family: var(--font-sans);
+  font-size: 26px;
+  font-weight: var(--numeral-weight);
+  color: var(--ink);
+}
+
+.stock-numeral__stale-note {
+  margin: 0 0 var(--sp-stack);
+  color: var(--ink);
+}
+
+/* The numeral scales down before anything truncates. */
+@media (max-width: 1159px) {
+  .stock-numeral .t-numeral {
+    font-size: clamp(72px, 10vw, var(--numeral-size));
+  }
+}

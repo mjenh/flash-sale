@@ -1,0 +1,46 @@
+/* Pool-teal pill slapped on the status panel's top-right corner, +7°, 4px hard
+ * shadow. The blip BLINKS on 1.2s steps — a blink, not a fade — and stops dead
+ * under reduced motion (base.css kills the animation; nothing is lost, the
+ * label still says what the channel is). */
+
+.live-sticker {
+  position: absolute;
+  top: calc(var(--sp-stack) * -1);
+  right: calc(var(--sp-stack) * -1);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-unit);
+  padding: var(--sp-unit) calc(var(--sp-unit) * 1.5);
+  font-size: 12px;
+  background: var(--pool-teal);
+  color: var(--cream);
+  border: var(--border-ink);
+  border-radius: var(--r-full);
+  box-shadow: var(--shadow-sticker);
+  transform: rotate(7deg);
+  white-space: nowrap;
+}
+
+.live-sticker__blip {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--r-full);
+  background: var(--noon-yellow);
+  animation: blip var(--blip-step) steps(2, jump-none) infinite;
+}
+
+@keyframes blip {
+  from {
+    opacity: 0.15;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-sticker__blip {
+    animation: none;
+    opacity: 1;
+  }
+}

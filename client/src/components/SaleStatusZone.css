@@ -1,0 +1,40 @@
+/* The status zone composes Panel — it never re-declares panel chrome. */
+
+.status-zone__headline {
+  margin: 0 0 var(--sp-stack);
+  color: var(--ink);
+}
+
+.status-zone__frame {
+  margin: var(--sp-stack) 0 0;
+  color: var(--ink-soft);
+}
+
+.status-zone__note {
+  margin: var(--sp-stack) 0 0;
+  color: var(--olive-deep);
+}
+
+.status-zone__unreachable {
+  margin: 0;
+  color: var(--ink);
+}
+
+/* "That one's a wrap." runs at headline scale but keeps SENTENCE CASE — the
+ * one place the headline role's uppercase is deliberately overridden. */
+.status-zone__wrap {
+  margin: var(--sp-stack) 0 0;
+  font-family: var(--font-sans);
+  font-size: var(--headline-size);
+  font-weight: var(--headline-weight);
+  line-height: var(--headline-line);
+  letter-spacing: var(--headline-tracking);
+  text-transform: none;
+  color: var(--ink);
+}
+
+@media (max-width: 1159px) {
+  .status-zone__wrap {
+    font-size: clamp(36px, 6vw, var(--headline-size));
+  }
+}

@@ -110,6 +110,13 @@
   cursor: default;
 }
 
+/* A disabled control always states its reason in full-contrast ink beside it —
+ * never color alone, never a mystery. */
+.buy-now-reason {
+  margin: var(--sp-stack) 0 0;
+  color: var(--ink);
+}
+
 .not-yet-tag {
   background: var(--ink);
   color: var(--noon-yellow);

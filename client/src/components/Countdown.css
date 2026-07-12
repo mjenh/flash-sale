@@ -1,0 +1,14 @@
+/* Mono digits at headline scale, ink, on the poster panel. */
+
+.countdown {
+  margin: var(--sp-stack) 0 0;
+  font-size: var(--headline-size);
+  line-height: var(--headline-line);
+  color: var(--ink);
+}
+
+@media (max-width: 1159px) {
+  .countdown {
+    font-size: clamp(36px, 6vw, var(--headline-size));
+  }
+}
