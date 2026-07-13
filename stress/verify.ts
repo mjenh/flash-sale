@@ -200,6 +200,14 @@ function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Strict integer parse for `stock:remaining` (AI-S3-17). `Number.parseInt`
+ *  truncates trailing garbage — `"100abc" -> 100` — which could accidentally
+ *  equal the expected value and pass a corrupt run. A non-integer yields `NaN`,
+ *  which fails the equality check loudly instead of reading as a clean value. */
+function parseStockValue(raw: string): number {
+  return /^-?\d+$/.test(raw.trim()) ? Number.parseInt(raw, 10) : Number.NaN;
+}
+
 export async function observe(config: StressConfig): Promise<Observed> {
   const redis = createClient({ url: config.redisUrl, disableOfflineQueue: true });
   redis.on("error", () => {});
@@ -239,7 +247,7 @@ export async function observe(config: StressConfig): Promise<Observed> {
       orders,
       distinctEmails,
       orderUsers,
-      stockRemaining: rawStock === null ? null : Number.parseInt(rawStock, 10),
+      stockRemaining: rawStock === null ? null : parseStockValue(rawStock),
       apiStockQuantity,
     };
   } finally {

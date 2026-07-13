@@ -22,8 +22,6 @@ import { runVerify } from "./verify.ts";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolvePath(HERE, "..");
 
-const skipWindow = process.argv.includes("--skip-window");
-
 interface Phase {
   name: string;
   ok: boolean;
@@ -355,12 +353,8 @@ async function main(): Promise<void> {
     record("verifier", false, err instanceof Error ? err.message : String(err));
   }
 
-  if (skipWindow) {
-    console.log("\n=== 6/6 window phase — SKIPPED (--skip-window) ===");
-  } else {
-    announce("6/6 window phase (SM-3)");
-    await windowPhase(config);
-  }
+  announce("6/6 window phase (SM-3)");
+  await windowPhase(config);
 
   finish();
 }
