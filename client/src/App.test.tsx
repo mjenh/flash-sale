@@ -288,7 +288,7 @@ describe("the email field is transient — never remembered", () => {
     expect(screen.queryByTestId("verdict-panel")).toBeNull();
   });
 
-  it("resets the field after a completed attempt", async () => {
+  it("resets the field after a DEFINITIVE outcome (a completed attempt)", async () => {
     fetchSpy = router({ order: () => json(201, { message: "Order successful." }) });
     vi.stubGlobal("fetch", fetchSpy);
 
@@ -304,6 +304,52 @@ describe("the email field is transient — never remembered", () => {
     await waitFor(() => {
       expect(emailField()).toHaveValue("");
     });
+  });
+
+  it("KEEPS the value on a recoverable error (503) so the buyer can retry without retyping", async () => {
+    fetchSpy = router({
+      order: () => json(503, { success: false, error: "Service temporarily unavailable." }),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await paint("active", 37);
+    fireEvent.change(emailField(), { target: { value: "priya@example.com" } });
+    fireEvent.click(buyNow());
+
+    await waitFor(() => {
+      expect(screen.getByTestId("verdict-string").textContent).toBe(
+        "Service temporarily unavailable.",
+      );
+    });
+
+    // A transient failure is not the end of the attempt — the value stays put.
+    expect(emailField()).toHaveValue("priya@example.com");
+  });
+});
+
+describe("the identifier field accepts an email OR any other value", () => {
+  it("submits a non-email identifier without a client-side format block", async () => {
+    fetchSpy = router({ order: () => json(201, { message: "Order successful." }) });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await paint("active", 37);
+    fireEvent.change(emailField(), { target: { value: "priya-the-collector" } });
+    fireEvent.click(buyNow());
+
+    await waitFor(() => {
+      expect(screen.getByTestId("verdict-string")).toBeInTheDocument();
+    });
+    const post = fetchSpy.mock.calls.find((c) => (c[1] as RequestInit | undefined)?.method === "POST");
+    expect(JSON.parse((post?.[1] as RequestInit).body as string)).toEqual({
+      email: "priya-the-collector",
+    });
+  });
+
+  it("tells the buyer both an email and any identifier are accepted, and is not an email-typed input", async () => {
+    await paint("active", 37);
+
+    expect(emailField()).not.toHaveAttribute("type", "email");
+    expect(screen.getByText(/any identifier works/i)).toBeInTheDocument();
   });
 });
 

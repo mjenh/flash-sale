@@ -27,6 +27,18 @@ export const UPCOMING_BUTTON_REASON =
   "The button naps until noon — type your email now so you're ready when it wakes.";
 export const PROCESSING_LINE = "Hang tight — checking stock for you…";
 
+/** A DEFINITIVE outcome ends the attempt, so the field resets. Recoverable
+ *  errors — "unavailable" (503) and "network" (timeout/dropped connection) —
+ *  keep the value so the buyer can retry without retyping. ("invalid" never
+ *  reaches a verdict; it is anchored at the field.) A refresh or a new tab
+ *  always starts empty regardless — the field is session-only, never persisted. */
+const DEFINITIVE_VERDICTS: ReadonlySet<string> = new Set([
+  "success",
+  "already",
+  "sold_out",
+  "inactive",
+]);
+
 /** The honest reason a dead button is dead. Never a fake affordance, never a
  *  disappearing act — and never color alone. When the status is UNKNOWN
  *  (body === null) the button carries no disabled reason: during cold load
@@ -58,12 +70,13 @@ export function App() {
       onAttemptSettled: refetch,
     });
 
-  // Reset the identifier field after each completed attempt: the verdict has
-  // answered it, so the next buyer (and the next refresh) starts from a clean,
-  // empty field. Only submit-born verdicts clear it — a field-level validation
-  // error leaves the value in place so it can be corrected.
+  // Reset the identifier field after a DEFINITIVE attempt (won, already ordered,
+  // sold out, sale not active). A recoverable error (503 / network) keeps the
+  // value so the buyer can retry without retyping; a field-level validation
+  // error also leaves it in place to be corrected. A refresh or new tab always
+  // starts empty (the field is session-only).
   useEffect(() => {
-    if (verdict !== null && verdictSource === "submit") {
+    if (verdict !== null && verdictSource === "submit" && DEFINITIVE_VERDICTS.has(verdict.kind)) {
       resetEmail();
     }
   }, [verdict, verdictSource, resetEmail]);
@@ -127,10 +140,15 @@ export function App() {
                   className={`t-mono identifier-input${
                     fieldError === null ? "" : " identifier-input--error"
                   }`}
-                  type="email"
+                  // A plain text field, not type="email": the sale accepts ANY
+                  // identifier (an email OR a nickname/handle), so the browser
+                  // must not imply an email-only format. Length is still bounded
+                  // (the server rejects > 256); maxLength stops it at the source.
+                  type="text"
                   name="email"
                   autoComplete="email"
-                  placeholder="you@example.com"
+                  maxLength={256}
+                  placeholder="you@example.com — or any name you'll remember"
                   value={email}
                   onChange={(event) => {
                     setEmail(event.target.value);
@@ -154,6 +172,8 @@ export function App() {
                   </p>
                 )}
                 <p className="t-meta form-panel__help" id="email-help">
+                  An email or any identifier works — just reuse the same one to
+                  check your order later.
                 </p>
 
                 <div className="buy-now-zone">
