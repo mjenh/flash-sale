@@ -16,7 +16,18 @@ const MAX_EMAIL_LENGTH = 256;
 
 /** The one source of the email hygiene rules (spine conventions): trim first;
  *  empty-after-trim or > 256 chars is invalid. Shared by the POST body and the
- *  GET path param (Express hands the param in already percent-decoded). */
+ *  GET path param (Express hands the param in already percent-decoded).
+ *
+ *  Fairness canonicalization (AI-S1-03): the system's one business rule is "one
+ *  item per email," so the stored Redis set key must be canonical — otherwise
+ *  `A@b.com`, `a@b.com`, and NFC/NFD variants are three distinct customers and
+ *  the rule is defeated by pressing Shift. We NFC-normalize and case-fold so
+ *  those collapse to a single key (used identically by the POST write and the
+ *  GET read, so a check always matches what was stored). The length gate stays
+ *  on the trimmed form to keep the 256-char boundary exact. Provider-specific
+ *  aliasing (plus-tags, gmail dots) is DELIBERATELY not de-aliased — that is
+ *  provider-specific and risky, and is an accepted bypass (documented as a
+ *  non-goal in the README limitations). */
 function canonicalEmail(raw: unknown): string | undefined {
   if (typeof raw !== "string") {
     return undefined;
@@ -25,7 +36,7 @@ function canonicalEmail(raw: unknown): string | undefined {
   if (email === "" || email.length > MAX_EMAIL_LENGTH) {
     return undefined;
   }
-  return email;
+  return email.normalize("NFC").toLowerCase();
 }
 
 /** Trimmed canonical email from a POST body, or undefined when it must 400. */

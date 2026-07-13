@@ -69,6 +69,26 @@ describe("POST /api/order (booted via bootstrap())", () => {
     expect(orderSetSize(fake)).toBe(1);
   });
 
+  it("AI-S1-03: case + whitespace variants of an email are ONE customer; the stored key and echo are canonical", async () => {
+    const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "3" });
+
+    const first = await request(app).post("/api/order").send({ email: "  Buyer@Example.COM " });
+    expect(first.status).toBe(201);
+    expect(first.body.email).toBe("buyer@example.com"); // trimmed + case-folded
+    expect(fake.sets.get("orders:users")?.has("buyer@example.com")).toBe(true);
+
+    // A different casing is the SAME customer: idempotent 200, no second unit sold.
+    const again = await request(app).post("/api/order").send({ email: "BUYER@example.com" });
+    expect(again.status).toBe(200);
+    expect(fake.kv.get("stock:remaining")).toBe("2"); // only one unit gone
+    expect(orderSetSize(fake)).toBe(1);
+
+    // The FR-4 check collapses casing too, so it can't miss the held order.
+    const check = await request(app).get("/api/order/Buyer@Example.com");
+    expect(check.status).toBe(200);
+    expect(check.body).toEqual({ success: true, ordered: true, email: "buyer@example.com" });
+  });
+
   it("409 sold out for a new email at stock 0 inside the window; the set is untouched", async () => {
     const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "0" });
     const res = await request(app).post("/api/order").send({ email: "late@example.com" });

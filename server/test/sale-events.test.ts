@@ -181,6 +181,37 @@ describe("sale-events broadcaster — AC 3 snapshot + AC 4 coalescing/serializat
     expect(sink.written).toHaveLength(2); // interval stopped
   });
 
+  it("AI-S1-02 safety net: a sold_out observed on the heartbeat is broadcast once, even when the sale.sold_out publish was lost", async () => {
+    const { status, broadcaster } = build();
+    const sink = makeSink();
+    broadcaster.register(sink);
+
+    // The order's Lua script committed (stock 0) but it was answered 503 on a
+    // Redis timeout, so its sale.sold_out publish never fired — no onDomainEvent.
+    // The live stream is stranded on "active" with no reconnect to heal it.
+    status.set({ status: "sold_out", stock: 0 });
+
+    await vi.advanceTimersByTimeAsync(HEARTBEAT_MS);
+    const soldOutFrame = frameFor(status.body());
+    expect(sink.written).toContain(": heartbeat\n\n");
+    expect(sink.written).toContain(soldOutFrame); // recovered terminal frame
+
+    // Idempotent: subsequent heartbeats do not re-broadcast it.
+    await vi.advanceTimersByTimeAsync(HEARTBEAT_MS * 2);
+    expect(sink.written.filter((c) => c === soldOutFrame)).toHaveLength(1);
+  });
+
+  it("AI-S1-02 safety net stays silent while the sale is still active", async () => {
+    const { status, broadcaster } = build(); // default status: active
+    const sink = makeSink();
+    broadcaster.register(sink);
+
+    await vi.advanceTimersByTimeAsync(HEARTBEAT_MS * 2);
+    // Only heartbeat comments — never a status frame while active.
+    expect(sink.written.every((c) => c === ": heartbeat\n\n")).toBe(true);
+    expect(status.getStatus).toHaveBeenCalled(); // the safety net did probe
+  });
+
   it("compose failure mid-stream: reportBroadcastFailure, every sink end()ed, subsequent events write nothing (AD-5)", async () => {
     const status = makeSaleStatus();
     const boom = new Error("redis gone mid-stream");

@@ -15,7 +15,7 @@
 // structural { write; end } surface the SSE route satisfies with `res`, and
 // the publisher arrives as an injected function.
 import type { Clock } from "./clock.ts";
-import type { SaleStatusService } from "./sale-status.ts";
+import type { SaleStatus, SaleStatusService } from "./sale-status.ts";
 
 /** Type-only domain events on the `sale:events` channel (AD-9). */
 export type SaleEventType = "order.accepted" | "sale.sold_out" | "sale.started" | "sale.ended";
@@ -82,6 +82,10 @@ export function createSaleEventsBroadcaster({
   let heartbeat: NodeJS.Timeout | undefined;
   let pending: NodeJS.Timeout | undefined;
   let lastEmitAt = Number.NEGATIVE_INFINITY;
+  /** Set once a terminal frame (sold_out/ended) has gone out — by the domain
+   *  event OR the AI-S1-02 safety net below — so the safety net fires at most
+   *  once and stops polling thereafter. */
+  let sawTerminal = false;
   /** The single serialized writer (AD-9): every emit appends here, so frames
    *  always land in order and a terminal emit is provably the final frame. */
   let chain: Promise<void> = Promise.resolve();
@@ -109,6 +113,36 @@ export function createSaleEventsBroadcaster({
     }
   };
 
+  /** AI-S1-02 safety net. An order can commit its Lua script (SADD+DECR to 0)
+   *  and still be answered 503 on a Redis command timeout, skipping the OK
+   *  branch — so the ONE sale.sold_out publish is lost and live streams stay
+   *  stranded on "active" indefinitely (a healthy stream never reconnects, so
+   *  snapshot-on-connect can't heal it). Piggybacked on the heartbeat: if a
+   *  fresh read shows the sale is sold out and no terminal frame has gone out,
+   *  broadcast one, exactly once. A read failure is not a signal (the normal
+   *  AD-5 fail-closed paths own Redis-down); observing `ended` also stops the
+   *  poll (that boundary is a reliable timer, and snapshot heals reconnects). */
+  const ensureTerminalIfSoldOut = async (): Promise<void> => {
+    if (sawTerminal || sinks.size === 0) {
+      return;
+    }
+    let status: SaleStatus;
+    try {
+      ({ status } = await saleStatus.getStatus());
+    } catch {
+      return;
+    }
+    if (sawTerminal || sinks.size === 0) {
+      return; // state changed while the read was in flight
+    }
+    if (status === "sold_out") {
+      sawTerminal = true;
+      emit(); // composes a fresh sold_out frame to every sink via the chain
+    } else if (status === "ended") {
+      sawTerminal = true; // terminal; stop polling — snapshot heals reconnects
+    }
+  };
+
   const startHeartbeat = (): void => {
     if (heartbeat !== undefined) {
       return;
@@ -116,6 +150,9 @@ export function createSaleEventsBroadcaster({
     heartbeat = setInterval(() => {
       for (const sink of [...sinks]) {
         writeTo(sink, HEARTBEAT_FRAME);
+      }
+      if (!sawTerminal) {
+        void ensureTerminalIfSoldOut();
       }
     }, heartbeatMs);
     heartbeat.unref();
@@ -184,6 +221,7 @@ export function createSaleEventsBroadcaster({
       if (TERMINAL_EVENTS.has(event)) {
         // Immediate + supersedes: the pending coalesced emit is dropped, and
         // the serialized chain guarantees this frame lands last.
+        sawTerminal = true; // the terminal frame is going out — disarm the safety net
         cancelPending();
         emit();
         return;
