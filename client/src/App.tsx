@@ -5,7 +5,6 @@
 // field and a click on the button are literally the same submit path — and
 // Enter is inert while the button is disabled, for free, because browsers do
 // not submit a form through a disabled submit button.
-import { useEffect } from "react";
 import "./App.css";
 import { MarqueeBand } from "./components/MarqueeBand.tsx";
 import { Masthead } from "./components/Masthead.tsx";
@@ -26,18 +25,11 @@ import type { SaleStatusBody } from "./api/sale.ts";
 export const UPCOMING_BUTTON_REASON =
   "The button naps until noon — type your email now so you're ready when it wakes.";
 export const PROCESSING_LINE = "Hang tight — checking stock for you…";
-
-/** A DEFINITIVE outcome ends the attempt, so the field resets. Recoverable
- *  errors — "unavailable" (503) and "network" (timeout/dropped connection) —
- *  keep the value so the buyer can retry without retyping. ("invalid" never
- *  reaches a verdict; it is anchored at the field.) A refresh or a new tab
- *  always starts empty regardless — the field is session-only, never persisted. */
-const DEFINITIVE_VERDICTS: ReadonlySet<string> = new Set([
-  "success",
-  "already",
-  "sold_out",
-  "inactive",
-]);
+/** The disabled reason during the brief cold-load window — status not read yet
+ *  (channel `connecting`), or the stream is down and a poll has not landed a
+ *  body yet (`degraded` with no body). Confirmed offline FAILS OPEN instead
+ *  (AI-S2-13): the button is enabled, so there is no dead button to explain. */
+export const COLD_LOAD_BUTTON_REASON = "Hang tight — reading the sale before the button opens.";
 
 /** The honest reason a dead button is dead. Never a fake affordance, never a
  *  disappearing act — and never color alone. When the status is UNKNOWN
@@ -63,23 +55,19 @@ function buttonReason(body: SaleStatusBody | null): string | null {
 
 export function App() {
   const { body, channel, refetch } = useSaleStatus();
-  const [email, setEmail, resetEmail] = useEmailField();
+  const [email, setEmail] = useEmailField();
   // FR-5: the status re-fetches after EVERY attempt — win, loss, or error.
   const { phase, verdict, verdictSource, fieldError, submit, clearFieldError, clearVerdict } =
     useOrder({
       onAttemptSettled: refetch,
     });
 
-  // Reset the identifier field after a DEFINITIVE attempt (won, already ordered,
-  // sold out, sale not active). A recoverable error (503 / network) keeps the
-  // value so the buyer can retry without retyping; a field-level validation
-  // error also leaves it in place to be corrected. A refresh or new tab always
-  // starts empty (the field is session-only).
-  useEffect(() => {
-    if (verdict !== null && verdictSource === "submit" && DEFINITIVE_VERDICTS.has(verdict.kind)) {
-      resetEmail();
-    }
-  }, [verdict, verdictSource, resetEmail]);
+  // The identifier field is session-only and is NEVER cleared by an attempt
+  // outcome — win, already-ordered, sold-out, sale-not-active, 503 or network
+  // all leave the value in place so the buyer can re-check or retry without
+  // retyping. It clears only on a real page-level reset: a refresh/reload, a new
+  // tab, a new window, or an incognito session — because the value lives purely
+  // in in-memory React state and is never persisted.
 
   const processing = phase === "processing";
   // The processing button is NOT `disabled`: disabling a focused control blurs
@@ -94,7 +82,11 @@ export function App() {
   // is safe and honest. Known-inactive states (upcoming/ended/sold_out) and the
   // brief cold-load `connecting` window stay disabled — no flicker, no surprise.
   const canBuy = body === null ? channel === "offline" : body.status === "active";
-  const reason = canBuy ? null : buttonReason(body);
+  // AC 3: every disabled state carries an honest reason. When the status is
+  // known (body !== null) that is the per-state line; when it is UNKNOWN and the
+  // button is still disabled (connecting / degraded before a body lands) it is
+  // the cold-load line. Offline fails open — canBuy is true, so no reason.
+  const reason = canBuy ? null : (buttonReason(body) ?? COLD_LOAD_BUTTON_REASON);
 
   return (
     <>
@@ -124,13 +116,16 @@ export function App() {
                   // Browsers already refuse implicit submission through a
                   // disabled default button; this makes the rule explicit
                   // rather than inherited — Enter is inert exactly when the
-                  // button is.
+                  // button is. Native constraint validation stays ON (no
+                  // `noValidate`): the type="email" field validates the address
+                  // shape in the browser before this handler runs. Empty is not
+                  // blocked here (the field is not `required`) so the hook can
+                  // own the anchored "Email is required." message (AC 2).
                   if (!canBuy) {
                     return;
                   }
                   submit(email);
                 }}
-                noValidate
               >
                 <label className="t-label form-panel__label" htmlFor="email">
                   Who&apos;s buying?
@@ -140,15 +135,16 @@ export function App() {
                   className={`t-mono identifier-input${
                     fieldError === null ? "" : " identifier-input--error"
                   }`}
-                  // A plain text field, not type="email": the sale accepts ANY
-                  // identifier (an email OR a nickname/handle), so the browser
-                  // must not imply an email-only format. Length is still bounded
-                  // (the server rejects > 256); maxLength stops it at the source.
-                  type="text"
+                  // An email field: the sale is email-native (FR-2/FR-4), so the
+                  // input validates the address shape in the browser (type=email
+                  // + the email inputMode keyboard). Length is still bounded (the
+                  // server rejects > 256); maxLength stops it at the source.
+                  type="email"
+                  inputMode="email"
                   name="email"
                   autoComplete="email"
                   maxLength={256}
-                  placeholder="name or you@example.com"
+                  placeholder="you@example.com"
                   value={email}
                   onChange={(event) => {
                     setEmail(event.target.value);
@@ -172,8 +168,7 @@ export function App() {
                   </p>
                 )}
                 <p className="t-meta form-panel__help" id="email-help">
-                  An email or name works — just reuse the same one to check your
-                  order later.
+                  Email. That&apos;s the whole form, promise.
                 </p>
 
                 <div className="buy-now-zone">

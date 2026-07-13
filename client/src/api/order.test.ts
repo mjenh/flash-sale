@@ -54,7 +54,7 @@ describe("placeOrder — the verbatim verdict for every wire outcome", () => {
 
   it("400 → the canonical validation string", async () => {
     vi.stubGlobal("fetch", replied(400, { success: false, error: EMAIL_REQUIRED }));
-    await expect(placeOrder("")).resolves.toEqual({ kind: "invalid", message: "Email or name is required." });
+    await expect(placeOrder("")).resolves.toEqual({ kind: "invalid", message: "Email is required." });
   });
 
   it("503 → the fail-closed error verdict (a verdict, not a page takeover)", async () => {

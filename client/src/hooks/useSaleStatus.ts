@@ -23,11 +23,13 @@ export type Channel = "connecting" | "live" | "degraded" | "offline";
 /** Middle of the spine's 2–10 s fallback band. */
 export const POLL_MS = 5_000;
 
-/** The server heartbeats every 25 s (a `: heartbeat` comment the browser does
- *  not surface as an event). If an OPEN stream produces no observable activity
- *  for longer than this, the connection is treated as silently dead — a
- *  black-holed TCP socket (sleep/wake, captive portal, NAT reap) that never
- *  fires `error`. The demotion self-heals: the reconnect below re-snapshots. */
+/** The server heartbeats every 25 s as a NAMED `heartbeat` event (AI-S4-07),
+ *  which the browser DOES surface — so a quiet-but-live stream keeps marking
+ *  activity even when no `status` frame is due (e.g. the whole `upcoming` phase).
+ *  If an OPEN stream produces no observable activity for longer than this, the
+ *  connection is treated as silently dead — a black-holed TCP socket (sleep/wake,
+ *  captive portal, NAT reap) that never fires `error`. The demotion self-heals:
+ *  the reconnect below re-snapshots. */
 export const WATCHDOG_SILENCE_MS = 40_000;
 
 /** If neither channel has produced a first paint by this deadline, arm the
@@ -168,6 +170,11 @@ export function useSaleStatus(): SaleStatusHandle {
           writeFromStream(next);
         }
       });
+
+      // The 25 s keep-alive is a NAMED `heartbeat` event (AI-S4-07). It carries
+      // no status — its only job is to mark the stream observably alive so the
+      // watchdog does not demote a healthy but quiet connection.
+      source.addEventListener("heartbeat", markActivity);
 
       source.onerror = () => {
         if (!mountedRef.current) {

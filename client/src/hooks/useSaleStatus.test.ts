@@ -1,7 +1,7 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeEventSource, installFakeEventSource } from "../test/fake-event-source.ts";
-import { POLL_MS, useSaleStatus } from "./useSaleStatus.ts";
+import { POLL_MS, WATCHDOG_SILENCE_MS, useSaleStatus } from "./useSaleStatus.ts";
 
 const BODY = {
   success: true as const,
@@ -232,6 +232,46 @@ describe("useSaleStatus", () => {
 
     expect(result.current.body?.stock).toBe(12);
     expect(result.current.channel).toBe("degraded");
+  });
+
+  it("keeps a quiet-but-live stream LIVE when heartbeats arrive (AI-S4-07 watchdog)", async () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useSaleStatus());
+
+    await act(async () => {
+      FakeEventSource.current.open();
+      FakeEventSource.current.emit(BODY);
+    });
+    expect(result.current.channel).toBe("live");
+
+    // No `status` frames for well past the watchdog window — but the named
+    // heartbeat keeps arriving, so the stream must NOT be demoted as dead.
+    for (let i = 0; i < 6; i += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(WATCHDOG_SILENCE_MS / 2);
+        FakeEventSource.current.heartbeat();
+      });
+    }
+
+    expect(result.current.channel).toBe("live");
+  });
+
+  it("demotes a truly silent live stream once the watchdog window elapses (AI-S4-07)", async () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useSaleStatus());
+
+    await act(async () => {
+      FakeEventSource.current.open();
+      FakeEventSource.current.emit(BODY);
+    });
+    expect(result.current.channel).toBe("live");
+
+    // No heartbeats, no frames: silence beyond the window is treated as death.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WATCHDOG_SILENCE_MS * 1.5);
+    });
+
+    expect(result.current.channel).not.toBe("live");
   });
 
   it("a recoverable mid-stream drop (error while CONNECTING) is left for the browser to retry", async () => {

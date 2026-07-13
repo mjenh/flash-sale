@@ -241,7 +241,7 @@ describe("UJ-1 — the winner", () => {
 });
 
 describe("UJ-4 — the fair loser", () => {
-  it("gets the sympathetic frame; the field resets once the attempt is answered", async () => {
+  it("gets the sympathetic frame; the field KEEPS its value through the rejection", async () => {
     fetchSpy = router({ order: () => json(409, { success: false, error: "Item is sold out." }) });
     vi.stubGlobal("fetch", fetchSpy);
 
@@ -254,10 +254,9 @@ describe("UJ-4 — the fair loser", () => {
     });
     expect(screen.getByTestId("verdict-frame").textContent).toBe(SOLD_OUT_FRAME);
 
-    // The attempt is a completed action — the field resets (even on a rejection).
-    await waitFor(() => {
-      expect(emailField()).toHaveValue("");
-    });
+    // A rejection never clears the field — the address stays so the buyer can
+    // re-check or retry without retyping.
+    expect(emailField()).toHaveValue("dev@example.com");
   });
 });
 
@@ -288,7 +287,7 @@ describe("the email field is transient — never remembered", () => {
     expect(screen.queryByTestId("verdict-panel")).toBeNull();
   });
 
-  it("resets the field after a DEFINITIVE outcome (a completed attempt)", async () => {
+  it("KEEPS the field value after a successful order (an attempt never clears it)", async () => {
     fetchSpy = router({ order: () => json(201, { message: "Order successful." }) });
     vi.stubGlobal("fetch", fetchSpy);
 
@@ -301,9 +300,9 @@ describe("the email field is transient — never remembered", () => {
       expect(screen.getByTestId("verdict-string")).toBeInTheDocument();
     });
 
-    await waitFor(() => {
-      expect(emailField()).toHaveValue("");
-    });
+    // No attempt outcome — win, loss, or error — clears the field; only a real
+    // page reset does (and that is exercised by "starts empty on load").
+    expect(emailField()).toHaveValue("priya@example.com");
   });
 
   it("KEEPS the value on a recoverable error (503) so the buyer can retry without retyping", async () => {
@@ -327,13 +326,23 @@ describe("the email field is transient — never remembered", () => {
   });
 });
 
-describe("the identifier field accepts an email OR any other value", () => {
-  it("submits a non-email identifier without a client-side format block", async () => {
+describe("the identifier field is an email input", () => {
+  it("is a type=email field so the browser validates the address shape, with email help copy", async () => {
+    await paint("active", 37);
+
+    // type=email is the validation mechanism (FR-2/FR-4 are email-native). The
+    // hook keeps no format gate of its own (SM-C1, pinned in useOrder.test.ts);
+    // the input's native constraint validation is what checks the shape.
+    expect(emailField()).toHaveAttribute("type", "email");
+    expect(screen.getByText(/that's the whole form, promise/i)).toBeInTheDocument();
+  });
+
+  it("carries a valid email straight to the wire as { email }", async () => {
     fetchSpy = router({ order: () => json(201, { message: "Order successful." }) });
     vi.stubGlobal("fetch", fetchSpy);
 
     await paint("active", 37);
-    fireEvent.change(emailField(), { target: { value: "priya-the-collector" } });
+    fireEvent.change(emailField(), { target: { value: "priya@example.com" } });
     fireEvent.click(buyNow());
 
     await waitFor(() => {
@@ -341,15 +350,8 @@ describe("the identifier field accepts an email OR any other value", () => {
     });
     const post = fetchSpy.mock.calls.find((c) => (c[1] as RequestInit | undefined)?.method === "POST");
     expect(JSON.parse((post?.[1] as RequestInit).body as string)).toEqual({
-      email: "priya-the-collector",
+      email: "priya@example.com",
     });
-  });
-
-  it("tells the buyer both an email and any identifier are accepted, and is not an email-typed input", async () => {
-    await paint("active", 37);
-
-    expect(emailField()).not.toHaveAttribute("type", "email");
-    expect(screen.getByText(/email or name works/i)).toBeInTheDocument();
   });
 });
 
@@ -359,7 +361,7 @@ describe("the honest edges", () => {
 
     fireEvent.click(buyNow());
 
-    expect(screen.getByTestId("field-error").textContent).toContain("Email or name is required.");
+    expect(screen.getByTestId("field-error").textContent).toContain("Email is required.");
     expect(emailField()).toHaveAttribute("aria-invalid", "true");
     expect(screen.queryByTestId("verdict-panel")).toBeNull();
     expect(

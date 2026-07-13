@@ -68,6 +68,14 @@ export class FakeEventSource {
     }
   }
 
+  /** Fire a named `heartbeat` event — the server's 25 s keep-alive (AI-S4-07),
+   *  now an observable event so the client watchdog can see a quiet live stream. */
+  heartbeat() {
+    for (const listener of this.listeners.get("heartbeat") ?? []) {
+      listener({ data: "{}" } as MessageEvent<string>);
+    }
+  }
+
   /** Fire `error`. A real EventSource sets `readyState` before the handler
    *  runs: CLOSED for a fatal error (a non-2xx handshake, e.g. a 503), or
    *  CONNECTING for a recoverable mid-stream drop it is already retrying.
