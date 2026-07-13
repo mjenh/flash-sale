@@ -50,7 +50,7 @@ export function App() {
   const { body, channel, refetch } = useSaleStatus();
   const [email, setEmail] = useRememberedEmail();
   // FR-5: the status re-fetches after EVERY attempt — win, loss, or error.
-  const { phase, verdict, fieldError, submit, checkOnLoad } = useOrder({
+  const { phase, verdict, fieldError, submit, checkOnLoad, clearVerdict } = useOrder({
     onAttemptSettled: refetch,
   });
 
@@ -80,8 +80,7 @@ export function App() {
               The <span className="hero__hollow">Noon</span> Drop
             </h1>
             <p className="t-body hero__sub">
-              One limited-run mechanical keyboard. One per person — and the counter on this page is
-              the honest, living truth.
+              One limited-run mechanical keyboard.
             </p>
 
             <SaleStatusZone body={body} channel={channel} />
@@ -132,8 +131,7 @@ export function App() {
                     {fieldError}
                   </p>
                 )}
-                <p className="t-meta form-panel__help" id="email-help">
-                  Email. That&apos;s the whole form, promise.
+                <p className="t-meta form-panel__help">
                 </p>
 
                 <div className="buy-now-zone">
@@ -165,9 +163,13 @@ export function App() {
               <RulesChips />
             </Panel>
 
-            {/* The verdict is inline, beneath the Buy Now zone. Never a modal. */}
+            {/* The verdict is a modal pop-up over a dimmed backdrop. */}
             {verdict === null ? null : (
-              <VerdictPanel verdict={verdict} saleState={body?.status ?? null} />
+              <VerdictPanel
+                verdict={verdict}
+                saleState={body?.status ?? null}
+                onClose={clearVerdict}
+              />
             )}
           </div>
         </main>

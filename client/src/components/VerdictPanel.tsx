@@ -1,9 +1,10 @@
-// The personal answer to YOUR attempt — inline, never a modal, never a toast.
-// The verbatim string sits in mono inside its chip; the warmth lives in the
-// frame above it, never inside it.
+// The personal answer to YOUR attempt — now a modal pop-up over a dimmed
+// backdrop. The verbatim string sits in mono inside its chip; the warmth lives
+// in the frame above it, never inside it.
 //
-// The panel takes focus when it lands. That focus move IS the announcement —
-// it carries NO aria-live, because doing both double-announces.
+// The dialog takes focus when it lands, traps Tab within itself, and dismisses
+// on the close button, Escape, or a backdrop click. As a role="dialog" with
+// aria-modal, the platform announces it on open — so it carries NO aria-live.
 import { useEffect, useRef } from "react";
 import type { SaleState } from "../api/sale.ts";
 import type { Verdict, VerdictKind } from "../api/order.ts";
@@ -13,6 +14,7 @@ import "./VerdictPanel.css";
 
 export const SUCCESS_FRAME = "It's yours!";
 export const ALREADY_FRAME = "All set — your order from today is safe.";
+export const CLOSE_LABEL = "Close";
 
 /** The warm frame, or null when the string must stand alone (errors: honest,
  *  no blame, nothing dressed up). */
@@ -54,42 +56,112 @@ function accentFor(kind: VerdictKind): "success" | "reject" | "error" {
 export interface VerdictPanelProps {
   verdict: Verdict;
   saleState: SaleState | null;
+  /** Dismiss the pop-up (close button, Escape, or backdrop click). */
+  onClose: () => void;
 }
 
-export function VerdictPanel({ verdict, saleState }: VerdictPanelProps) {
-  const ref = useRef<HTMLDivElement>(null);
+export function VerdictPanel({ verdict, saleState, onClose }: VerdictPanelProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
   const accent = accentFor(verdict.kind);
   const frame = frameFor(verdict.kind, saleState);
 
+  // Focus the dialog when it lands. That focus move seats the keyboard inside
+  // the modal so the trap below has somewhere to keep it.
   useEffect(() => {
-    ref.current?.focus();
+    dialogRef.current?.focus();
   }, [verdict]);
+
+  // Escape closes; Tab is trapped within the dialog so focus never escapes to
+  // the dimmed page behind it.
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") {
+        return;
+      }
+      const root = dialogRef.current;
+      if (root === null) {
+        return;
+      }
+      const focusable = root.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      );
+      if (focusable.length === 0) {
+        event.preventDefault();
+        root.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || active === root)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [onClose]);
 
   return (
     <div
-      ref={ref}
-      tabIndex={-1}
-      aria-label="Your order verdict"
-      className="verdict-focus"
-      data-testid="verdict-panel"
+      className="verdict-overlay"
+      data-testid="verdict-overlay"
+      // A click that starts AND ends on the backdrop dismisses. Clicks that
+      // began inside the dialog (a drag that ended on the backdrop) do not.
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
     >
-      <Panel variant="cream" className={`verdict-panel verdict-panel--${accent}`}>
-        {/* Success alone gets the slapped-on flag; it IS this verdict's frame,
-            so the frame is never rendered twice. */}
-        {verdict.kind === "success" ? (
-          <span className="t-chip verdict-panel__flag" data-testid="verdict-flag">
-            {SUCCESS_FRAME}
-          </span>
-        ) : frame === null ? null : (
-          <p className="verdict-panel__frame" data-testid="verdict-frame">
-            {frame}
-          </p>
-        )}
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        tabIndex={-1}
+        aria-label="Your order verdict"
+        className="verdict-focus"
+        data-testid="verdict-panel"
+      >
+        <Panel variant="cream" className={`verdict-panel verdict-panel--${accent}`}>
+          <button
+            type="button"
+            className="verdict-panel__close pressable"
+            aria-label={CLOSE_LABEL}
+            data-testid="verdict-close"
+            onClick={onClose}
+          >
+            <span aria-hidden="true">×</span>
+          </button>
 
-        <p className="t-mono verdict-panel__string" data-testid="verdict-string">
-          {verdict.message}
-        </p>
-      </Panel>
+          {/* Success alone gets the slapped-on flag; it IS this verdict's frame,
+              so the frame is never rendered twice. */}
+          {verdict.kind === "success" ? (
+            <span className="t-chip verdict-panel__flag" data-testid="verdict-flag">
+              {SUCCESS_FRAME}
+            </span>
+          ) : frame === null ? null : (
+            <p className="verdict-panel__frame" data-testid="verdict-frame">
+              {frame}
+            </p>
+          )}
+
+          <p className="t-mono verdict-panel__string" data-testid="verdict-string">
+            {verdict.message}
+          </p>
+        </Panel>
+      </div>
     </div>
   );
 }

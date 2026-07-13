@@ -2,13 +2,54 @@
  * warm frame at headline-family scale in sentence case, and the verbatim string
  * in its own bordered mono chip. Accent + composition — never color alone. */
 
+/* The dimmed backdrop: a fixed sheet over the whole page, ink at ~55%, that
+ * seats the dialog centered on top and darkens everything behind it. */
+.verdict-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-panel);
+  background: color-mix(in srgb, var(--ink) 55%, transparent);
+  overflow-y: auto;
+}
+
 .verdict-focus {
-  margin-top: var(--sp-zone);
   outline: none;
+  width: 100%;
+  max-width: 440px;
 }
 
 .verdict-panel {
   overflow: visible;
+  position: relative;
+}
+
+/* The dismiss control, top-right, inside the dialog's own chrome. */
+.verdict-panel__close {
+  position: absolute;
+  top: var(--sp-stack);
+  right: var(--sp-stack);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(var(--sp-unit) * 4);
+  height: calc(var(--sp-unit) * 4);
+  padding: 0;
+  font-size: 28px;
+  line-height: 1;
+  color: var(--ink);
+  background: var(--paper-white);
+  border: var(--border-ink);
+  border-radius: var(--r-full);
+  cursor: pointer;
+}
+
+.verdict-panel__close:focus-visible {
+  outline: var(--border-ink);
+  outline-offset: 2px;
 }
 
 .verdict-panel::before {
@@ -48,6 +89,8 @@
 
 .verdict-panel__frame {
   margin: 0 0 var(--sp-stack);
+  /* Clear the close button in the top-right corner. */
+  padding-right: calc(var(--sp-unit) * 5);
   font-family: var(--font-sans);
   font-size: 24px;
   font-weight: var(--headline-weight);

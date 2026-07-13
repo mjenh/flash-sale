@@ -17,6 +17,8 @@ export interface OrderHandle {
   fieldError: string | null;
   submit: (email: string) => void;
   checkOnLoad: (email: string) => void;
+  /** Dismiss the verdict pop-up. Clears the verdict so the modal closes. */
+  clearVerdict: () => void;
 }
 
 export interface UseOrderOptions {
@@ -78,5 +80,9 @@ export function useOrder({ onAttemptSettled }: UseOrderOptions = {}): OrderHandl
       });
   }, []);
 
-  return { phase, verdict, fieldError, submit, checkOnLoad };
+  const clearVerdict = useCallback(() => {
+    setVerdict(null);
+  }, []);
+
+  return { phase, verdict, fieldError, submit, checkOnLoad, clearVerdict };
 }

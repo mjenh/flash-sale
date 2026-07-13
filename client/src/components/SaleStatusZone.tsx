@@ -20,7 +20,7 @@ export const COLD_LOAD_LINE = "Can't reach the sale — retrying…";
 export const UPCOMING_FRAME = "Almost time — doors open at 12:00.";
 export const SOLD_OUT_FRAME = "Gone in seconds — every last one found a home.";
 export const ENDED_FRAME = "That one's a wrap.";
-export const LIVE_NOTE = "No refreshing needed — the number moves the moment an order lands.";
+export const LIVE_NOTE = "Grab one now!";
 
 /** Milestones: every 10, then the last few. A 100 → 0 drain announces ~14
  *  times, not 100 — the screen reader is never firehosed. */

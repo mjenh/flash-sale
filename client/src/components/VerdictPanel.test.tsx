@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SaleState } from "../api/sale.ts";
 import type { Verdict } from "../api/order.ts";
 import { ALREADY_FRAME, SUCCESS_FRAME, VerdictPanel } from "./VerdictPanel.tsx";
@@ -10,8 +10,12 @@ afterEach(() => {
   cleanup();
 });
 
-function show(verdict: Verdict, saleState: SaleState | null = "active") {
-  return render(<VerdictPanel verdict={verdict} saleState={saleState} />);
+function show(
+  verdict: Verdict,
+  saleState: SaleState | null = "active",
+  onClose: () => void = () => {},
+) {
+  return render(<VerdictPanel verdict={verdict} saleState={saleState} onClose={onClose} />);
 }
 
 describe("the seven treatments — verbatim string, warm frame", () => {
@@ -49,7 +53,7 @@ describe("the seven treatments — verbatim string, warm frame", () => {
     const { rerender } = show(verdict, "upcoming");
     expect(screen.getByTestId("verdict-frame").textContent).toBe(UPCOMING_FRAME);
 
-    rerender(<VerdictPanel verdict={verdict} saleState="ended" />);
+    rerender(<VerdictPanel verdict={verdict} saleState="ended" onClose={() => {}} />);
     expect(screen.getByTestId("verdict-frame").textContent).toBe(ENDED_FRAME);
 
     // The verbatim string never changes — only the frame around it does.
@@ -79,21 +83,49 @@ describe("the seven treatments — verbatim string, warm frame", () => {
   });
 });
 
-describe("the panel's manners", () => {
-  it("takes focus when it lands — the focus move IS the announcement", () => {
+describe("the pop-up's manners", () => {
+  it("is a modal dialog that takes focus when it lands", () => {
     show({ kind: "success", message: "Order successful." });
 
     const panel = screen.getByTestId("verdict-panel");
     expect(panel).toHaveFocus();
+    expect(panel).toHaveAttribute("role", "dialog");
+    expect(panel).toHaveAttribute("aria-modal", "true");
     expect(panel).toHaveAttribute("aria-label", "Your order verdict");
   });
 
-  it("carries NO aria-live — announcing twice is the bug", () => {
+  it("carries NO aria-live — the modal announces itself, doing both is the bug", () => {
     const { container } = show({ kind: "success", message: "Order successful." });
 
     expect(container.querySelector("[aria-live]")).toBeNull();
-    expect(container.querySelector("[role='dialog']")).toBeNull();
     expect(container.querySelector("[role='alert']")).toBeNull();
+  });
+
+  it("dismisses on the close button", () => {
+    const onClose = vi.fn();
+    show({ kind: "success", message: "Order successful." }, "active", onClose);
+
+    fireEvent.click(screen.getByTestId("verdict-close"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("dismisses on Escape", () => {
+    const onClose = vi.fn();
+    show({ kind: "success", message: "Order successful." }, "active", onClose);
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("dismisses on a backdrop click, but not a click inside the dialog", () => {
+    const onClose = vi.fn();
+    show({ kind: "success", message: "Order successful." }, "active", onClose);
+
+    fireEvent.mouseDown(screen.getByTestId("verdict-string"));
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.mouseDown(screen.getByTestId("verdict-overlay"));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("distinguishes its variants without color: composition differs too (SM-5)", () => {

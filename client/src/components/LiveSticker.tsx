@@ -1,14 +1,14 @@
 // The sticker vouches for the CHANNEL, not the sale. It says exactly as much
 // as the page can honestly claim:
 //
-//   live     → "Live — updates itself"
+//   live     → "Live"
 //   degraded → "Live-ish — checking every few seconds"
 //   offline  → nothing at all. A page that cannot reach the sale does not get
 //              to wear a liveness badge.
 import type { Channel } from "../hooks/useSaleStatus.ts";
 import "./LiveSticker.css";
 
-export const LIVE_LABEL = "Live — updates itself";
+export const LIVE_LABEL = "Live";
 export const DEGRADED_LABEL = "Live-ish — checking every few seconds";
 
 export function LiveSticker({ channel }: { channel: Channel }) {
