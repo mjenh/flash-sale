@@ -349,7 +349,7 @@ describe("the identifier field accepts an email OR any other value", () => {
     await paint("active", 37);
 
     expect(emailField()).not.toHaveAttribute("type", "email");
-    expect(screen.getByText(/any identifier works/i)).toBeInTheDocument();
+    expect(screen.getByText(/email or name works/i)).toBeInTheDocument();
   });
 });
 
@@ -359,7 +359,7 @@ describe("the honest edges", () => {
 
     fireEvent.click(buyNow());
 
-    expect(screen.getByTestId("field-error").textContent).toContain("Email is required.");
+    expect(screen.getByTestId("field-error").textContent).toContain("Email or name is required.");
     expect(emailField()).toHaveAttribute("aria-invalid", "true");
     expect(screen.queryByTestId("verdict-panel")).toBeNull();
     expect(

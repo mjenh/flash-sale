@@ -23,7 +23,7 @@ describe("submit", () => {
       result.current.submit("   ");
     });
 
-    expect(result.current.fieldError).toBe("Email is required.");
+    expect(result.current.fieldError).toBe("Email or name is required.");
     expect(result.current.verdict).toBeNull(); // never the verdict panel
     expect(fetchSpy).not.toHaveBeenCalled();
   });

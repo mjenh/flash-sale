@@ -148,7 +148,7 @@ export function App() {
                   name="email"
                   autoComplete="email"
                   maxLength={256}
-                  placeholder="you@example.com — or any name you'll remember"
+                  placeholder="name or you@example.com"
                   value={email}
                   onChange={(event) => {
                     setEmail(event.target.value);
@@ -172,8 +172,8 @@ export function App() {
                   </p>
                 )}
                 <p className="t-meta form-panel__help" id="email-help">
-                  An email or any identifier works — just reuse the same one to
-                  check your order later.
+                  An email or name works — just reuse the same one to check your
+                  order later.
                 </p>
 
                 <div className="buy-now-zone">

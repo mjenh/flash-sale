@@ -12,7 +12,7 @@ export const SUCCESS = "Order successful.";
 export const ALREADY = "You have already ordered this item.";
 export const SOLD_OUT = "Item is sold out.";
 export const INACTIVE = "Sale is not active.";
-export const EMAIL_REQUIRED = "Email is required.";
+export const EMAIL_REQUIRED = "Email or name is required.";
 export const UNAVAILABLE = "Service temporarily unavailable.";
 export const NETWORK = "Something went wrong, please try again.";
 
