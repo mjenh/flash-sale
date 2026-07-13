@@ -13,13 +13,12 @@ import { Panel } from "./components/Panel.tsx";
 import { ProductTile } from "./components/ProductTile.tsx";
 import { RulesChips } from "./components/RulesChips.tsx";
 import {
-  COLD_LOAD_LINE,
   ENDED_FRAME,
   SOLD_OUT_FRAME,
   SaleStatusZone,
 } from "./components/SaleStatusZone.tsx";
 import { VerdictPanel } from "./components/VerdictPanel.tsx";
-import { useSaleStatus, type Channel } from "./hooks/useSaleStatus.ts";
+import { useSaleStatus } from "./hooks/useSaleStatus.ts";
 import { useOrder } from "./hooks/useOrder.ts";
 import { useRememberedEmail } from "./hooks/useRememberedEmail.ts";
 import type { SaleStatusBody } from "./api/sale.ts";
@@ -29,12 +28,14 @@ export const UPCOMING_BUTTON_REASON =
 export const PROCESSING_LINE = "Hang tight — checking stock for you…";
 
 /** The honest reason a dead button is dead. Never a fake affordance, never a
- *  disappearing act — and never color alone. While we are merely `connecting`
- *  there is nothing wrong to report; the unreachable line is earned only once
- *  the channel is `offline` (mirrors SaleStatusZone). */
-function buttonReason(body: SaleStatusBody | null, channel: Channel): string | null {
+ *  disappearing act — and never color alone. When the status is UNKNOWN
+ *  (body === null) the button carries no disabled reason: during cold load
+ *  nothing is wrong yet, and on a confirmed outage we FAIL OPEN (AI-S2-13) and
+ *  let the server's verdict speak — there is no dead button to explain (the
+ *  "Can't reach the sale — retrying…" context still shows in the status zone). */
+function buttonReason(body: SaleStatusBody | null): string | null {
   if (body === null) {
-    return channel === "offline" ? COLD_LOAD_LINE : null;
+    return null;
   }
   switch (body.status) {
     case "upcoming":
@@ -68,8 +69,16 @@ export function App() {
   // The processing button is NOT `disabled`: disabling a focused control blurs
   // it, and focus must stay on the button through the beat. It is aria-busy,
   // and the hook's in-flight guard is what makes a second click a no-op.
-  const canBuy = body?.status === "active";
-  const reason = buttonReason(body, channel);
+  //
+  // Buy Now is enabled when the sale is known-active, AND — fail-open, AI-S2-13
+  // — when the status is UNKNOWN because the read channel is down (body null +
+  // offline). Blocking a purchase the API would accept just because the *status*
+  // path broke violates SM-C1; the server answers every attempt authoritatively
+  // (201 / "already" / "sold out" / "not active" / 503), so letting it through
+  // is safe and honest. Known-inactive states (upcoming/ended/sold_out) and the
+  // brief cold-load `connecting` window stay disabled — no flicker, no surprise.
+  const canBuy = body === null ? channel === "offline" : body.status === "active";
+  const reason = canBuy ? null : buttonReason(body);
 
   return (
     <>

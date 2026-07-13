@@ -145,7 +145,7 @@ describe("the living status zone, in the page", () => {
     expect(seen.size).toBe(4);
   });
 
-  it("tells the truth when it cannot reach the sale: no chip, no claim, Buy Now disabled with the reason", async () => {
+  it("tells the truth when it cannot reach the sale, and FAILS OPEN so a status outage can't block a live sale (AI-S2-13)", async () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("down"))));
     vi.useFakeTimers();
 
@@ -155,12 +155,16 @@ describe("the living status zone, in the page", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
 
+    // The status zone stays honest: no machine-truth chip, no liveness claim,
+    // just the retry line.
     expect(screen.getByTestId("unreachable").textContent).toBe("Can't reach the sale — retrying…");
     expect(screen.queryByTestId("status-chip")).toBeNull();
-    expect(buyNow()).toBeDisabled();
-    expect(screen.getByTestId("buy-now-reason").textContent).toBe(
-      "Can't reach the sale — retrying…",
-    );
+
+    // But Buy Now is ENABLED: the status path being down must not block a sale
+    // the API would accept — the server's verdict decides the attempt (SM-C1).
+    // A live button needs no dead-button reason.
+    expect(buyNow()).not.toBeDisabled();
+    expect(screen.queryByTestId("buy-now-reason")).toBeNull();
   });
 });
 
