@@ -1,17 +1,24 @@
 // The judge (SM-1, SM-2, SM-C1, NFR-11/12/16/18).
 //
 // k6's thresholds prove the SHAPE of the responses (no 5xx, nothing outside
-// {201, 409}). The exact-count claims are asserted here, against the stores,
-// because those are the claims the PRD actually makes:
+// {201, 409}). The exact-count claims are asserted here, against the stores.
 //
-//   confirmed orders == min(STOCK_QUANTITY, attempts)      (SM-1 / NFR-11)
-//   distinct emails  == confirmed orders                   (SM-2 / NFR-12)
-//   SCARD orders:users == confirmed orders
-//   stock:remaining  == STOCK_QUANTITY - confirmed orders  (NFR-18)
+// The AUTHORITY is Redis, which the Lua script writes atomically (AD-1/AD-3):
 //
-// Every check is an EQUALITY. There is no `<=` anywhere in this file — that is
-// how SM-C1 (under-accepting is also a bug) is enforced: 99 orders out of 5,000
-// attempts against stock 100 fails exactly as loudly as 101 would.
+//   SCARD orders:users == min(API stockQuantity, attempts)   (SM-1 / NFR-11/16)
+//   distinct emails    == confirmed (Mongo) orders           (SM-2 / NFR-12)
+//   stock:remaining    == API stockQuantity - SCARD          (NFR-18)
+//
+// The stock BASIS is the API's own seeded `sales.stockQuantity`, cross-checked
+// against the harness config (AI-S3-05) — the verifier never marks its own
+// homework by asserting against a number the harness chose.
+//
+// The fairness equalities keep the no-`<=` discipline that makes SM-C1 real:
+// 99 accepts out of 5,000 against stock 100 fails as loudly as 101. The ONE
+// place a tolerance is allowed is the Mongo audit reconciliation (AI-S3-06):
+// the async audit is ACCEPTED to undercount (NFR-4), so an undercount within a
+// stated tolerance passes with a note, while an OVERCOUNT — Mongo holding an
+// order Redis never accepted — is always a hard fail.
 //
 // The Mongo write is async by design (AD-3), so the count is polled until it is
 // stable across two 1 s samples on a NON-ZERO plateau (AI-S3-14: a 0 == 0
@@ -23,19 +30,30 @@ import { loadStressConfig, SALE_SLUG, type StressConfig } from "./config.ts";
 import { ORDERS_KEY, STOCK_KEY } from "./reset.ts";
 
 export interface Observed {
-  /** Confirmed Order documents for the sale. */
+  /** Confirmed Order documents for the sale — the async Mongo AUDIT (AD-3),
+   *  which is accepted to undercount (NFR-4). Never the fairness authority. */
   orders: number;
-  /** Distinct `email` values among those orders. */
+  /** Distinct `email` values among those Mongo orders. */
   distinctEmails: number;
-  /** SCARD orders:users. */
+  /** SCARD orders:users — the AUTHORITATIVE record of who was accepted (AD-3:
+   *  Redis membership is the fairness truth; Mongo is the downstream audit). */
   orderUsers: number;
   /** GET stock:remaining — null when the key is missing (never coerce to 0). */
   stockRemaining: number | null;
+  /** The API's own seeded `sales.stockQuantity` — the single source of truth
+   *  for how many units the sale ran with (AI-S3-05). The harness must NOT mark
+   *  its own homework by asserting against a number it chose. */
+  apiStockQuantity: number;
 }
 
 export interface Expected {
+  /** The harness-configured STOCK_QUANTITY — used ONLY to cross-check against
+   *  the API's seeded value (AI-S3-05), never as the assertion basis. */
   stockQuantity: number;
   attempts: number;
+  /** Max accepted Mongo audit undercount vs Redis before it becomes a failure
+   *  (AI-S3-06). Defaults to max(1, 1% of target). */
+  auditTolerance?: number;
 }
 
 export interface CheckResult {
@@ -46,20 +64,34 @@ export interface CheckResult {
   note?: string;
 }
 
-/** The whole assertion engine, pure — every branch is unit-tested without I/O. */
+/** The whole assertion engine, pure — every branch is unit-tested without I/O.
+ *
+ *  The fairness invariants key off Redis (SCARD orders:users + stock:remaining),
+ *  which is the authority the Lua script writes atomically (AD-1/AD-3). The
+ *  Mongo audit is reconciled with a tolerance (AI-S3-06): an undercount is an
+ *  accepted, documented property (NFR-4) and passes with a note; an OVERCOUNT
+ *  (Mongo holds an order Redis never accepted — a phantom) is always a hard
+ *  fail. The stock basis is the API's own seeded quantity (AI-S3-05). */
 export function evaluate(observed: Observed, expected: Expected): CheckResult[] {
-  const target = Math.min(expected.stockQuantity, expected.attempts);
-  const { orders, distinctEmails, orderUsers, stockRemaining } = observed;
+  const { orders, distinctEmails, orderUsers, stockRemaining, apiStockQuantity } = observed;
 
-  const oversell = orders > target;
-  const underAccept = orders < target;
+  // Redis SCARD is the authoritative count of accepted orders.
+  const accepted = orderUsers;
+  const target = Math.min(apiStockQuantity, expected.attempts);
+  const tolerance = expected.auditTolerance ?? Math.max(1, Math.ceil(target * 0.01));
+
+  const oversell = accepted > target;
+  const underAccept = accepted < target;
+
+  const auditUnder = accepted - orders; // > 0 undercount, < 0 overcount
+  const auditPass = orders <= accepted && auditUnder <= tolerance;
 
   return [
     {
-      name: "SM-1  confirmed orders == min(STOCK_QUANTITY, attempts)",
-      pass: orders === target,
+      name: "SM-1  accepted orders (SCARD) == min(API stockQuantity, attempts)",
+      pass: accepted === target,
       expected: String(target),
-      actual: String(orders),
+      actual: String(accepted),
       note: oversell
         ? "OVERSOLD — the one inviolable invariant is broken (NFR-1)"
         : underAccept
@@ -67,31 +99,45 @@ export function evaluate(observed: Observed, expected: Expected): CheckResult[] 
           : undefined,
     },
     {
-      name: "SM-2  distinct emails == confirmed orders",
+      name: "SM-2  distinct emails == confirmed (Mongo) orders",
       pass: distinctEmails === orders,
       expected: String(orders),
       actual: String(distinctEmails),
       note: distinctEmails === orders ? undefined : "a duplicate order reached the audit trail",
     },
     {
-      name: `      SCARD ${ORDERS_KEY} == confirmed orders`,
-      pass: orderUsers === orders,
-      expected: String(orders),
-      actual: String(orderUsers),
+      name: `      Mongo audit orders vs SCARD ${ORDERS_KEY} (undercount tolerance ${tolerance})`,
+      pass: auditPass,
+      expected: `${accepted} (undercount up to ${tolerance} accepted; overcount forbidden)`,
+      actual: String(orders),
       note:
-        orderUsers === orders
-          ? undefined
-          : "Redis and Mongo disagree — an accepted order never reached the audit (NFR-4 undercount) or Mongo holds an order Redis never accepted",
+        orders > accepted
+          ? "OVERCOUNT — Mongo holds a confirmed order Redis never accepted: a phantom order (hard fail)"
+          : auditUnder === 0
+            ? undefined
+            : auditUnder <= tolerance
+              ? `audit undercount of ${auditUnder} within tolerance — an ACCEPTED AD-3/NFR-4 property (a Redis accept whose async Mongo write was lost); Redis remains the authoritative fairness record`
+              : `audit undercount of ${auditUnder} EXCEEDS tolerance ${tolerance} — too many accepted orders never reached the audit`,
     },
     {
-      name: `      ${STOCK_KEY} == STOCK_QUANTITY - confirmed orders`,
-      pass: stockRemaining !== null && stockRemaining === expected.stockQuantity - orders,
-      expected: String(expected.stockQuantity - orders),
+      name: `      ${STOCK_KEY} == API stockQuantity - accepted (SCARD)`,
+      pass: stockRemaining !== null && stockRemaining === apiStockQuantity - accepted,
+      expected: String(apiStockQuantity - accepted),
       actual: stockRemaining === null ? "<key missing>" : String(stockRemaining),
       note:
         stockRemaining === null
           ? "stock:remaining is absent — the harness never fabricates a 0 (a fabricated 0 reads as a clean sell-out)"
           : undefined,
+    },
+    {
+      name: "AD-4  harness STOCK_QUANTITY == API seeded sales.stockQuantity",
+      pass: expected.stockQuantity === apiStockQuantity,
+      expected: String(apiStockQuantity),
+      actual: String(expected.stockQuantity),
+      note:
+        expected.stockQuantity === apiStockQuantity
+          ? undefined
+          : "the harness expected a different stock than the API booted with — the API's seeded value is authoritative; a disagreement means the run's stock was not what the verifier assumed (AI-S3-05)",
     },
   ];
 }
@@ -172,6 +218,14 @@ export async function observe(config: StressConfig): Promise<Observed> {
         `no sale document with slug "${SALE_SLUG}" — the API never booted against ${config.mongodbUri}`,
       );
     }
+    // AI-S3-05: the API's own seeded quantity is the authoritative stock basis —
+    // read it, never assume the harness's configured value matches it.
+    const apiStockQuantity = (sale as { stockQuantity?: unknown }).stockQuantity;
+    if (typeof apiStockQuantity !== "number" || !Number.isInteger(apiStockQuantity)) {
+      throw new Error(
+        `sale document "${SALE_SLUG}" has no integer stockQuantity — cannot establish the authoritative stock basis`,
+      );
+    }
     const filter = { saleId: sale._id, status: "confirmed" };
 
     const orders = await pollUntilStable({
@@ -186,6 +240,7 @@ export async function observe(config: StressConfig): Promise<Observed> {
       distinctEmails,
       orderUsers,
       stockRemaining: rawStock === null ? null : Number.parseInt(rawStock, 10),
+      apiStockQuantity,
     };
   } finally {
     await redis.close();

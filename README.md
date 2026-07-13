@@ -76,7 +76,7 @@ revisit each — is in
 | Redis decides, Mongo records (async) | Single-store hot path, clean recovery | Audit under-count if a crash lands mid-write |
 | Fail closed on Redis loss (503, never a guess) | Correctness under partial failure | Availability — Redis down means the sale is down |
 | Synchronous order flow, no queue | Immediate, interpretable verdicts | No burst shock absorber; scale the API tier head-on |
-| Email as the idempotency key | Honest retries, no session/account needed | Case-sensitive today — a fairness hole until normalized |
+| Email as the idempotency key | Honest retries, no session/account needed | Case + NFC normalized so one mailbox is one customer; provider aliases (plus-tags, gmail dots) are an accepted bypass |
 | Stateless API, scale by widening the tier | Add instances freely without weakening the guarantee | One Redis primary is the shared throughput ceiling |
 | SSE over Redis pub/sub for live status | Plain-HTTP one-way stream, coalesced frames | One-way only; a stateful broadcaster + client fallback ladder |
 | Native TS, no build step | The code that runs is the code on disk | Pins a modern Node; no bundler packaging for the server |
@@ -156,8 +156,14 @@ npm run stress        # or: make stress
 
 Prerequisite: Docker. k6 runs from your `PATH` if present, otherwise from the
 `grafana/k6` image. The harness stops the API, resets the stores, restarts the
-API, drives the concurrent burst with k6, verifies the results against Mongo and
-Redis by equality, then re-checks that a past-window sale rejects every attempt.
+API, drives the concurrent burst with k6, then verifies the results against the
+stores. Redis (`SCARD orders:users` + `stock:remaining`) is the authoritative
+fairness record: every fairness count is an exact equality against the API's own
+seeded stock (the harness never asserts against a quantity it chose). The async
+Mongo audit is reconciled with a tolerance — an accepted under-count (a Redis
+accept whose durable write was lost, NFR-4) passes with a note, while an
+over-count (a phantom order Mongo holds but Redis never accepted) hard-fails. It
+then re-checks that a past-window sale rejects every attempt.
 Buyer count (`ATTEMPTS`, default 5,000), virtual users (`VUS`, default 500), and
 stock (`STOCK_QUANTITY`, default 100) are all overridable, so the same proof runs
 at any scale. The combined exit code is the pass/fail signal. See §9 of

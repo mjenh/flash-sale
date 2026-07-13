@@ -11,6 +11,7 @@ function observed(over: Partial<Observed> = {}): Observed {
     distinctEmails: 100,
     orderUsers: 100,
     stockRemaining: 0,
+    apiStockQuantity: 100,
     ...over,
   };
 }
@@ -20,7 +21,7 @@ describe("evaluate", () => {
     const results = evaluate(observed(), EXPECTED);
 
     expect(passed(results)).toBe(true);
-    expect(results).toHaveLength(4);
+    expect(results).toHaveLength(5);
   });
 
   it("fails an oversell (101 orders against stock 100)", () => {
@@ -45,14 +46,57 @@ describe("evaluate", () => {
     expect(results[0]?.note).toContain("UNDER-ACCEPTED");
   });
 
-  it("fails when Redis and Mongo disagree (SCARD 100, orders 99)", () => {
+  it("PASSES an audit undercount within tolerance — the accepted NFR-4 property (AI-S3-06)", () => {
+    // Redis accepted 100 (stock drained to 0); one async Mongo audit write was
+    // lost, so the audit shows 99. Redis is authoritative — this is a PASS with
+    // a note, not a red proof.
     const results = evaluate(
-      observed({ orders: 99, distinctEmails: 99, orderUsers: 100, stockRemaining: 1 }),
+      observed({ orders: 99, distinctEmails: 99, orderUsers: 100, stockRemaining: 0 }),
+      EXPECTED,
+    );
+
+    expect(passed(results)).toBe(true);
+    expect(results[2]?.pass).toBe(true);
+    expect(results[2]?.note).toContain("ACCEPTED");
+  });
+
+  it("FAILS an audit overcount — Mongo holds an order Redis never accepted (a phantom, AI-S3-06)", () => {
+    const results = evaluate(
+      observed({ orders: 101, distinctEmails: 101, orderUsers: 100, stockRemaining: 0 }),
       EXPECTED,
     );
 
     expect(passed(results)).toBe(false);
     expect(results[2]?.pass).toBe(false);
+    expect(results[2]?.note).toContain("OVERCOUNT");
+  });
+
+  it("FAILS an audit undercount that EXCEEDS the tolerance (AI-S3-06)", () => {
+    const results = evaluate(
+      observed({ orders: 90, distinctEmails: 90, orderUsers: 100, stockRemaining: 0 }),
+      { ...EXPECTED, auditTolerance: 1 },
+    );
+
+    expect(passed(results)).toBe(false);
+    expect(results[2]?.pass).toBe(false);
+    expect(results[2]?.note).toContain("EXCEEDS");
+  });
+
+  it("FAILS — loudly — when the harness stock disagrees with the API's seeded stock (AI-S3-05)", () => {
+    // The API booted with 50 units but the harness seeded/assumed 100 and the
+    // sale sold 100. Old behavior: silent PASS (marking its own homework). Now:
+    // SM-1 catches the 2x oversell against the authoritative basis, AND the AD-4
+    // cross-check flags the disagreement.
+    const results = evaluate(
+      observed({ orders: 100, distinctEmails: 100, orderUsers: 100, stockRemaining: -50, apiStockQuantity: 50 }),
+      { stockQuantity: 100, attempts: 5000 },
+    );
+
+    expect(passed(results)).toBe(false);
+    expect(results[0]?.pass).toBe(false); // SM-1 oversell vs the API's real 50
+    expect(results[0]?.note).toContain("OVERSOLD");
+    expect(results[4]?.pass).toBe(false); // AD-4 harness/API stock disagreement
+    expect(results[4]?.note).toContain("authoritative");
   });
 
   it("fails on a duplicate email in the audit trail (SM-2)", () => {
