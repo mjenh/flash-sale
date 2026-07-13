@@ -151,6 +151,17 @@ describe("createSaleEventsSubscription", () => {
     expect(subscriber.destroy).toHaveBeenCalledTimes(1);
   });
 
+  it("a subscribe failure after connect destroys the connection and wraps into RedisUnavailableError", async () => {
+    const { subscriber } = fakeSubscriber();
+    subscriber.subscribe = vi.fn(async () => {
+      throw new Error("subscribe refused");
+    }) as typeof subscriber.subscribe;
+    await expect(createSaleEventsSubscription(subscriber, options())).rejects.toBeInstanceOf(
+      RedisUnavailableError,
+    );
+    expect(subscriber.destroy).toHaveBeenCalledTimes(1);
+  });
+
   it("close() unsubscribes from sale:events and closes the open connection", async () => {
     const { subscriber } = fakeSubscriber();
     const subscription = await createSaleEventsSubscription(subscriber, options());

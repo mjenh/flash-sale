@@ -52,4 +52,10 @@ describe("createStockStore", () => {
     const stock = createStockStore(client, opts);
     await expect(stock.getRemaining()).rejects.toBeInstanceOf(RedisUnavailableError);
   });
+
+  it("fails closed on a non-numeric value (NaN would read as sold_out)", async () => {
+    const client = fakeClient(new Map([["stock:remaining", "not-a-number"]]));
+    const stock = createStockStore(client, opts);
+    await expect(stock.getRemaining()).rejects.toBeInstanceOf(RedisUnavailableError);
+  });
 });

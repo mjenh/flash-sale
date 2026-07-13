@@ -3,8 +3,8 @@
 import { bootstrap } from "./bootstrap.ts";
 
 bootstrap()
-  .then(({ app, config, logger }) => {
-    app.listen(config.port, () => {
+  .then(({ app, config, logger, teardown }) => {
+    const server = app.listen(config.port, () => {
       logger.info(
         {
           port: config.port,
@@ -15,6 +15,28 @@ bootstrap()
         "flash-sale api listening",
       );
     });
+
+    // Node is container PID 1, so default signal dispositions don't apply —
+    // handle SIGTERM/SIGINT explicitly to run the ordered teardown (AD-5).
+    let shuttingDown = false;
+    const shutdown = (signal: NodeJS.Signals): void => {
+      if (shuttingDown) {
+        return;
+      }
+      shuttingDown = true;
+      logger.info({ signal }, "shutting down; draining connections then tearing down");
+      server.close();
+      teardown()
+        .then(() => {
+          process.exit(0);
+        })
+        .catch((err: unknown) => {
+          logger.error({ err }, "teardown failed during shutdown");
+          process.exit(1);
+        });
+    };
+    process.on("SIGTERM", () => shutdown("SIGTERM"));
+    process.on("SIGINT", () => shutdown("SIGINT"));
   })
   .catch((err: unknown) => {
     console.error("[boot] failed:", err instanceof Error ? err.message : err);

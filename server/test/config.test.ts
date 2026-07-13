@@ -55,8 +55,16 @@ describe("loadConfig", () => {
     ["empty SALE_START_TIME", { ...valid, SALE_START_TIME: "  " }],
     ["invalid SALE_START_TIME", { ...valid, SALE_START_TIME: "not-a-date" }],
     ["invalid SALE_END_TIME", { ...valid, SALE_END_TIME: "2026-13-99T99:99:99Z" }],
+    ["offset-less SALE_START_TIME", { ...valid, SALE_START_TIME: "2026-07-10T09:00:00" }],
+    ["offset-less SALE_END_TIME", { ...valid, SALE_END_TIME: "2026-07-10T10:00:00" }],
   ])("fails fast on %s", (_name, env) => {
     expect(() => loadConfig(env)).toThrowError(ConfigError);
+  });
+
+  it("rejects an offset-less sale time with a clear timezone message (never parsed as host-local)", () => {
+    expect(() => loadConfig({ ...valid, SALE_START_TIME: "2026-07-10T09:00:00" })).toThrowError(
+      /explicit timezone offset/,
+    );
   });
 
   it("rejects SALE_END_TIME equal to SALE_START_TIME", () => {
@@ -71,8 +79,8 @@ describe("loadConfig", () => {
     ).toThrowError(/strictly after/);
   });
 
-  it.each([["0"], ["-5"], ["1.5"], ["abc"]])(
-    "rejects STOCK_QUANTITY %s (must be a positive integer)",
+  it.each([["0"], ["-5"], ["1.5"], ["abc"], ["1e20"]])(
+    "rejects STOCK_QUANTITY %s (must be a positive SAFE integer)",
     (value) => {
       expect(() => loadConfig({ ...valid, STOCK_QUANTITY: value })).toThrowError(ConfigError);
     },

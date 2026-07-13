@@ -29,6 +29,13 @@ function requiredIsoMs(env: Env, key: string): number {
   if (raw === undefined || raw.trim() === "") {
     throw new ConfigError(`${key} is required (ISO 8601 datetime, e.g. 2026-07-10T09:00:00Z)`);
   }
+  // Require an explicit UTC offset — an offset-less value is parsed as
+  // host-local time, contradicting the "normalized to UTC" contract (AD-6).
+  if (!/(Z|[+-]\d{2}:?\d{2})$/i.test(raw.trim())) {
+    throw new ConfigError(
+      `${key} must include an explicit timezone offset (Z or ±HH:MM), got: "${raw}"`,
+    );
+  }
   const ms = Date.parse(raw);
   if (Number.isNaN(ms)) {
     throw new ConfigError(`${key} is not a valid ISO 8601 datetime: "${raw}"`);
@@ -42,7 +49,7 @@ function positiveInt(env: Env, key: string, fallback: number): number {
     return fallback;
   }
   const n = Number(raw);
-  if (!Number.isInteger(n) || n <= 0) {
+  if (!Number.isSafeInteger(n) || n <= 0) {
     throw new ConfigError(`${key} must be a positive integer, got: "${raw}"`);
   }
   return n;

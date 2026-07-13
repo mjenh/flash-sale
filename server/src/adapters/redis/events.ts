@@ -96,20 +96,29 @@ export async function createSaleEventsSubscription(
     clearTimeout(timer);
   }
 
-  await subscriber.subscribe(SALE_EVENTS_CHANNEL, (message: string) => {
-    onEvent(message);
-  });
+  // A subscribe failure after a successful connect must not leak the duplicated
+  // connection: destroy it and surface a wrapped RedisUnavailableError (AD-5).
+  try {
+    await subscriber.subscribe(SALE_EVENTS_CHANNEL, (message: string) => {
+      onEvent(message);
+    });
+  } catch (err) {
+    subscriber.destroy();
+    throw err instanceof RedisUnavailableError ? err : new RedisUnavailableError(err);
+  }
 
   return {
     async close(): Promise<void> {
+      // Bound teardown with the same timeout discipline as connect — a hung
+      // unsubscribe/close must never block shutdown; on timeout, destroy().
       try {
-        await subscriber.unsubscribe(SALE_EVENTS_CHANNEL);
+        await bounded(Promise.resolve(subscriber.unsubscribe(SALE_EVENTS_CHANNEL)), connectTimeoutMs);
       } catch {
         // Best-effort: a dead connection has nothing to unsubscribe.
       }
       try {
         if (subscriber.isOpen) {
-          await subscriber.close();
+          await bounded(Promise.resolve(subscriber.close()), connectTimeoutMs);
         } else {
           subscriber.destroy();
         }
