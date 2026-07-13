@@ -58,4 +58,10 @@ describe("createStockStore", () => {
     const stock = createStockStore(client, opts);
     await expect(stock.getRemaining()).rejects.toBeInstanceOf(RedisUnavailableError);
   });
+
+  it("fails closed on a partly-numeric value (parseInt would truncate '12x' -> 12)", async () => {
+    const client = fakeClient(new Map([["stock:remaining", "12x"]]));
+    const stock = createStockStore(client, opts);
+    await expect(stock.getRemaining()).rejects.toBeInstanceOf(RedisUnavailableError);
+  });
 });

@@ -5,7 +5,7 @@
 // zero I/O. Pins the AD-9 mechanics exactly: leading-edge + trailing
 // coalescing (<= 1 emit / 250 ms), terminal supersession (immediate, final
 // frame), single serialized writer composing ONCE per emit via getStatus(),
-// the 25 s heartbeat comment, fail-closed-on-compose-failure (AD-5), and
+// the 25 s named heartbeat event (AI-S4-07), fail-closed-on-compose-failure (AD-5), and
 // future-boundaries-only timers with chunked re-arm below Node's setTimeout
 // ceiling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -165,13 +165,13 @@ describe("sale-events broadcaster — AC 3 snapshot + AC 4 coalescing/serializat
     expect(sink.written).toHaveLength(2);
   });
 
-  it("writes the heartbeat COMMENT frame every 25 s while a sink is registered; the interval stops with the last sink", async () => {
+  it("writes the named heartbeat EVENT frame every 25 s while a sink is registered; the interval stops with the last sink", async () => {
     const { broadcaster } = build();
     const sink = makeSink();
     const unregister = broadcaster.register(sink);
 
     await vi.advanceTimersByTimeAsync(HEARTBEAT_MS);
-    expect(sink.written).toEqual([": heartbeat\n\n"]); // comment frame, never an event
+    expect(sink.written).toEqual(["event: heartbeat\ndata: {}\n\n"]); // named event, observable by the client watchdog (AI-S4-07)
     await vi.advanceTimersByTimeAsync(HEARTBEAT_MS);
     expect(sink.written).toHaveLength(2);
 
@@ -193,7 +193,7 @@ describe("sale-events broadcaster — AC 3 snapshot + AC 4 coalescing/serializat
 
     await vi.advanceTimersByTimeAsync(HEARTBEAT_MS);
     const soldOutFrame = frameFor(status.body());
-    expect(sink.written).toContain(": heartbeat\n\n");
+    expect(sink.written).toContain("event: heartbeat\ndata: {}\n\n");
     expect(sink.written).toContain(soldOutFrame); // recovered terminal frame
 
     // Idempotent: subsequent heartbeats do not re-broadcast it.
@@ -207,8 +207,8 @@ describe("sale-events broadcaster — AC 3 snapshot + AC 4 coalescing/serializat
     broadcaster.register(sink);
 
     await vi.advanceTimersByTimeAsync(HEARTBEAT_MS * 2);
-    // Only heartbeat comments — never a status frame while active.
-    expect(sink.written.every((c) => c === ": heartbeat\n\n")).toBe(true);
+    // Only heartbeat events — never a status frame while active.
+    expect(sink.written.every((c) => c === "event: heartbeat\ndata: {}\n\n")).toBe(true);
     expect(status.getStatus).toHaveBeenCalled(); // the safety net did probe
   });
 

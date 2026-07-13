@@ -156,7 +156,7 @@ describe("POST /api/order (booted via bootstrap())", () => {
         const req = request(app).post("/api/order");
         const res = body === undefined ? await req : await req.send(body);
         expect(res.status).toBe(400);
-        expect(res.body).toEqual({ success: false, error: "Email or name is required." });
+        expect(res.body).toEqual({ success: false, error: "Email is required." });
         expect(fake.calls.evalSha + fake.calls.eval + fake.calls.sIsMember).toBe(baseline);
       });
     }

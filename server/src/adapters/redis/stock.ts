@@ -70,10 +70,16 @@ export function createStockStore(
         // Fail closed; the next boot's AD-4 cold rebuild restores truth.
         throw new RedisUnavailableError(new Error(`${STOCK_KEY} key is missing`));
       }
+      // Strict integer only. `Number.parseInt("12x", 10)` returns 12 — trailing
+      // garbage slips a plain parseInt + isFinite guard and fabricates a count.
+      // Require the whole (trimmed) value to be an integer before trusting it.
+      if (!/^-?\d+$/.test(raw.trim())) {
+        // A non-integer value would read as NaN or a truncated number ->
+        // fabricated truth. Fail closed instead — mirrors the order-store guard.
+        throw new RedisUnavailableError(new Error(`${STOCK_KEY} is not an integer: "${raw}"`));
+      }
       const remaining = Number.parseInt(raw, 10);
       if (!Number.isFinite(remaining)) {
-        // A non-numeric value would read as NaN -> sold_out (fabricated truth).
-        // Fail closed instead — mirrors the order-store reply guard.
         throw new RedisUnavailableError(new Error(`${STOCK_KEY} is not an integer: "${raw}"`));
       }
       return remaining;

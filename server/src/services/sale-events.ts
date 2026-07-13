@@ -4,8 +4,10 @@
 // composing every frame ONCE via the sale-status service (the SOLE owner of
 // the status state machine — a fresh Redis read at emit time, never
 // decision-time state), snapshot-on-connect (healing missed events — no
-// replay), the 25 s heartbeat comment, and the mid-stream form of fail-closed
-// (AD-5: if truth cannot be read, streams close rather than serve staleness).
+// replay), the 25 s heartbeat (a NAMED `heartbeat` event, not a bare comment,
+// so the client's silence watchdog can observe it — AI-S4-07), and the
+// mid-stream form of fail-closed (AD-5: if truth cannot be read, streams close
+// rather than serve staleness).
 //
 // Also owns the AD-9 window-boundary timers: boot arms sale.started /
 // sale.ended for FUTURE boundaries only (AD-6: the injected clock decides);
@@ -30,7 +32,10 @@ export const HEARTBEAT_MS = 25_000;
 /** Node's setTimeout ceiling; longer boundary delays re-arm in chunks. */
 export const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
-const HEARTBEAT_FRAME = ": heartbeat\n\n";
+// A NAMED event (not a bare `:` comment): EventSource does not surface comments
+// to JS, so a comment heartbeat is invisible to the client's silence watchdog
+// (AI-S4-07). A named event needs a data line to dispatch, hence `data: {}`.
+const HEARTBEAT_FRAME = "event: heartbeat\ndata: {}\n\n";
 
 /** One `status` event carrying the FR-1 body — the only frame type ever sent. */
 function formatStatusFrame(body: unknown): string {
