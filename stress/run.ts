@@ -12,7 +12,7 @@
 // Every phase prints as it starts and hard-fails the run on error. The combined
 // exit code is the pass/fail signal: 0 only when every phase passed.
 import { spawnSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve as resolvePath } from "node:path";
 import { loadStressConfig, type StressConfig } from "./config.ts";
@@ -31,6 +31,19 @@ interface Phase {
 }
 
 const phases: Phase[] = [];
+
+/** k6's corroborating counters, folded in from .out/k6-summary.json for the
+ *  finish() report (AI-S3-13). Undefined until the burst has run. */
+let k6Summary: string | undefined;
+
+/** A Node fetch() connection refusal surfaces as a TypeError whose `cause`
+ *  carries `code: "ECONNREFUSED"`. A TimeoutError/AbortError (a wedged but
+ *  still-bound API) is NOT a refusal — only a genuine refusal proves nothing is
+ *  listening (AI-S3-03). */
+function isConnectionRefused(err: unknown): boolean {
+  const cause = (err as { cause?: { code?: unknown } } | null)?.cause;
+  return typeof cause === "object" && cause !== null && (cause as { code?: unknown }).code === "ECONNREFUSED";
+}
 
 function announce(name: string): void {
   console.log(`\n=== ${name} ===`);
@@ -73,8 +86,13 @@ async function waitForApiStopped(config: StressConfig, timeoutMs = 30_000): Prom
   while (Date.now() < deadline) {
     try {
       await fetch(`${config.apiUrl}/api/sale/status`, { signal: AbortSignal.timeout(1000) });
-    } catch {
-      return true; // connection refused — nothing is listening
+    } catch (err) {
+      // ONLY a genuine connection refusal proves nothing is listening. A
+      // timeout/abort means the API is wedged-but-alive — keep waiting, never
+      // declare it stopped and let the reset race the Lua script (AI-S3-03).
+      if (isConnectionRefused(err)) {
+        return true;
+      }
     }
     await new Promise((r) => setTimeout(r, 500));
   }
@@ -135,6 +153,9 @@ function runK6(config: StressConfig): K6Result {
     "run",
     "--rm",
     "-i",
+    // grafana/k6 runs as a non-root user; run it as the host UID so it can
+    // write .out/ on the host-owned bind mount (AI-S3-13).
+    ...(process.getuid ? ["--user", String(process.getuid())] : []),
     "--network",
     "host",
     "--add-host=host.docker.internal:host-gateway",
@@ -174,6 +195,20 @@ function classify(status: number | null, runner: string): K6Result {
   };
 }
 
+/** The burst writes .out/k6-summary.json (handleSummary) — fold its
+ *  corroborating counters (201/409/200 and any 5xx) into the harness report so
+ *  the finish() output prints the shape the README promises (AI-S3-13). */
+function readK6Summary(): string | undefined {
+  try {
+    const raw = readFileSync(resolvePath(HERE, ".out", "k6-summary.json"), "utf8");
+    const data = JSON.parse(raw) as { metrics?: Record<string, { values?: { count?: number } }> };
+    const count = (metric: string): number => data.metrics?.[metric]?.values?.count ?? 0;
+    return `k6 counters — 201=${count("order_created_201")} · 409=${count("order_rejected_409")} · 200=${count("order_already_200")} · 5xx=${count("order_5xx")}`;
+  } catch {
+    return undefined;
+  }
+}
+
 /** SM-3 / NFR-13: attempts outside the window are ALL rejected with
  *  { success: false }. The window is boot-parsed config (AD-6), so the only
  *  honest way to prove this against the deployed stack is to restart the API
@@ -184,39 +219,74 @@ async function windowPhase(config: StressConfig): Promise<boolean> {
     SALE_START_TIME: "2020-01-01T00:00:00Z",
     SALE_END_TIME: "2020-01-02T00:00:00Z",
   };
-  if (compose(["up", "-d", "api"], closed) !== 0) {
-    return record("window phase (SM-3)", false, "could not restart the api with a closed window");
+
+  // The restore is wrapped in a finally so it ALWAYS runs — even on an early
+  // return or a throw. An interrupted window phase must never leave the API
+  // pinned to the 2020 closed window while the run can still print PASS
+  // (AI-S3-08). The restore is its own recorded pass/fail phase.
+  try {
+    if (compose(["up", "-d", "--wait", "api"], closed) !== 0) {
+      return record("window phase (SM-3)", false, "could not restart the api with a closed window");
+    }
+    if (!(await waitForApi(config))) {
+      return record("window phase (SM-3)", false, "api never became ready with the closed window");
+    }
+
+    const failures: string[] = [];
+    for (let i = 0; i < 20; i += 1) {
+      const res = await fetch(`${config.apiUrl}/api/order`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: `window-${Date.now()}-${i}@example.com` }),
+      });
+      let body: { success?: unknown; error?: unknown } = {};
+      try {
+        body = (await res.json()) as { success?: unknown; error?: unknown };
+      } catch {
+        // A non-JSON body is itself a breach of the closed-window contract —
+        // fall through and let the assertion below record the failure.
+      }
+      if (res.status !== 409 || body.success !== false || body.error !== "Sale is not active.") {
+        failures.push(`attempt ${i}: HTTP ${res.status} ${JSON.stringify(body)}`);
+      }
+    }
+
+    if (failures.length > 0) {
+      console.error(failures.join("\n"));
+      return record(
+        "window phase (SM-3)",
+        false,
+        `${failures.length}/20 out-of-window attempts were not rejected with 409 { success: false, error: "Sale is not active." }`,
+      );
+    }
+    console.log('20/20 out-of-window attempts rejected: 409 { success: false, error: "Sale is not active." }');
+    return record("window phase (SM-3)", true);
+  } finally {
+    await restoreOpenWindow(config);
+  }
+}
+
+/** Restore the compose-default (active) window so the stack is left usable, and
+ *  PROVE it landed there before the harness can declare success (AI-S3-08). */
+async function restoreOpenWindow(config: StressConfig): Promise<boolean> {
+  if (compose(["up", "-d", "--wait", "api"]) !== 0) {
+    return record("window restore", false, "docker compose could not restart the api on the default (open) window");
   }
   if (!(await waitForApi(config))) {
-    return record("window phase (SM-3)", false, "api never became ready with the closed window");
+    return record("window restore", false, "the api never became ready after restoring the default window");
   }
-
-  const failures: string[] = [];
-  for (let i = 0; i < 20; i += 1) {
-    const res = await fetch(`${config.apiUrl}/api/order`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: `window-${Date.now()}-${i}@example.com` }),
-    });
-    const body = (await res.json()) as { success?: unknown; error?: unknown };
-    if (res.status !== 409 || body.success !== false || body.error !== "Sale is not active.") {
-      failures.push(`attempt ${i}: HTTP ${res.status} ${JSON.stringify(body)}`);
+  // Within [start, end) the status is "active" or "sold_out"; "upcoming" or
+  // "ended" would mean the 2020 closed window is still in force.
+  try {
+    const res = await fetch(`${config.apiUrl}/api/sale/status`, { signal: AbortSignal.timeout(2000) });
+    const body = (await res.json()) as { status?: unknown };
+    if (body.status !== "active" && body.status !== "sold_out") {
+      return record("window restore", false, `the api is not back on the open window (status=${JSON.stringify(body.status)})`);
     }
+  } catch (err) {
+    return record("window restore", false, `could not confirm the restored window: ${err instanceof Error ? err.message : String(err)}`);
   }
-
-  // Restore the compose-default (active) window so the stack is left usable.
-  compose(["up", "-d", "api"]);
-
-  if (failures.length > 0) {
-    console.error(failures.join("\n"));
-    return record(
-      "window phase (SM-3)",
-      false,
-      `${failures.length}/20 out-of-window attempts were not rejected with 409 { success: false, error: "Sale is not active." }`,
-    );
-  }
-  console.log('20/20 out-of-window attempts rejected: 409 { success: false, error: "Sale is not active." }');
-  return record("window phase (SM-3)", true);
+  return record("window restore", true);
 }
 
 async function main(): Promise<void> {
@@ -264,6 +334,10 @@ async function main(): Promise<void> {
   announce("4/6 k6 burst");
   const k6 = runK6(config);
   console.log(`runner: ${k6.runner}`);
+  k6Summary = readK6Summary();
+  if (k6Summary !== undefined) {
+    console.log(k6Summary);
+  }
   record(k6.runnerFailed ? "k6 burst (RUNNER FAILED — no burst happened)" : "k6 thresholds", k6.ok, k6.detail);
 
   // A burst that never ran tells us nothing about fairness. Running the
@@ -297,8 +371,20 @@ function finish(): void {
   for (const p of phases) {
     console.log(`${p.ok ? "PASS" : "FAIL"}  ${p.name}${p.detail === undefined ? "" : `\n      ${p.detail}`}`);
   }
+  if (k6Summary !== undefined) {
+    console.log(k6Summary);
+  }
   console.log(failed.length === 0 ? "\nPASS — the fairness claim holds.\n" : `\nFAIL — ${failed.length} phase(s) failed.\n`);
   process.exit(failed.length === 0 ? 0 : 1);
 }
 
-await main();
+// A bare `await main()` would let a StressConfigError, an unhandled rejection,
+// or any throw before finish() escape as a raw stack trace instead of the
+// pass/fail summary (AI-S3-09). Record the abort as a failed phase and route
+// through finish() so the summary and the non-zero exit code are still honored.
+main().catch((err) => {
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(`\nstress harness aborted before it could finish: ${message}`);
+  record("harness", false, message);
+  finish();
+});

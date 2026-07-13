@@ -4,10 +4,17 @@
 // is the sole writer of `stock:remaining` and `orders:users`, and a concurrent
 // SET here could hand a buyer a 201 against stock that no longer exists.
 // The guard below treats ANY answer from the API — including a 503 — as
-// "still serving". Only a refused connection is the green light.
+// "still serving", and also treats a probe that TIMES OUT (a wedged-but-alive
+// API) as still serving. Only a genuine connection refusal (ECONNREFUSED) is
+// the green light (AI-S3-03).
 //
-// Wipes: SET stock:remaining = STOCK_QUANTITY, DEL orders:users,
-//        deleteMany({}) on orders, orderlines, users.
+// Wipes, in crash-safe order (the sentinel is written LAST, AI-S3-07):
+//   DEL orders:users, deleteMany({}) on orders, orderlines, users,
+//   then SET stock:remaining = STOCK_QUANTITY.
+// stock:remaining IS the warm/cold sentinel (server/src/adapters/redis/
+// reconcile.ts writes DEL → SADD → SET) — writing it last means a crash
+// mid-reset leaves no sentinel beside a stale orders:users set, so the API's
+// boot rebuild re-runs the cold path.
 // Never touches the seed collections (products, sales, saleproducts,
 // inventories) — the API re-upserts them at boot, and deleting `sales` would
 // mint a fresh saleId and silently orphan the verifier's join.
@@ -31,8 +38,10 @@ export const ORDERS_KEY = "orders:users";
 /** Narrow port surface — every dependency is a one-line async op, so the
  *  sequence (and its guard) is unit-testable without Redis, Mongo or Docker. */
 export interface ResetPorts {
-  /** Resolves with a short description when the API ANSWERS (any status);
-   *  resolves null when the connection is refused / times out. */
+  /** Resolves with a short description when the API ANSWERS (any status), OR
+   *  when the probe fails for any reason OTHER than a clean connection refusal
+   *  (a timeout means wedged-but-alive, which is NOT safe to reset). Resolves
+   *  null ONLY on a genuine ECONNREFUSED. */
   probeApi(): Promise<string | null>;
   setStock(value: number): Promise<void>;
   deleteOrderUsers(): Promise<void>;
@@ -51,25 +60,43 @@ export async function resetAll(ports: ResetPorts, stockQuantity: number): Promis
     throw new ApiStillServingError(serving);
   }
 
-  await ports.setStock(stockQuantity);
+  // Wipe FIRST, write the sentinel LAST (AI-S3-07). stock:remaining is the
+  // warm/cold sentinel — a crash between the wipe and this final SET must never
+  // leave a present sentinel beside a stale orders:users set.
   await ports.deleteOrderUsers();
   for (const name of WIPED_COLLECTIONS) {
     await ports.deleteCollection(name);
   }
+  await ports.setStock(stockQuantity);
 
   return { stockQuantity, cleared: [ORDERS_KEY, ...WIPED_COLLECTIONS] };
 }
 
-/** GET /api/sale/status with a short timeout. Any HTTP answer means serving. */
+/** A Node fetch() connection refusal surfaces as a TypeError whose `cause`
+ *  carries `code: "ECONNREFUSED"`. A TimeoutError/AbortError (the wedged but
+ *  still-bound API) is NOT a refusal. */
+export function isConnectionRefused(err: unknown): boolean {
+  const cause = (err as { cause?: { code?: unknown } } | null)?.cause;
+  return typeof cause === "object" && cause !== null && (cause as { code?: unknown }).code === "ECONNREFUSED";
+}
+
+/** GET /api/sale/status with a short timeout. Any HTTP answer means serving —
+ *  and so does a TIMEOUT (a wedged-but-alive API). Only a genuine ECONNREFUSED
+ *  is the green light (AI-S3-03). */
 export async function probeApiUrl(apiUrl: string, timeoutMs = 2000): Promise<string | null> {
   try {
     const res = await fetch(`${apiUrl}/api/sale/status`, {
       signal: AbortSignal.timeout(timeoutMs),
     });
     return `HTTP ${res.status} from ${apiUrl}/api/sale/status`;
-  } catch {
-    // Refused / DNS failure / timeout — nothing is listening. Safe to reset.
-    return null;
+  } catch (err) {
+    if (isConnectionRefused(err)) {
+      return null; // genuinely refused — nothing is listening. Safe to reset.
+    }
+    // Timeout / abort / DNS / anything else: the API may still be alive but
+    // slow. NOT safe to reset — treat it as still serving.
+    const detail = err instanceof Error ? err.name || err.message : String(err);
+    return `no clean refusal from ${apiUrl}/api/sale/status (${detail})`;
   }
 }
 

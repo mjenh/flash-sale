@@ -24,6 +24,7 @@ const created = new Counter("order_created_201");
 const rejected = new Counter("order_rejected_409");
 const already = new Counter("order_already_200");
 const unexpectedStatus = new Rate("unexpected_status");
+const fivexx = new Counter("order_5xx");
 
 export const options = {
   scenarios: {
@@ -40,12 +41,15 @@ export const options = {
     ...(RETRY
       ? {
           // FR-3: a repeated attempt from an order holder is answered 200,
-          // never a duplicate order. Starts after the burst has drained.
+          // never a duplicate order. Runs in its OWN email namespace (see
+          // retry()), so it can never perturb primary's strict {201, 409}
+          // outcome — the old shared range + fixed startTime raced primary and
+          // could draw the 201 first, forcing primary into a 200 and failing a
+          // correct system (AI-S3-10).
           retry: {
             executor: "shared-iterations",
             vus: 10,
             iterations: 50,
-            startTime: "30s",
             maxDuration: "1m",
             exec: "retry",
           },
@@ -54,7 +58,10 @@ export const options = {
   },
   thresholds: {
     // Zero 5xx, ever. Fail closed is a promise about correctness, not an excuse.
-    "http_req_failed{expected_response:true}": ["rate==0"],
+    // Untagged on purpose: a 5xx is tagged expected_response:false and would be
+    // EXCLUDED from an {expected_response:true} sub-metric, making that
+    // threshold vacuous (AI-S3-02).
+    http_req_failed: ["rate==0"],
     unexpected_status: ["rate==0"],
   },
   // 4xx are EXPECTED here (409 is the fair loser's answer) — without this,
@@ -73,6 +80,7 @@ function score(res, allowed) {
   if (res.status === 201) created.add(1);
   else if (res.status === 409) rejected.add(1);
   else if (res.status === 200) already.add(1);
+  else if (res.status >= 500) fivexx.add(1);
   unexpectedStatus.add(allowed.indexOf(res.status) === -1);
 }
 
@@ -89,17 +97,21 @@ export function primary() {
 }
 
 export function retry() {
-  // Re-attempt an address the burst already used. Whether that address won or
-  // lost, the honest answers are 200 (already ordered) or 409 (never ordered,
-  // sold out) — never a second 201 and never a 5xx.
-  const res = post(emailForIteration(exec.scenario.iterationInTest));
-  score(res, [200, 201, 409]);
+  // A DEDICATED address space (never primary's range), so this scenario can
+  // never race primary into an unexpected 200 and fail a correct run
+  // (AI-S3-10). Each iteration proves FR-3 end to end against its own holder.
+  const email = `retry-${RUN_TAG}-${exec.scenario.iterationInTest}@example.com`;
+  // Prime: the holder either wins a unit (201) or the sale is sold out (409).
+  score(post(email), [201, 409]);
+  // The SAME holder re-attempts. Never a second 201, never a 5xx — 200 if they
+  // already hold an order, 409 if the sale sold out before they got a unit.
+  score(post(email), [200, 409]);
 }
 
 export function handleSummary(data) {
   return {
     ".out/k6-summary.json": JSON.stringify(data, null, 2),
-    stdout: `\nk6: 201=${count(data, "order_created_201")} · 409=${count(data, "order_rejected_409")} · 200=${count(data, "order_already_200")}\n`,
+    stdout: `\nk6: 201=${count(data, "order_created_201")} · 409=${count(data, "order_rejected_409")} · 200=${count(data, "order_already_200")} · 5xx=${count(data, "order_5xx")}\n`,
   };
 }
 

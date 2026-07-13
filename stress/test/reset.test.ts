@@ -47,12 +47,15 @@ describe("resetAll", () => {
 
     const result = await resetAll(ports, 100);
 
+    // Wipe FIRST, sentinel LAST (AI-S3-07): stock:remaining is written only
+    // after every wipe, so a crash mid-reset leaves no sentinel beside a stale
+    // orders:users set.
     expect(writes).toEqual([
-      "SET stock:remaining 100",
       "DEL orders:users",
       "deleteMany orders",
       "deleteMany orderlines",
       "deleteMany users",
+      "SET stock:remaining 100",
     ]);
     expect(result).toEqual({
       stockQuantity: 100,
@@ -76,6 +79,7 @@ describe("resetAll", () => {
 
     await resetAll(ports, 7);
 
-    expect(writes[0]).toBe("SET stock:remaining 7");
+    // The sentinel is the LAST write (AI-S3-07), not the first.
+    expect(writes.at(-1)).toBe("SET stock:remaining 7");
   });
 });

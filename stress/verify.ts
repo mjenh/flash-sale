@@ -14,7 +14,9 @@
 // attempts against stock 100 fails exactly as loudly as 101 would.
 //
 // The Mongo write is async by design (AD-3), so the count is polled until it is
-// stable across two 1 s samples. A fixed sleep would fail a correct system.
+// stable across two 1 s samples on a NON-ZERO plateau (AI-S3-14: a 0 == 0
+// before the drain begins is not a settled count). A fixed sleep would fail a
+// correct system.
 import { createClient } from "redis";
 import mongoose from "mongoose";
 import { loadStressConfig, SALE_SLUG, type StressConfig } from "./config.ts";
@@ -111,17 +113,25 @@ export interface SamplePorts {
   countOrders(): Promise<number>;
 }
 
-/** AD-3 drain: poll until two consecutive 1 s samples agree. Bounded — a count
- *  that never settles is a failure with that exact message, not a hang. */
+/** AD-3 drain: poll until two consecutive 1 s samples agree on a NON-ZERO,
+ *  settled count. Bounded — a count that never settles is a failure with that
+ *  exact message, not a hang.
+ *
+ *  The non-zero + minimum-sample floor (AI-S3-14) exists because a naive
+ *  "two consecutive samples agree" settles on the 0 == 0 that precedes the very
+ *  first audit write — a plateau that never started — and reports a false
+ *  UNDER-ACCEPTED against a database the drain has not yet reached. A correct
+ *  run always confirms at least one order, so a genuine non-zero plateau is the
+ *  only honest settle. */
 export async function pollUntilStable(
   ports: SamplePorts,
-  { intervalMs = 1000, maxSamples = 30, sleep = defaultSleep }: PollOptions = {},
+  { intervalMs = 1000, maxSamples = 30, minSamples = 3, sleep = defaultSleep }: PollOptions = {},
 ): Promise<number> {
   let previous = await ports.countOrders();
   for (let i = 1; i < maxSamples; i += 1) {
     await sleep(intervalMs);
     const current = await ports.countOrders();
-    if (current === previous) {
+    if (current === previous && current > 0 && i >= minSamples) {
       return current;
     }
     previous = current;
@@ -134,6 +144,9 @@ export async function pollUntilStable(
 export interface PollOptions {
   intervalMs?: number;
   maxSamples?: number;
+  /** Minimum samples before a plateau may settle — guards against settling on a
+   *  pre-drain 0 == 0 (AI-S3-14). */
+  minSamples?: number;
   sleep?: (ms: number) => Promise<void>;
 }
 

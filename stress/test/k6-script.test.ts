@@ -32,7 +32,10 @@ describe("k6-order.js", () => {
   });
 
   it("fails the run on any 5xx and on any status outside the allowed set", () => {
-    expect(source).toContain('"http_req_failed{expected_response:true}": ["rate==0"]');
+    // Untagged http_req_failed — a 5xx is tagged expected_response:false and
+    // would be excluded from an {expected_response:true} sub-metric, making that
+    // threshold vacuous (AI-S3-02).
+    expect(source).toContain('http_req_failed: ["rate==0"]');
     expect(source).toContain('unexpected_status: ["rate==0"]');
     // 409 is an honest answer, not an error — without this, every fair rejection
     // would count as a failed request and the thresholds would be meaningless.

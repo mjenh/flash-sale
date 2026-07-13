@@ -1,6 +1,13 @@
 services:
   api:
     build: .
+    # The app fail-fasts (exits non-zero) on any boot hiccup — a Redis blip after
+    # healthchecks pass, a slow Mongo election — so without a restarter compose
+    # would leave the one-command stack permanently dead (AI-S1-08). `init: true`
+    # reaps zombies and forwards SIGTERM to PID 1 so the SIGTERM/SIGINT teardown
+    # handler actually runs on `docker compose stop`/`down` (AI-S1-06).
+    restart: unless-stopped
+    init: true
     environment:
       PORT: "3000"
       REDIS_URL: redis://redis:6379
@@ -31,9 +38,12 @@ services:
     command: ["redis-server", "--appendonly", "yes"]
     # Published for the documented dev loop (`npm run dev` against
     # redis://localhost:6379) and for the stress harness's reset/verify steps,
-    # which run on the host and speak to the stores directly.
+    # which run on the host and speak to the stores directly. Bound to loopback
+    # ONLY (AI-S3-11): a "6379:6379" publish reaches 0.0.0.0 and, on Linux,
+    # punches through the host firewall — an unauthenticated Redis on a routable
+    # interface is a textbook RCE vector. The harness only ever needs localhost.
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -44,8 +54,9 @@ services:
 
   mongo:
     image: mongo:8
+    # Loopback only (AI-S3-11) — unauthenticated Mongo must not be routable.
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     volumes:
       - mongo-data:/data/db
     healthcheck:

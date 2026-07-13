@@ -102,6 +102,19 @@ describe("pollUntilStable", () => {
     expect(i).toBe(4);
   });
 
+  it("never settles on a leading 0,0 plateau — the audit drain has not begun (AI-S3-14)", async () => {
+    const counts = [0, 0, 0, 40, 100, 100];
+    let i = 0;
+
+    const stable = await pollUntilStable(
+      { countOrders: async () => counts[i++] ?? 100 },
+      { intervalMs: 0, sleep: async () => {} },
+    );
+
+    // The pre-drain 0 == 0 is NOT a settle; it converges on the real plateau.
+    expect(stable).toBe(100);
+  });
+
   it("fails — rather than hangs — when the count never settles", async () => {
     let n = 0;
 
