@@ -5,7 +5,6 @@ import { App, PROCESSING_LINE, UPCOMING_BUTTON_REASON } from "./App.tsx";
 import { HOUSE_RULES } from "./components/MarqueeBand.tsx";
 import { ENDED_FRAME, SOLD_OUT_FRAME } from "./components/SaleStatusZone.tsx";
 import { SUCCESS_FRAME } from "./components/VerdictPanel.tsx";
-import { EMAIL_KEY } from "./hooks/useRememberedEmail.ts";
 import type { SaleState } from "./api/sale.ts";
 import { FakeEventSource, installFakeEventSource } from "./test/fake-event-source.ts";
 
@@ -242,7 +241,7 @@ describe("UJ-1 — the winner", () => {
 });
 
 describe("UJ-4 — the fair loser", () => {
-  it("gets the sympathetic frame, and never loses what he typed", async () => {
+  it("gets the sympathetic frame; the field resets once the attempt is answered", async () => {
     fetchSpy = router({ order: () => json(409, { success: false, error: "Item is sold out." }) });
     vi.stubGlobal("fetch", fetchSpy);
 
@@ -255,37 +254,26 @@ describe("UJ-4 — the fair loser", () => {
     });
     expect(screen.getByTestId("verdict-frame").textContent).toBe(SOLD_OUT_FRAME);
 
-    // The value is never cleared by a rejection.
-    expect(emailField()).toHaveValue("dev@example.com");
+    // The attempt is a completed action — the field resets (even on a rejection).
+    await waitFor(() => {
+      expect(emailField()).toHaveValue("");
+    });
   });
 });
 
-describe("UJ-2 — the doubter returns", () => {
-  it("checks the remembered email on load and shows the reassurance with no interaction", async () => {
-    localStorage.setItem(EMAIL_KEY, "tomas@example.com");
-    fetchSpy = router({
-      check: () => json(200, { success: true, ordered: true, email: "tomas@example.com" }),
-    });
-    vi.stubGlobal("fetch", fetchSpy);
+describe("the email field is transient — never remembered", () => {
+  it("starts empty on load, ignoring any stale persisted value (a refresh is a clean slate)", async () => {
+    // Even if a previous build had persisted an address, the field no longer
+    // reads it — a browser refresh always starts empty.
+    localStorage.setItem("flash-sale:email", "tomas@example.com");
 
     await paint("active", 12);
 
-    await waitFor(() => {
-      expect(screen.getByTestId("verdict-string").textContent).toBe(
-        "You have already ordered this item.",
-      );
-    });
-    expect(screen.getByTestId("verdict-frame").textContent).toBe(
-      "All set — your order from today is safe.",
-    );
-    expect(emailField()).toHaveValue("tomas@example.com");
-    expect(fetchSpy.mock.calls.some((c) => c[0] === "/api/order/tomas%40example.com")).toBe(true);
+    expect(emailField()).toHaveValue("");
   });
 
-  it("stays silent when the background check fails — no error verdict for a question no one asked", async () => {
-    localStorage.setItem(EMAIL_KEY, "tomas@example.com");
-    fetchSpy = router({ check: () => Promise.reject(new Error("down")) });
-    vi.stubGlobal("fetch", fetchSpy);
+  it("makes no order-status check on load (nothing is remembered to check)", async () => {
+    localStorage.setItem("flash-sale:email", "tomas@example.com");
 
     await paint("active", 12);
     await act(async () => {
@@ -293,7 +281,29 @@ describe("UJ-2 — the doubter returns", () => {
       await Promise.resolve();
     });
 
+    const checkedOnLoad = fetchSpy.mock.calls.some(
+      (c) => typeof c[0] === "string" && c[0].startsWith("/api/order/"),
+    );
+    expect(checkedOnLoad).toBe(false);
     expect(screen.queryByTestId("verdict-panel")).toBeNull();
+  });
+
+  it("resets the field after a completed attempt", async () => {
+    fetchSpy = router({ order: () => json(201, { message: "Order successful." }) });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await paint("active", 37);
+    fireEvent.change(emailField(), { target: { value: "priya@example.com" } });
+    expect(emailField()).toHaveValue("priya@example.com");
+
+    fireEvent.click(buyNow());
+    await waitFor(() => {
+      expect(screen.getByTestId("verdict-string")).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(emailField()).toHaveValue("");
+    });
   });
 });
 

@@ -5,7 +5,7 @@
 // field and a click on the button are literally the same submit path — and
 // Enter is inert while the button is disabled, for free, because browsers do
 // not submit a form through a disabled submit button.
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import "./App.css";
 import { MarqueeBand } from "./components/MarqueeBand.tsx";
 import { Masthead } from "./components/Masthead.tsx";
@@ -20,7 +20,7 @@ import {
 import { VerdictPanel } from "./components/VerdictPanel.tsx";
 import { useSaleStatus } from "./hooks/useSaleStatus.ts";
 import { useOrder } from "./hooks/useOrder.ts";
-import { useRememberedEmail } from "./hooks/useRememberedEmail.ts";
+import { useEmailField } from "./hooks/useEmailField.ts";
 import type { SaleStatusBody } from "./api/sale.ts";
 
 export const UPCOMING_BUTTON_REASON =
@@ -51,19 +51,22 @@ function buttonReason(body: SaleStatusBody | null): string | null {
 
 export function App() {
   const { body, channel, refetch } = useSaleStatus();
-  const [email, setEmail] = useRememberedEmail();
+  const [email, setEmail, resetEmail] = useEmailField();
   // FR-5: the status re-fetches after EVERY attempt — win, loss, or error.
-  const { phase, verdict, verdictSource, fieldError, submit, checkOnLoad, clearFieldError, clearVerdict } =
+  const { phase, verdict, verdictSource, fieldError, submit, clearFieldError, clearVerdict } =
     useOrder({
       onAttemptSettled: refetch,
     });
 
-  // UJ-2: relief in a single page-load. Silent if the check itself fails.
-  // Only the REMEMBERED email is checked — never one being typed right now.
-  const rememberedOnLoad = useRef(email);
+  // Reset the identifier field after each completed attempt: the verdict has
+  // answered it, so the next buyer (and the next refresh) starts from a clean,
+  // empty field. Only submit-born verdicts clear it — a field-level validation
+  // error leaves the value in place so it can be corrected.
   useEffect(() => {
-    checkOnLoad(rememberedOnLoad.current);
-  }, [checkOnLoad]);
+    if (verdict !== null && verdictSource === "submit") {
+      resetEmail();
+    }
+  }, [verdict, verdictSource, resetEmail]);
 
   const processing = phase === "processing";
   // The processing button is NOT `disabled`: disabling a focused control blurs
