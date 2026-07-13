@@ -107,11 +107,20 @@ Four endpoints; the surface is closed.
 | `GET /api/order/:email` | Membership read (idempotency / convenience). |
 | `GET /api/sale/events` | SSE stream of `status` frames. |
 
-The order route validates the email (trim; empty or greater than 256 characters is
-a `400`) before invoking the service, so a `400` never reaches Redis. It then maps
-the service outcome to the wire contract. The SSE route awaits the snapshot frame
-before writing headers, so a Redis-down snapshot yields a clean `503` rather than a
-half-open stream.
+The order route validates the email (trim; empty or greater than 256 characters
+is a `400` `"Email is required."`) and canonicalizes it (NFC-normalize + case-fold)
+for the fairness key before invoking the service, so a `400` never reaches Redis.
+It then maps the service outcome to the wire contract. The SSE route awaits the
+snapshot frame before writing headers, so a Redis-down snapshot yields a clean
+`503` rather than a half-open stream.
+
+Full response set (both order paths can return every documented code, not just
+the happy path):
+
+| Endpoint | Codes |
+| --- | --- |
+| `POST /api/order` | `201` created · `200` already ordered (AD-2, outranks window/stock) · `409` sold out / sale not active · `400` empty or > 256-char email · `503` Redis loss (AD-5) |
+| `GET /api/order/:email` | `200 { ordered: true｜false }` · `400` empty or > 256-char email · `503` Redis loss (AD-5) — the membership read is a live Redis read, so it fails closed too |
 
 ### 3.4 Services (`src/services/`)
 
@@ -135,7 +144,8 @@ half-open stream.
   composes each frame once through the status service (a fresh read at emit time);
   coalescing to at most one frame per 250 ms; terminal transitions (`sold_out`,
   `ended`) emitted immediately and guaranteed last; a snapshot on every reconnect
-  (no replay, no `Last-Event-ID`); a 25 s heartbeat comment; and mid-stream fail
+  (no replay, no `Last-Event-ID`); a 25 s named `heartbeat` event (observable by
+  the client watchdog); and mid-stream fail
   closed — if truth cannot be read, every stream is closed. It also arms
   `sale.started` / `sale.ended` timers for future boundaries only; elapsed
   boundaries arm nothing, since snapshot-on-connect heals them.
@@ -280,10 +290,13 @@ The system deliberately trades availability for correctness.
   rolled back, never able to change the HTTP outcome.
 - **Script cache lost.** `attempt()` falls back to `EVAL` and re-caches the SHA.
 
-Known gaps present in the code: no `SIGTERM`/`SIGINT` handling; no client-side
-heartbeat watchdog; no email canonicalization beyond a trim (`a@x.com` ≠
-`A@x.com`); and a Redis command timeout can `503` an order that committed
-server-side (the idempotent retry recovers, but the first response was wrong).
+Known gap present in the code: a Redis command timeout can `503` an order that
+committed server-side (the idempotent retry recovers, but the first response was
+wrong; the `sold_out` heartbeat safety net re-broadcasts a lost terminal frame).
+Previously-listed gaps are now closed: `SIGTERM`/`SIGINT` are handled for a clean
+drain, the client runs a heartbeat/silence watchdog over the stream, and the
+order key is canonicalized (NFC-normalized and case-folded) so `A@x.com` and
+`a@x.com` collapse to one identity.
 
 ## 8. Configuration
 
@@ -459,19 +472,21 @@ buyer already supplies — no session, no account system, no server-issued token
 distribute and reconcile. A retry is always honest: the worst it can do is be told
 again that the order already exists.
 
-**Cost.** Identity is only as good as the string. Canonicalization is minimal
-today — trim plus a length bound (`§3.3`), **case-sensitive** — so `A@x.com` and
-`a@x.com` are two identities. For the take-home scope this is acceptable and
-explicit; in production it is a fairness hole (one person, two orders).
+**Cost.** Identity is only as good as the string. Canonicalization is deliberately
+bounded: trim plus a length bound (`§3.3`), then NFC-normalize and case-fold, so
+`A@x.com` and `a@x.com` collapse to one identity (case can no longer buy twice).
+What is still *not* folded is provider-specific aliasing — Gmail dots and `+tags`
+(`a@x.com` vs `a+1@x.com`) — an accepted, documented bypass, because correct
+alias handling is provider-specific and easy to get subtly wrong.
 
 **Alternatives considered.** (a) Full RFC-5321 normalization / provider-aware
-canonicalization (lower-casing, Gmail dot-and-plus folding) — deferred: correct
-canonicalization is provider-specific and easy to get subtly wrong. (b)
-Authenticated accounts with a server-issued user id — the production answer, but
-out of scope here. Both are strict improvements layered *above* the same set-
-membership mechanism, so adopting one later does not disturb the decision core.
+canonicalization (Gmail dot-and-plus folding) — deferred: correct alias handling
+is provider-specific and easy to get subtly wrong. (b) Authenticated accounts
+with a server-issued user id — the production answer, but out of scope here. Both
+are strict improvements layered *above* the same set-membership mechanism, so
+adopting one later does not disturb the decision core.
 
-**Revisit when.** The sale is real. Lower-case at minimum, and back identity with
+**Revisit when.** The sale is real. Fold provider aliases, and back identity with
 an authenticated account id rather than a raw email.
 
 ### 11.6 Scale by widening a stateless tier
