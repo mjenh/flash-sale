@@ -327,13 +327,224 @@ boot-complete signal. `docker compose up` serves SPA and API on port 3000. The
 
 ## 11. Trade-offs
 
-- **One Lua script is the whole decision** — atomicity and a single writer, at the
-  cost of core logic in Lua rather than TypeScript.
-- **Redis decides, Mongo records** — single-source runtime reads, at the cost of
-  the audit under-count window on a crash.
-- **Fail closed on Redis loss** — correctness under partial failure, at the cost of
-  availability.
-- **Synchronous order flow, no queue** — immediate, interpretable verdicts, at the
-  cost of any burst shock absorber.
-- **Email as idempotency key** — honest retries, at the cost of canonicalization
-  (case-sensitive today).
+Every choice below buys one of the §1 invariants at a real, named cost. They are
+recorded here in full so a future maintainer inherits the reasoning, not just the
+result. Each entry states the decision, why it was made, what it costs, the
+alternatives that were weighed, and the condition under which it should be
+revisited.
+
+### 11.1 One Lua script is the whole decision
+
+**Decision.** The membership check, stock check, `SADD`, and `DECR` live in a
+single `order.lua` script (`§3.5`), executed by Redis as one indivisible unit.
+While the API serves traffic, that script is the *only* writer of
+`stock:remaining` and `orders:users`.
+
+**Why.** Redis runs scripts single-threaded, so the four steps cannot interleave
+with another request. This is what makes "no oversell" and "one item per user"
+true by construction rather than by hope — there is no read-modify-write window
+for a concurrent buyer to slip through, and no distributed lock to acquire,
+renew, or leak.
+
+**Cost.** The most correctness-critical logic in the system is written in Lua,
+not the TypeScript the rest of the codebase uses. It is harder to unit-test in
+isolation, has no type checker, and is a context switch for a reviewer. We
+contain the cost by keeping the script tiny, treating `order.lua` as the
+implementation of record (loaded once at boot, `§3.5`), and testing its
+observable semantics through the order-store and endpoint suites.
+
+**Alternatives considered.** (a) A `WATCH`/`MULTI` optimistic transaction —
+rejected: retries under contention add latency exactly when load is highest, and
+the retry loop is itself easy to get wrong. (b) A distributed lock (Redlock) —
+rejected: heavier, adds failure modes (clock skew, lock expiry mid-critical-
+section), and still needs the same atomic body. (c) A relational row lock /
+`SELECT … FOR UPDATE` — rejected: pushes the hot path into a disk-backed store
+and serializes on a row under thousands of concurrent buyers.
+
+**Revisit when.** The decision needs more than a set and a counter — e.g.
+per-tier stock, multiple SKUs, or fraud scoring. At that point the logic outgrows
+a script that must stay small enough to reason about, and a dedicated single-
+writer service (still the same principle) becomes the better home.
+
+### 11.2 Redis decides, Mongo records
+
+**Decision.** Redis holds the only state a request reads or writes. MongoDB is an
+audit trail, written *asynchronously after* the decision (`§4.1`) and never read
+on a request path except the cold-start rebuild (`§6`).
+
+**Why.** The request path touches exactly one in-memory store and returns. The
+durable, queryable history the business wants (who ordered, when, payment
+references) is kept out of the latency budget entirely. It also gives a clean
+recovery story: Mongo is the source of truth from which Redis is rebuilt.
+
+**Cost.** A crash in the window between "Redis accepted" and "Mongo recorded"
+loses the audit row for an order that genuinely succeeded — an audit *under*-count.
+This is deliberate: the buyer was honestly told yes, stock was honestly
+decremented, and the missing row never causes an oversell. There is intentionally
+**no** compensating `INCR`/`SREM` anywhere (`§7`); rolling back a promised order
+would be worse than a gap in the log.
+
+**Alternatives considered.** (a) Synchronous Mongo write before the 201 —
+rejected: puts a disk-backed store on the hot path and makes availability depend
+on two stores instead of one. (b) A single store for both roles — rejected: no
+one store is both the ideal concurrency primitive and the ideal audit database.
+(c) An event log / outbox with a durable queue — a strictly better version of
+this trade-off; deferred as out of scope (see 11.4).
+
+**Revisit when.** The audit under-count becomes unacceptable (e.g. finance needs
+an exact ledger). The fix is an outbox: the accepting script also pushes an event
+Redis-side, drained to Mongo by a worker — closing the gap without putting Mongo
+back on the hot path.
+
+### 11.3 Fail closed on Redis loss
+
+**Decision.** When Redis is unreachable or a command times out, the request
+returns `503` rather than a guess (`§7`). Bounded connect and per-command
+timeouts (`§8`) turn a hang into a fast, typed `RedisUnavailableError`.
+
+**Why.** The §1 invariant: a refusal is always safe, a guess can oversell.
+Fabricating a stock number (e.g. defaulting a missing key to `0`) would lie
+"sold out"; defaulting high would oversell. Neither is acceptable, so the system
+declines to answer when it cannot answer truthfully.
+
+**Cost.** Availability is sacrificed to correctness. If Redis is down, the sale is
+down — there is no degraded read-only mode that keeps serving. For a flash sale,
+where an oversell is a customer-facing failure and a brief outage is not, this is
+the right side of the trade; for a system where stale reads are tolerable it
+would not be.
+
+**Alternatives considered.** (a) Serve a cached/last-known stock number —
+rejected: the moment it is wrong it can oversell. (b) A Redis replica for reads —
+still fails closed on the write path; adds replication lag as a new way to be
+wrong. Bounded timeouts were kept precisely so "fail closed" never means "hang
+closed."
+
+**Revisit when.** A read replica or Redis Cluster is introduced for scale (11.6);
+the fail-closed rule stays, but reads can then survive a primary blip.
+
+### 11.4 Synchronous order flow, no queue
+
+**Decision.** A purchase is decided inline and answered on the same request. There
+is no message queue absorbing the burst ahead of the decision.
+
+**Why.** The buyer gets an immediate, interpretable verdict — `created`,
+`already`, `sold_out`, `inactive` — with no "your request is being processed"
+limbo. Because the atomic script (11.1) is O(1) and in-memory, the decision is
+fast enough that a queue would add latency and a moving part without buying
+correctness.
+
+**Cost.** There is no shock absorber. The API tier must be scaled to meet peak
+concurrency head-on (11.6); a queue would let a fixed pool drain a spike at its
+own pace. Under a truly extreme burst, back-pressure shows up as connection
+saturation rather than a growing queue.
+
+**Alternatives considered.** (a) Enqueue every attempt, decide in a worker,
+notify asynchronously — rejected for this scope: it trades a simple synchronous
+verdict for eventual consistency and a notification channel, and the atomic
+decision is not the bottleneck a queue would relieve. The queue's real value is
+smoothing *write* pressure on a slow store, which we do not have.
+
+**Revisit when.** The decision stops being O(1) and cheap (e.g. it grows payment
+authorization or inventory reservation inline), or the API tier cannot be scaled
+wide enough to meet peak concurrency. Then an ingress queue in front of the
+decision becomes worthwhile.
+
+### 11.5 Email as the idempotency key
+
+**Decision.** A buyer's email is their identity. `orders:users` is a set of
+emails; a repeat attempt is recognized by set membership (`§4.1`).
+
+**Why.** It satisfies the idempotent-identity invariant with the identifier the
+buyer already supplies — no session, no account system, no server-issued token to
+distribute and reconcile. A retry is always honest: the worst it can do is be told
+again that the order already exists.
+
+**Cost.** Identity is only as good as the string. Canonicalization is minimal
+today — trim plus a length bound (`§3.3`), **case-sensitive** — so `A@x.com` and
+`a@x.com` are two identities. For the take-home scope this is acceptable and
+explicit; in production it is a fairness hole (one person, two orders).
+
+**Alternatives considered.** (a) Full RFC-5321 normalization / provider-aware
+canonicalization (lower-casing, Gmail dot-and-plus folding) — deferred: correct
+canonicalization is provider-specific and easy to get subtly wrong. (b)
+Authenticated accounts with a server-issued user id — the production answer, but
+out of scope here. Both are strict improvements layered *above* the same set-
+membership mechanism, so adopting one later does not disturb the decision core.
+
+**Revisit when.** The sale is real. Lower-case at minimum, and back identity with
+an authenticated account id rather than a raw email.
+
+### 11.6 Scale by widening a stateless tier
+
+**Decision.** The API is stateless (injected clock, no in-process sale state,
+`§3`), so throughput scales by running more identical instances behind a load
+balancer, all pointed at the same Redis and Mongo.
+
+**Why.** State lives in Redis, not the process, so any instance can serve any
+request and instances can be added or removed freely. The concurrency guarantee
+does not weaken as the tier widens, because the single-writer guarantee lives in
+Redis (11.1), not in the API.
+
+**Cost.** Redis becomes the shared throughput ceiling: every accepted order is one
+round-trip to one Redis primary. A single primary handles a flash sale's write
+rate comfortably, but it is the bottleneck by design, and horizontal API scaling
+does not move it.
+
+**Alternatives considered.** (a) Shard stock across keys/instances to raise the
+write ceiling — rejected for this scope: sharded stock reintroduces the exact
+cross-shard oversell problem the single script was chosen to avoid. (b) In-process
+stock with sticky routing — rejected: it trades the shared bottleneck for a
+correctness hazard on rebalancing.
+
+**Revisit when.** One Redis primary is genuinely the ceiling. Options then, in
+order of preference: a read replica to offload status reads (11.3), then
+Redis Cluster with stock partitioned per node and per-node sub-inventories — an
+explicit re-opening of the single-writer decision.
+
+### 11.7 SSE over Redis pub/sub for realtime status
+
+**Decision.** Live status reaches the browser over Server-Sent Events, fed by a
+broadcaster subscribed to a Redis pub/sub channel (`§3.4`, `§4.2`), with the
+client falling back to polling when the stream drops (`§4.3`).
+
+**Why.** Status is one-directional server→client, which is exactly SSE's shape —
+plain HTTP, auto-reconnect semantics, no second protocol. The broadcaster
+composes every frame through the one status path and coalesces bursts (≤1 per
+250 ms), so a sell-out spike does not become a per-order fan-out storm.
+
+**Cost.** SSE is one-way and carries an idle connection per viewer; the broadcaster
+is a stateful component the stateless API tier otherwise avoids. The client needs
+an explicit fallback ladder (live → degraded → offline) so a dropped stream never
+strands a stale number claiming to be live.
+
+**Alternatives considered.** (a) Client polling only — simpler, but either wasteful
+(tight interval) or laggy (loose interval), and it hammers the status path. (b)
+WebSockets — full duplex we do not need, plus a heavier protocol and proxy story.
+SSE keeps the transport as close to plain HTTP as the requirement allows.
+
+**Revisit when.** The channel needs client→server messaging, or per-viewer
+connection cost dominates at very high concurrent-viewer counts. WebSockets or a
+managed realtime tier become worth their weight then.
+
+### 11.8 Native TypeScript, no build step
+
+**Decision.** The server runs TypeScript directly on Node 24's native type
+stripping — no bundler, no transpile step, no emitted `dist/`.
+
+**Why.** One fewer moving part: the code that runs is the code on disk, so a boot
+is `node src/index.ts`, and a stack trace points at a real line. `tsc --noEmit`
+still guards types in CI (`§9`); the runtime simply does not need a build.
+
+**Cost.** It pins the server to a Node version new enough to strip types, and it
+forgoes the dead-code elimination and single-artifact packaging a bundler gives.
+The client still builds (Vite) because the browser needs a bundle; only the server
+skips it.
+
+**Alternatives considered.** (a) `tsc`/`esbuild` to `dist/` — the conventional
+path, rejected here to keep the dev/prod gap as small as possible for a project of
+this size. (b) `ts-node`/`tsx` — an extra dependency doing what the runtime now
+does natively.
+
+**Revisit when.** The server must run on a Node older than the type-stripping
+baseline, or needs bundling for size/startup. Reintroducing a build step is
+mechanical and localized.

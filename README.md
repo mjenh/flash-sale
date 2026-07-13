@@ -63,6 +63,24 @@ the client's.
 The full design — layers, request flows, the restart gate, failure behavior, and
 trade-offs — lives in [`docs/architecture.md`](docs/architecture.md).
 
+### Key trade-offs
+
+Each choice buys a core invariant (no oversell · idempotent identity · fail
+closed) at a named cost. Full reasoning — alternatives weighed and when to
+revisit each — is in
+[`docs/architecture.md` §11](docs/architecture.md#11-trade-offs).
+
+| Decision | Buys | Costs |
+| --- | --- | --- |
+| One atomic Lua script owns the decision | No oversell / one-per-user by construction | Hot-path logic in Lua, not TypeScript |
+| Redis decides, Mongo records (async) | Single-store hot path, clean recovery | Audit under-count if a crash lands mid-write |
+| Fail closed on Redis loss (503, never a guess) | Correctness under partial failure | Availability — Redis down means the sale is down |
+| Synchronous order flow, no queue | Immediate, interpretable verdicts | No burst shock absorber; scale the API tier head-on |
+| Email as the idempotency key | Honest retries, no session/account needed | Case-sensitive today — a fairness hole until normalized |
+| Stateless API, scale by widening the tier | Add instances freely without weakening the guarantee | One Redis primary is the shared throughput ceiling |
+| SSE over Redis pub/sub for live status | Plain-HTTP one-way stream, coalesced frames | One-way only; a stateful broadcaster + client fallback ladder |
+| Native TS, no build step | The code that runs is the code on disk | Pins a modern Node; no bundler packaging for the server |
+
 ## Quick start
 
 ```bash
