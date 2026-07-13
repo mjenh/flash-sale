@@ -23,6 +23,43 @@ built into the API image and served from it. See
 
 ## Architecture
 
+```mermaid
+flowchart LR
+    Browser["Browser<br/>React 19 SPA (Vite)"]
+
+    subgraph API["Express 5 API · node:24-alpine (native TS)"]
+        Routes["routes/<br/>HTTP translation"]
+        Services["services/<br/>business logic · injected clock"]
+        Broadcaster["sale-events broadcaster<br/>coalesce ≤1 / 250ms · 25s heartbeat"]
+    end
+
+    subgraph Redis["Redis 8 · AOF"]
+        Decision["DECISION STATE<br/>stock:remaining (int)<br/>orders:users (set)"]
+        Channel["PUB/SUB · sale:events"]
+    end
+
+    Mongo[("MongoDB 8 · AUDIT<br/>users · orders · orderlines · …")]
+
+    Browser -- "POST /api/order" --> Routes
+    Browser -- "GET /api/sale/status" --> Routes
+    Browser -- "GET /api/order/:email" --> Routes
+    Browser == "SSE GET /api/sale/events" ==> Broadcaster
+    Routes --> Services
+    Services -- "EVALSHA order.lua (atomic)" --> Decision
+    Services -. "async audit write" .-> Mongo
+    Services -- "PUBLISH sale:events" --> Channel
+    Channel -- "SUBSCRIBE (dedicated connection)" --> Broadcaster
+    Broadcaster -- "fresh status read at emit" --> Decision
+    Mongo -. "cold start only: rebuild" .-> Decision
+```
+
+Three roles are kept strictly separate: **Redis** is the decision layer (the only
+state a request reads or writes — remaining stock and the set of buyers — with a
+single Lua script as the sole writer while serving); **MongoDB** is the audit
+layer (written asynchronously after a decision, read only at cold start to
+rebuild Redis); and the **clock** is the API server's own UTC `Date.now()`, never
+the client's.
+
 The full design — layers, request flows, the restart gate, failure behavior, and
 trade-offs — lives in [`docs/architecture.md`](docs/architecture.md).
 
