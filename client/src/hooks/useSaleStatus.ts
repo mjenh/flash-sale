@@ -23,6 +23,20 @@ export type Channel = "connecting" | "live" | "degraded" | "offline";
 /** Middle of the spine's 2–10 s fallback band. */
 export const POLL_MS = 5_000;
 
+/** The server heartbeats every 25 s (a `: heartbeat` comment the browser does
+ *  not surface as an event). If an OPEN stream produces no observable activity
+ *  for longer than this, the connection is treated as silently dead — a
+ *  black-holed TCP socket (sleep/wake, captive portal, NAT reap) that never
+ *  fires `error`. The demotion self-heals: the reconnect below re-snapshots. */
+export const WATCHDOG_SILENCE_MS = 40_000;
+
+/** If neither channel has produced a first paint by this deadline, arm the
+ *  fallback — a stream that hangs before headers must not strand the page. */
+export const CONNECT_DEADLINE_MS = 6_000;
+
+const RECONNECT_BASE_MS = 1_000;
+const RECONNECT_MAX_MS = 30_000;
+
 export interface SaleStatusHandle {
   body: SaleStatusBody | null;
   channel: Channel;
@@ -38,6 +52,9 @@ export function useSaleStatus(): SaleStatusHandle {
   const mountedRef = useRef(true);
   const sourceRef = useRef<EventSource | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptsRef = useRef(0);
+  const lastActivityRef = useRef(0);
 
   const setChannelSafely = useCallback((next: Channel) => {
     channelRef.current = next;
@@ -63,9 +80,13 @@ export function useSaleStatus(): SaleStatusHandle {
   const refetch = useCallback(() => {
     void fetchSaleStatus()
       .then((next) => {
-        // A re-sync never changes the channel — it only pushes the freshest
-        // body it just read. While live, the stream still wins from here on.
-        if (mountedRef.current) {
+        // A re-sync obeys the SAME sole-writer rule as a poll: while the stream
+        // is live it alone writes `body`, so a re-sync GET (an independent Redis
+        // read with no ordering guarantee) can NOT rewind the counter behind a
+        // newer frame or resurrect an `active` body over a `sold_out` one. The
+        // stream delivers the post-order frame anyway (the server emits on
+        // `order.accepted`); this only carries the page while the stream is down.
+        if (mountedRef.current && channelRef.current !== "live") {
           setBody(next);
         }
       })
@@ -86,6 +107,13 @@ export function useSaleStatus(): SaleStatusHandle {
       }
     };
 
+    const stopReconnect = () => {
+      if (reconnectTimerRef.current !== null) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+    };
+
     const closeStream = () => {
       if (sourceRef.current !== null) {
         sourceRef.current.close();
@@ -93,8 +121,13 @@ export function useSaleStatus(): SaleStatusHandle {
       }
     };
 
+    const markActivity = () => {
+      lastActivityRef.current = Date.now();
+    };
+
     const openStream = () => {
       closeStream();
+      markActivity();
       const source = new EventSource(SALE_EVENTS_URL);
       sourceRef.current = source;
 
@@ -102,6 +135,11 @@ export function useSaleStatus(): SaleStatusHandle {
         if (!mountedRef.current) {
           return;
         }
+        markActivity();
+        // A clean connect means the retry budget is spent — reset it and stop
+        // the reconnect scheduler; the stream is the sole writer again.
+        reconnectAttemptsRef.current = 0;
+        stopReconnect();
         // RECOVERY, not first connect: the server snapshots on every connect,
         // so a cold open needs nothing extra. It is the recovery case that must
         // not leave a frame from the outage on screen.
@@ -118,6 +156,7 @@ export function useSaleStatus(): SaleStatusHandle {
       // The server names its event `status` — a bare onmessage handler would
       // receive NOTHING (onmessage fires only for unnamed events).
       source.addEventListener("status", (event) => {
+        markActivity();
         let raw: unknown;
         try {
           raw = JSON.parse((event as MessageEvent<string>).data);
@@ -131,20 +170,26 @@ export function useSaleStatus(): SaleStatusHandle {
       });
 
       source.onerror = () => {
-        // A 503 closes the stream for good — EventSource does NOT auto-reconnect.
-        // The fallback loop below is the only reconnect mechanism there is.
-        closeStream();
         if (!mountedRef.current) {
           return;
         }
-        // Drop the liveness claim THE MOMENT the stream dies — before any poll
-        // resolves. Leaving `live` set here would silently keep discarding
+        // Drop the liveness claim THE MOMENT the stream falters — before any
+        // poll resolves. Leaving `live` set here would silently keep discarding
         // polls (the sole-writer guard) and strand the page on a frozen number
         // while insisting it was live.
         if (channelRef.current === "live") {
           setChannelSafely("degraded");
         }
+        // `error` with readyState CONNECTING is a RECOVERABLE mid-stream drop:
+        // the browser is already reconnecting natively. Tearing the source down
+        // here (the old behavior) permanently defeats that. Keep it and let it
+        // retry; only a CLOSED source is fatal (e.g. a 503 handshake) and needs
+        // our own reconnect. Either way the fallback poll carries the page.
+        if (source.readyState !== EventSource.CONNECTING) {
+          closeStream();
+        }
         startFallback();
+        scheduleReconnect();
       };
     };
 
@@ -164,24 +209,79 @@ export function useSaleStatus(): SaleStatusHandle {
           }
         })
         .catch(() => {
-          if (fromFallback && mountedRef.current && channelRef.current !== "live") {
+          if (!mountedRef.current || channelRef.current === "live") {
+            return;
+          }
+          if (fromFallback) {
             // Both channels unreachable: stop claiming liveness. `body` is
             // left untouched — stale-but-marked, or null on a cold load.
             setChannelSafely("offline");
+          } else {
+            // A cold poll failed while the stream is still connecting. Do not
+            // sit on "connecting" with no timer armed — arm the fallback so a
+            // hung pre-headers handshake can't strand the page forever.
+            startFallback();
+            scheduleReconnect();
           }
         });
     };
 
     function startFallback() {
       if (timerRef.current !== null) {
-        return; // Exactly one timer, ever.
+        return; // Exactly one poll timer, ever.
       }
       pollOnce(true);
       timerRef.current = setInterval(() => {
         pollOnce(true);
-        openStream(); // Re-create the stream each cycle until it re-establishes.
       }, POLL_MS);
     }
+
+    /** Reconnect the stream on an exponential backoff with equal jitter. AD-5's
+     *  `closeAll()` ends every client's stream at the same instant; a fixed
+     *  interval would have them all reconnect in lockstep. Jitter spreads them.
+     *  A handshake still CONNECTING is never killed — it is given another beat. */
+    function reconnectDelay() {
+      const capped = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** reconnectAttemptsRef.current);
+      return capped / 2 + Math.random() * (capped / 2);
+    }
+
+    function scheduleReconnect() {
+      if (reconnectTimerRef.current !== null) {
+        return; // Exactly one reconnect timer, ever.
+      }
+      const attempt = () => {
+        reconnectTimerRef.current = null;
+        if (!mountedRef.current || channelRef.current === "live") {
+          return;
+        }
+        const current = sourceRef.current;
+        if (current !== null && current.readyState === EventSource.CONNECTING) {
+          // An in-flight handshake — do NOT kill it. Check back after a beat.
+          reconnectAttemptsRef.current += 1;
+          reconnectTimerRef.current = setTimeout(attempt, reconnectDelay());
+          return;
+        }
+        openStream();
+        reconnectAttemptsRef.current += 1;
+        reconnectTimerRef.current = setTimeout(attempt, reconnectDelay());
+      };
+      reconnectTimerRef.current = setTimeout(attempt, reconnectDelay());
+    }
+
+    // A silently-dead stream fires no `error`. Poll our own last-activity clock
+    // and treat prolonged silence on a live stream as death. The demotion is
+    // cheap and self-healing: the reconnect re-snapshots within a beat.
+    const watchdog = setInterval(() => {
+      if (!mountedRef.current) {
+        return;
+      }
+      if (channelRef.current === "live" && Date.now() - lastActivityRef.current > WATCHDOG_SILENCE_MS) {
+        closeStream();
+        setChannelSafely("degraded");
+        startFallback();
+        scheduleReconnect();
+      }
+    }, WATCHDOG_SILENCE_MS / 4);
 
     // Cold load: open the stream AND read the status, so the first paint is
     // whichever answers first. There is no skeleton — the first response IS
@@ -189,9 +289,21 @@ export function useSaleStatus(): SaleStatusHandle {
     openStream();
     pollOnce(false);
 
+    // A stream that hangs before headers fires neither `open` nor `error`. If
+    // we are still `connecting` at the deadline, carry the page by polling.
+    const connectDeadline = setTimeout(() => {
+      if (mountedRef.current && channelRef.current === "connecting") {
+        startFallback();
+        scheduleReconnect();
+      }
+    }, CONNECT_DEADLINE_MS);
+
     return () => {
       mountedRef.current = false;
       controller.abort();
+      clearTimeout(connectDeadline);
+      clearInterval(watchdog);
+      stopReconnect();
       stopPolling();
       closeStream();
     };

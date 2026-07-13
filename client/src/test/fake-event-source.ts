@@ -8,6 +8,10 @@
 import { vi } from "vitest";
 
 export class FakeEventSource {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSED = 2;
+
   static instances: FakeEventSource[] = [];
 
   static reset() {
@@ -25,6 +29,8 @@ export class FakeEventSource {
 
   readonly url: string;
   closed = false;
+  /** Mirrors the real EventSource lifecycle: CONNECTING → OPEN → CLOSED. */
+  readyState: number = FakeEventSource.CONNECTING;
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
   onmessage: ((event: MessageEvent<string>) => void) | null = null;
@@ -44,11 +50,13 @@ export class FakeEventSource {
 
   close() {
     this.closed = true;
+    this.readyState = FakeEventSource.CLOSED;
   }
 
   // ── Test controls ───────────────────────────────────────────────────────
 
   open() {
+    this.readyState = FakeEventSource.OPEN;
     this.onopen?.();
   }
 
@@ -60,7 +68,15 @@ export class FakeEventSource {
     }
   }
 
-  fail() {
+  /** Fire `error`. A real EventSource sets `readyState` before the handler
+   *  runs: CLOSED for a fatal error (a non-2xx handshake, e.g. a 503), or
+   *  CONNECTING for a recoverable mid-stream drop it is already retrying.
+   *  Defaults to fatal, the 503 case the fallback loop was built for. */
+  fail(readyState: number = FakeEventSource.CLOSED) {
+    this.readyState = readyState;
+    if (readyState === FakeEventSource.CLOSED) {
+      this.closed = true;
+    }
     this.onerror?.();
   }
 }

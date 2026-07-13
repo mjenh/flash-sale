@@ -32,9 +32,16 @@ export function parseSaleStatus(raw: unknown): SaleStatusBody | null {
     typeof body.status !== "string" ||
     !STATES.includes(body.status) ||
     typeof body.stock !== "number" ||
-    !Number.isFinite(body.stock) ||
+    // A stock count is a non-negative whole number — a fraction or a negative
+    // is as unprovable as a string, and never becomes a painted numeral.
+    !Number.isInteger(body.stock) ||
+    body.stock < 0 ||
     typeof body.startTime !== "string" ||
-    typeof body.endTime !== "string"
+    // An ISO instant that Date cannot parse would render "Invalid Date" into
+    // the machine-truth chip — refuse it here rather than paint it.
+    Number.isNaN(Date.parse(body.startTime)) ||
+    typeof body.endTime !== "string" ||
+    Number.isNaN(Date.parse(body.endTime))
   ) {
     return null;
   }

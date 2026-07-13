@@ -47,12 +47,32 @@ function said(body: unknown, fallback: string): string {
   return fallback;
 }
 
+/** A 200/201 is only trustworthy if the body is actually an order envelope. A
+ *  captive portal or proxy can answer 200 with HTML (which fails to parse, so
+ *  `body` is null) — mapping that to "already ordered" or "success" would tell a
+ *  buyer who ordered nothing that they hold an order. `success: false` is never
+ *  a positive outcome either. */
+function isOrderEnvelope(body: unknown): boolean {
+  if (typeof body !== "object" || body === null) {
+    return false;
+  }
+  const record = body as Record<string, unknown>;
+  if (record.success === false) {
+    return false;
+  }
+  return typeof record.message === "string" || record.success === true;
+}
+
 function verdictFor(status: number, body: unknown): Verdict {
   switch (status) {
     case 201:
-      return { kind: "success", message: said(body, SUCCESS) };
+      return isOrderEnvelope(body)
+        ? { kind: "success", message: said(body, SUCCESS) }
+        : { kind: "network", message: NETWORK };
     case 200:
-      return { kind: "already", message: said(body, ALREADY) };
+      return isOrderEnvelope(body)
+        ? { kind: "already", message: said(body, ALREADY) }
+        : { kind: "network", message: NETWORK };
     case 400:
       return { kind: "invalid", message: said(body, EMAIL_REQUIRED) };
     case 503:
@@ -101,15 +121,40 @@ export async function placeOrder(email: string): Promise<Verdict> {
 
 /** GET /api/order/:email — the UJ-2 convenience read (AD-8: never how you
  *  learn the outcome of the attempt you just made). Rejects on failure; the
- *  caller swallows it silently. */
+ *  caller swallows it silently. A hung load-check must not resolve late and pop
+ *  a focus-stealing panel, so it carries its own timeout AND honors the caller's
+ *  signal (aborted on submit / unmount) — mirroring placeOrder's abort pattern. */
 export async function checkOrder(email: string, signal?: AbortSignal): Promise<boolean> {
-  const res = await fetch(`${ORDER_URL}/${encodeURIComponent(email)}`, { signal });
-  if (!res.ok) {
-    throw new Error(`order check failed (${res.status})`);
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, TIMEOUT_MS);
+  // Chain the caller's signal into our own so either source can abort the fetch.
+  if (signal !== undefined) {
+    if (signal.aborted) {
+      controller.abort();
+    } else {
+      signal.addEventListener("abort", () => controller.abort(), { once: true });
+    }
   }
-  const body: unknown = await res.json();
-  if (typeof body !== "object" || body === null || typeof (body as { ordered?: unknown }).ordered !== "boolean") {
-    throw new Error("order check body was not the FR-4 shape");
+
+  try {
+    const res = await fetch(`${ORDER_URL}/${encodeURIComponent(email)}`, {
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      throw new Error(`order check failed (${res.status})`);
+    }
+    const body: unknown = await res.json();
+    if (
+      typeof body !== "object" ||
+      body === null ||
+      typeof (body as { ordered?: unknown }).ordered !== "boolean"
+    ) {
+      throw new Error("order check body was not the FR-4 shape");
+    }
+    return (body as { ordered: boolean }).ordered;
+  } finally {
+    clearTimeout(timer);
   }
-  return (body as { ordered: boolean }).ordered;
 }

@@ -17,7 +17,6 @@
 }
 
 .verdict-focus {
-  outline: none;
   width: 100%;
   max-width: 440px;
 }
@@ -79,6 +78,11 @@
   display: inline-block;
   margin-bottom: var(--sp-stack);
   padding: var(--sp-unit) calc(var(--sp-unit) * 1.5);
+  /* Headline-family, sentence case — a warm celebration line, not a chip. */
+  font-family: var(--font-sans);
+  font-size: var(--verdict-frame-size);
+  font-weight: var(--headline-weight);
+  letter-spacing: var(--headline-tracking);
   background: var(--pool-teal);
   color: var(--cream);
   border: var(--border-ink);
@@ -92,17 +96,18 @@
   /* Clear the close button in the top-right corner. */
   padding-right: calc(var(--sp-unit) * 5);
   font-family: var(--font-sans);
-  font-size: 24px;
+  font-size: var(--verdict-frame-size);
   font-weight: var(--headline-weight);
   line-height: var(--body-line);
   color: var(--ink);
 }
 
-/* The machine's exact words, visibly distinct from the warmth around them. */
+/* The machine's exact words, visibly distinct from the warmth around them.
+ * Cream, not paper-white — paper-white is reserved for the input field. */
 .verdict-panel__string {
   margin: 0;
   padding: calc(var(--sp-unit) * 1.25) var(--sp-stack);
-  background: var(--paper-white);
+  background: var(--cream);
   color: var(--ink);
   border: var(--border-ink);
   border-radius: var(--r-md);

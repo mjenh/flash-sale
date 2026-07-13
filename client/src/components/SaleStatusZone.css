@@ -1,5 +1,20 @@
 /* The status zone composes Panel — it never re-declares panel chrome. */
 
+/* Poster panels carry the 12% ink stripe texture. Reading text inside them sits
+ * on its own opaque noon-yellow face so the stripes never run behind glyphs
+ * (DESIGN.md); the face hugs the text (`fit-content`), leaving the stripes to
+ * show around it. Scoped to `.stripes` so the cream active/sold_out panels,
+ * which share `.status-zone__frame`, are untouched. */
+.stripes .status-zone__headline,
+.stripes .status-zone__frame,
+.stripes .status-zone__wrap,
+.stripes .status-zone__unreachable,
+.stripes .countdown {
+  width: fit-content;
+  max-width: 100%;
+  background: var(--noon-yellow);
+}
+
 .status-zone__headline {
   margin: 0 0 var(--sp-stack);
   color: var(--ink);

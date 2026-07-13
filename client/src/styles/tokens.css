@@ -66,6 +66,10 @@
   --chip-weight: 900;
   --chip-tracking: 1px;
 
+  /* The verdict panel's warm framing line: headline-family, one step down from
+   * a state headline so it fits the modal without shouting. */
+  --verdict-frame-size: 24px;
+
   /* ── Radii ──────────────────────────────────────────────────────────── */
   --r-sm: 6px;
   --r-md: 8px;

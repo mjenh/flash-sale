@@ -1,4 +1,4 @@
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeEventSource, installFakeEventSource } from "../test/fake-event-source.ts";
 import { POLL_MS, useSaleStatus } from "./useSaleStatus.ts";
@@ -191,22 +191,75 @@ describe("useSaleStatus", () => {
     expect(fetchSpy.mock.calls.length).toBe(calls);
   });
 
-  it("refetch() pushes a fresh body without changing the channel", async () => {
+  it("refetch() obeys the sole-writer rule — while live it can NOT rewind the counter", async () => {
+    // A re-sync GET and the SSE frame are independent Redis reads with no
+    // ordering guarantee; a stale GET must never overwrite a newer frame,
+    // rewinding the number or resurrecting `active` over `sold_out`.
+    const { result } = renderHook(() => useSaleStatus());
+
+    await act(async () => {
+      FakeEventSource.current.open();
+      FakeEventSource.current.emit(BODY); // the stream said 37
+    });
+
+    fetchSpy.mockImplementation(() => okOnce({ ...BODY, stock: 12 }));
+    await act(async () => {
+      result.current.refetch();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The stream is the sole writer: the stale GET is discarded.
+    expect(result.current.channel).toBe("live");
+    expect(result.current.body?.stock).toBe(37);
+  });
+
+  it("refetch() DOES carry a fresh body while the stream is down", async () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useSaleStatus());
+
+    await act(async () => {
+      FakeEventSource.current.fail(); // fatal — stream down, now degraded
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.channel).toBe("degraded");
+
+    fetchSpy.mockImplementation(() => okOnce({ ...BODY, stock: 12 }));
+    await act(async () => {
+      result.current.refetch();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(result.current.body?.stock).toBe(12);
+    expect(result.current.channel).toBe("degraded");
+  });
+
+  it("a recoverable mid-stream drop (error while CONNECTING) is left for the browser to retry", async () => {
+    vi.useFakeTimers();
     const { result } = renderHook(() => useSaleStatus());
 
     await act(async () => {
       FakeEventSource.current.open();
       FakeEventSource.current.emit(BODY);
     });
+    expect(result.current.channel).toBe("live");
 
-    fetchSpy.mockImplementation(() => okOnce({ ...BODY, stock: 12 }));
-    act(() => {
-      result.current.refetch();
-    });
-    await waitFor(() => {
-      expect(result.current.body?.stock).toBe(12);
+    const stream = FakeEventSource.current;
+    await act(async () => {
+      stream.fail(FakeEventSource.CONNECTING); // browser is auto-reconnecting
+      await vi.advanceTimersByTimeAsync(0);
     });
 
+    // Liveness is dropped, the page falls back to polling — but the source is
+    // NOT torn down, so the browser's native reconnect is left to do its job.
+    expect(result.current.channel).toBe("degraded");
+    expect(stream.closed).toBe(false);
+
+    // When it re-establishes, the page returns to live.
+    await act(async () => {
+      stream.open();
+      await vi.advanceTimersByTimeAsync(0);
+    });
     expect(result.current.channel).toBe("live");
   });
 });

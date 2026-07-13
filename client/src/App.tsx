@@ -19,7 +19,7 @@ import {
   SaleStatusZone,
 } from "./components/SaleStatusZone.tsx";
 import { VerdictPanel } from "./components/VerdictPanel.tsx";
-import { useSaleStatus } from "./hooks/useSaleStatus.ts";
+import { useSaleStatus, type Channel } from "./hooks/useSaleStatus.ts";
 import { useOrder } from "./hooks/useOrder.ts";
 import { useRememberedEmail } from "./hooks/useRememberedEmail.ts";
 import type { SaleStatusBody } from "./api/sale.ts";
@@ -29,10 +29,12 @@ export const UPCOMING_BUTTON_REASON =
 export const PROCESSING_LINE = "Hang tight — checking stock for you…";
 
 /** The honest reason a dead button is dead. Never a fake affordance, never a
- *  disappearing act — and never color alone. */
-function buttonReason(body: SaleStatusBody | null): string | null {
+ *  disappearing act — and never color alone. While we are merely `connecting`
+ *  there is nothing wrong to report; the unreachable line is earned only once
+ *  the channel is `offline` (mirrors SaleStatusZone). */
+function buttonReason(body: SaleStatusBody | null, channel: Channel): string | null {
   if (body === null) {
-    return COLD_LOAD_LINE;
+    return channel === "offline" ? COLD_LOAD_LINE : null;
   }
   switch (body.status) {
     case "upcoming":
@@ -50,9 +52,10 @@ export function App() {
   const { body, channel, refetch } = useSaleStatus();
   const [email, setEmail] = useRememberedEmail();
   // FR-5: the status re-fetches after EVERY attempt — win, loss, or error.
-  const { phase, verdict, fieldError, submit, checkOnLoad, clearVerdict } = useOrder({
-    onAttemptSettled: refetch,
-  });
+  const { phase, verdict, verdictSource, fieldError, submit, checkOnLoad, clearFieldError, clearVerdict } =
+    useOrder({
+      onAttemptSettled: refetch,
+    });
 
   // UJ-2: relief in a single page-load. Silent if the check itself fails.
   // Only the REMEMBERED email is checked — never one being typed right now.
@@ -66,7 +69,7 @@ export function App() {
   // it, and focus must stay on the button through the beat. It is aria-busy,
   // and the hook's in-flight guard is what makes a second click a no-op.
   const canBuy = body?.status === "active";
-  const reason = buttonReason(body);
+  const reason = buttonReason(body, channel);
 
   return (
     <>
@@ -119,9 +122,16 @@ export function App() {
                   value={email}
                   onChange={(event) => {
                     setEmail(event.target.value);
+                    // A corrected email clears its own error — the tomato mark
+                    // and aria-invalid must not persist over a fixed value.
+                    if (fieldError !== null) {
+                      clearFieldError();
+                    }
                   }}
                   aria-invalid={fieldError !== null}
-                  aria-describedby={fieldError === null ? "email-help" : "email-error"}
+                  // The help text stays associated even in the error state; the
+                  // error id is appended, never a replacement for it.
+                  aria-describedby={fieldError === null ? "email-help" : "email-help email-error"}
                 />
                 {fieldError === null ? null : (
                   // Anchored at the field, not in the verdict panel — and the
@@ -131,14 +141,17 @@ export function App() {
                     {fieldError}
                   </p>
                 )}
-                <p className="t-meta form-panel__help">
+                <p className="t-meta form-panel__help" id="email-help">
                 </p>
 
                 <div className="buy-now-zone">
                   <button
                     type="submit"
                     className={`t-action buy-now pressable${processing ? " buy-now--processing" : ""}`}
-                    disabled={!canBuy}
+                    // Never disable a focused, in-flight button: if the last unit
+                    // sells mid-request, the sold_out frame must not blur the
+                    // button and drop focus to the body.
+                    disabled={!canBuy && !processing}
                     aria-busy={processing}
                   >
                     {processing ? <span className="buy-now__spinner" aria-hidden="true" /> : null}
@@ -169,6 +182,7 @@ export function App() {
                 verdict={verdict}
                 saleState={body?.status ?? null}
                 onClose={clearVerdict}
+                focusOnMount={verdictSource === "submit"}
               />
             )}
           </div>

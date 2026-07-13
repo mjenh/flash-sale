@@ -58,18 +58,30 @@ export interface VerdictPanelProps {
   saleState: SaleState | null;
   /** Dismiss the pop-up (close button, Escape, or backdrop click). */
   onClose: () => void;
+  /** A submit-born verdict is the climax of the journey and takes focus. A
+   *  zero-interaction load check must NOT yank focus out of the email field
+   *  mid-typing — it is announced politely instead. */
+  focusOnMount?: boolean;
 }
 
-export function VerdictPanel({ verdict, saleState, onClose }: VerdictPanelProps) {
+export function VerdictPanel({
+  verdict,
+  saleState,
+  onClose,
+  focusOnMount = true,
+}: VerdictPanelProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const accent = accentFor(verdict.kind);
   const frame = frameFor(verdict.kind, saleState);
 
-  // Focus the dialog when it lands. That focus move seats the keyboard inside
-  // the modal so the trap below has somewhere to keep it.
+  // Focus the dialog when it lands — but only when it answers an action the user
+  // took. That focus move seats the keyboard inside the modal so the trap below
+  // has somewhere to keep it.
   useEffect(() => {
-    dialogRef.current?.focus();
-  }, [verdict]);
+    if (focusOnMount) {
+      dialogRef.current?.focus();
+    }
+  }, [verdict, focusOnMount]);
 
   // Escape closes; Tab is trapped within the dialog so focus never escapes to
   // the dimmed page behind it.
@@ -145,10 +157,19 @@ export function VerdictPanel({ verdict, saleState, onClose }: VerdictPanelProps)
             <span aria-hidden="true">×</span>
           </button>
 
+          {/* A polite announcement stands in for the focus move a load-check
+              deliberately declines to make. */}
+          {focusOnMount ? null : (
+            <p className="visually-hidden" aria-live="polite" data-testid="verdict-announce">
+              {frame === null ? verdict.message : `${frame} ${verdict.message}`}
+            </p>
+          )}
+
           {/* Success alone gets the slapped-on flag; it IS this verdict's frame,
-              so the frame is never rendered twice. */}
+              so the frame is never rendered twice. Sentence-cased at
+              headline-family scale — never CSS-uppercased at chip size. */}
           {verdict.kind === "success" ? (
-            <span className="t-chip verdict-panel__flag" data-testid="verdict-flag">
+            <span className="verdict-panel__flag" data-testid="verdict-flag">
               {SUCCESS_FRAME}
             </span>
           ) : frame === null ? null : (

@@ -8,12 +8,7 @@
 import { describe, expect, it } from "vitest";
 import tokensCss from "./tokens.css?raw";
 import baseCss from "./base.css?raw";
-import appCss from "../App.css?raw";
 import marqueeCss from "../components/MarqueeBand.css?raw";
-import mastheadCss from "../components/Masthead.css?raw";
-import panelCss from "../components/Panel.css?raw";
-import productTileCss from "../components/ProductTile.css?raw";
-import rulesChipsCss from "../components/RulesChips.css?raw";
 
 /** Comments are prose — they may name what the system forbids ("true #000
  *  never appears"). The rules are what we assert against. */
@@ -21,16 +16,18 @@ function rules(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, "");
 }
 
-const SHEETS: [name: string, css: string][] = [
-  ["tokens.css", tokensCss],
-  ["base.css", baseCss],
-  ["App.css", appCss],
-  ["MarqueeBand.css", marqueeCss],
-  ["Masthead.css", mastheadCss],
-  ["Panel.css", panelCss],
-  ["ProductTile.css", productTileCss],
-  ["RulesChips.css", rulesChipsCss],
-];
+// The gate reads EVERY stylesheet in the client, derived at load time — not a
+// hand-maintained list that silently omits sheets added by later stories (and
+// lets off-palette values in them pass green). `?raw` keeps it Vite-native.
+const CSS_MODULES = import.meta.glob("../**/*.css", {
+  query: "?raw",
+  import: "default",
+  eager: true,
+}) as Record<string, string>;
+
+const SHEETS: [name: string, css: string][] = Object.entries(CSS_MODULES).map(
+  ([path, css]) => [path.split("/").pop() ?? path, css],
+);
 
 const COLORS: Record<string, string> = {
   ink: "#1a1408",
