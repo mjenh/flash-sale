@@ -110,7 +110,7 @@ describe("GET /api/order/:email (booted via bootstrap())", () => {
         const baseline = redisCommandCount(fake);
         const res = await request(app).get(path);
         expect(res.status).toBe(400);
-        expect(res.body).toEqual({ success: false, error: "Email is required." });
+        expect(res.body).toEqual({ success: false, error: "Email or name is required." });
         expect(redisCommandCount(fake)).toBe(baseline);
       });
     }

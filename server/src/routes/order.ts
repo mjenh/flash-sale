@@ -53,7 +53,7 @@ export function createOrderRouter({ orderService }: OrderRouterDeps): Router {
   router.post("/", async (req: Request, res: Response) => {
     const email = validEmail(req.body);
     if (email === undefined) {
-      res.status(400).json({ success: false, error: "Email is required." });
+      res.status(400).json({ success: false, error: "Email or name is required." });
       return;
     }
 
@@ -78,7 +78,7 @@ export function createOrderRouter({ orderService }: OrderRouterDeps): Router {
   // — honest 400, not a generic 404 (Express 5 non-strict routing sends both
   // `/api/order` and `/api/order/` here).
   router.get("/", (_req: Request, res: Response) => {
-    res.status(400).json({ success: false, error: "Email is required." });
+    res.status(400).json({ success: false, error: "Email or name is required." });
   });
 
   // FR-4 (Story 1.5): convenience/idempotency read (AD-8) — answered from
@@ -87,7 +87,7 @@ export function createOrderRouter({ orderService }: OrderRouterDeps): Router {
   router.get("/:email", async (req: Request, res: Response) => {
     const email = canonicalEmail(req.params.email);
     if (email === undefined) {
-      res.status(400).json({ success: false, error: "Email is required." });
+      res.status(400).json({ success: false, error: "Email or name is required." });
       return;
     }
 
