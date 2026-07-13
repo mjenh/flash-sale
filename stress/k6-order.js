@@ -26,6 +26,14 @@ const already = new Counter("order_already_200");
 const unexpectedStatus = new Rate("unexpected_status");
 const fivexx = new Counter("order_5xx");
 
+// 4xx are EXPECTED here (409 is the fair loser's answer) — without this,
+// k6's default http_req_failed would count every honest rejection as an error.
+// NOTE: `setResponseCallback` is the correct init-context API; the old
+// `options.responseCallback` field is not recognized by k6 ≥ 2.x and caused
+// a "unknown field" warning that left the default callback in place, making
+// every 409 count as a failure and breaching the http_req_failed threshold.
+http.setResponseCallback(http.expectedStatuses(200, 201, 409));
+
 export const options = {
   scenarios: {
     // A genuine concurrent burst: ATTEMPTS unique emails shared across VUS
@@ -64,9 +72,6 @@ export const options = {
     http_req_failed: ["rate==0"],
     unexpected_status: ["rate==0"],
   },
-  // 4xx are EXPECTED here (409 is the fair loser's answer) — without this,
-  // k6's default http_req_failed would count every honest rejection as an error.
-  responseCallback: http.expectedStatuses(200, 201, 409),
 };
 
 function post(email) {

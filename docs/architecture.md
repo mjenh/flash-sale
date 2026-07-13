@@ -247,7 +247,79 @@ spinner.
 
 ## 5. Data and state model
 
-**Redis (runtime truth)**
+### 5.1 Domain model
+
+Eight Mongoose collections ship in v1. Schema ships now; behavior is
+trigger-gated — some entities are boot-seeded constants, some are written per
+order, and one is dormant by design.
+
+```mermaid
+erDiagram
+    Sale ||--o{ SaleProduct : contains
+    Product ||--o{ SaleProduct : listed_in
+    Product ||--o{ Inventory : stocked_as
+    Sale ||--o{ Order : receives
+    User ||--o{ Order : places
+    Order ||--o{ OrderLine : includes
+    Product ||--o{ OrderLine : of_product
+    Sale ||--o{ Reservation : "reserves (dormant)"
+    Product ||--o{ Reservation : "reserved for (dormant)"
+
+    Sale {
+        string slug UK "flash-sale"
+        Date startTime
+        Date endTime
+        number stockQuantity
+    }
+    Product {
+        string sku UK "KEYCAP-ONE"
+        string name "Keycap One"
+    }
+    SaleProduct {
+        ObjectId saleId FK
+        ObjectId productId FK
+    }
+    Inventory {
+        ObjectId productId FK
+        number initialQuantity "seeded once, never ticked"
+    }
+    User {
+        string identifier UK "email"
+    }
+    Order {
+        ObjectId saleId FK
+        string email "wire identity"
+        ObjectId userId FK
+        string status "confirmed (only v1 value)"
+    }
+    OrderLine {
+        ObjectId orderId FK
+        ObjectId productId FK
+        number quantity "1"
+        number unitPrice "0 (payment out of scope)"
+    }
+    Reservation {
+        ObjectId saleId FK
+        ObjectId productId FK
+        string email
+        string status
+        Date expiresAt
+    }
+```
+
+**Lifecycle categories:**
+
+| Category | Collections | Behavior |
+| --- | --- | --- |
+| Boot-seeded constants | `products`, `sales`, `saleproducts`, `inventories` | Upserted idempotently at boot from env config. Never written per order. `Inventory.initialQuantity` is seeded from `STOCK_QUANTITY` but never decremented — concurrency truth lives in Redis. |
+| Per-order writes | `users`, `orders`, `orderlines` | Written asynchronously after a Redis `OK` (§4.1). `Order` has a compound unique index on `(saleId, email)` as defense-in-depth. `OrderLine` defaults to qty 1, unitPrice 0 (payment out of scope). |
+| Dormant | `reservations` | Schema ships but no code path writes it. Activates at the reserve-then-confirm payment trigger (a future milestone). |
+
+All schemas use `timestamps: true`. Unique indexes guard `users.identifier`,
+`products.sku`, `saleproducts(saleId, productId)`, and
+`orders(saleId, email)`.
+
+### 5.2 Redis state (runtime truth)
 
 - `stock:remaining` — integer unit count; also the warm/cold sentinel.
 - `orders:users` — set of buyer emails holding a confirmed order.
@@ -256,7 +328,18 @@ spinner.
 Permitted writers of the two state keys are exactly three: the Lua script while
 serving, the boot rebuild before `listen()`, and the offline reset script.
 
-**MongoDB (durable audit)** — the domain documents in §3.5. It records outcomes;
+### 5.3 Key interfaces
+
+| Type | Location | Purpose |
+| --- | --- | --- |
+| `AppConfig` | `adapters/config.ts` | Boot-parsed env: port, store URLs, stock, sale window (epoch ms + ISO strings), Redis timeouts. |
+| `OrderVerdict` | `adapters/redis/orders.ts` | `"OK" \| "ALREADY" \| "SOLD_OUT"` — the Lua script's three outcomes. |
+| `SaleStatus` | `services/sale-status.ts` | `"upcoming" \| "active" \| "ended" \| "sold_out"` — the four lifecycle states. |
+| `OrderOutcome` | `services/order.ts` | `created \| already \| sold_out \| inactive` — the service-level verdicts mapped to HTTP. |
+| `PaymentProvider` | `services/payment.ts` | Charge port; `noop.ts` is the sole v1 impl (instant-approve, cannot fail). |
+| `Clock` | `services/clock.ts` | `() => number` — injected into services so routes/adapters never call `Date.now()`. |
+
+**MongoDB (durable audit)** — the domain documents above. It records outcomes;
 it never decides them. Its only runtime read is the cold-start rebuild.
 
 ## 6. Restart safety: the warm/cold gate

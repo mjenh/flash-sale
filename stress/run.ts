@@ -12,7 +12,7 @@
 // Every phase prints as it starts and hard-fails the run on error. The combined
 // exit code is the pass/fail signal: 0 only when every phase passed.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve as resolvePath } from "node:path";
 import { loadStressConfig, type StressConfig } from "./config.ts";
@@ -21,6 +21,31 @@ import { runVerify } from "./verify.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolvePath(HERE, "..");
+const STRESS_ENV_FILE = resolvePath(REPO_ROOT, ".env.stress");
+
+/** Load .env.stress into process.env so the harness config and Docker Compose
+ *  always agree on STOCK_QUANTITY, the sale window, and store URLs. Values
+ *  already present in process.env take precedence (explicit overrides win). */
+function loadStressEnv(): void {
+  if (!existsSync(STRESS_ENV_FILE)) {
+    return; // fall back to process.env / defaults — backwards compatible
+  }
+  const lines = readFileSync(STRESS_ENV_FILE, "utf8").split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq === -1) continue;
+    const key = trimmed.slice(0, eq).trim();
+    const value = trimmed.slice(eq + 1).trim();
+    // Do not overwrite explicit env — `STOCK_QUANTITY=200 npm run stress` wins.
+    if (process.env[key] === undefined) {
+      process.env[key] = value;
+    }
+  }
+}
+
+loadStressEnv();
 
 interface Phase {
   name: string;
@@ -53,7 +78,10 @@ function record(name: string, ok: boolean, detail?: string): boolean {
 }
 
 function compose(args: string[], env: NodeJS.ProcessEnv = process.env): number {
-  const res = spawnSync("docker", ["compose", ...args], {
+  // --env-file .env.stress ensures Docker Compose variable interpolation uses
+  // the stress config (especially STOCK_QUANTITY), not the developer's .env.
+  const envFileArgs = existsSync(STRESS_ENV_FILE) ? ["--env-file", STRESS_ENV_FILE] : [];
+  const res = spawnSync("docker", ["compose", ...envFileArgs, ...args], {
     cwd: REPO_ROOT,
     stdio: "inherit",
     env,

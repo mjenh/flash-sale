@@ -169,6 +169,13 @@ stock (`STOCK_QUANTITY`, default 100) are all overridable, so the same proof run
 at any scale. The combined exit code is the pass/fail signal. See §9 of
 [`docs/architecture.md`](docs/architecture.md) for the full protocol.
 
+### Stress configuration
+
+The stress harness uses its own `.env.stress` file (separate from the
+development `.env`) so the API container and the harness always agree on
+`STOCK_QUANTITY` and the sale window. Explicit environment variables still
+override — `STOCK_QUANTITY=200 npm run stress` works as expected.
+
 ## Project layout
 
 An npm-workspaces monorepo. Three workspaces, plus docs and the Docker stack at
@@ -202,3 +209,113 @@ Dockerfile              multi-stage api image (client build → node:24-alpine)
 docker-compose.yml      api + redis:8-alpine (AOF) + mongo:8 — the one-command stack
 Makefile                install / dev / build / deploy / stress / clean targets
 ```
+
+## Domain model
+
+The system models a single flash sale with one product. Eight Mongo collections
+ship; Redis holds the runtime truth.
+
+**MongoDB (durable audit) — three categories:**
+
+| Category | Collections | Role |
+| --- | --- | --- |
+| Boot-seeded constants | `products`, `sales`, `saleproducts`, `inventories` | Upserted idempotently at boot from env config. Never written per order. `Inventory.initialQuantity` is seeded from `STOCK_QUANTITY` but never decremented — concurrency truth lives in Redis. |
+| Per-order writes | `users`, `orders`, `orderlines` | Written async after a Redis `OK`. `Order` carries a compound unique index on `(saleId, email)` as defense-in-depth. |
+| Dormant | `reservations` | Schema ships, no code writes it. Reserved for a future reserve-then-confirm payment flow. |
+
+**Redis (runtime truth) — two keys + one channel:**
+
+| Key | Type | Purpose |
+| --- | --- | --- |
+| `stock:remaining` | integer | Units left; also the warm/cold boot sentinel |
+| `orders:users` | set | Buyer emails with confirmed orders |
+| `sale:events` | pub/sub | Type-only event strings (`order.accepted`, `sale.sold_out`, `sale.started`, `sale.ended`) |
+
+The Lua script, the boot rebuild, and the offline reset script are the only
+permitted writers of the two state keys. The full ER diagram and interface
+catalog live in
+[`docs/architecture.md` §5](docs/architecture.md#5-data-and-state-model).
+
+## Known limitations
+
+These are accepted properties of the v1 design, not overlooked bugs. Each is
+documented so a future maintainer inherits the reasoning.
+
+**Audit under-count window.** A crash between "Redis accepted the order" and
+"Mongo recorded it" permanently loses that audit row. The buyer keeps their
+order (Redis is correct; a retry returns 200), but Mongo under-counts by one.
+This is the deliberate cost of the async decision path — rolling back a promised
+order would be worse. The outbox pattern closes the gap without putting Mongo on
+the hot path.
+
+**Single Redis primary is the throughput ceiling.** The API tier scales
+horizontally (stateless, shared Redis), but every accepted order is one
+round-trip to one Redis primary. A single primary handles a flash sale's write
+rate comfortably; it is the bottleneck by design.
+
+**Email aliasing bypass.** Email is NFC-normalized and case-folded
+(`A@x.com` = `a@x.com`), but provider-specific aliases (Gmail dots, `+tags`)
+are not folded — a determined buyer can order twice with `a@gmail.com` and
+`a+1@gmail.com`. Correct alias handling is provider-specific and easy to get
+subtly wrong; an authenticated account id is the production fix.
+
+**No rate limiting.** The API has no per-client throttle. The Lua script's
+atomicity prevents oversell regardless of request volume, but an abusive client
+can waste bandwidth. Rate limiting is an operational concern layered above the
+correctness guarantee.
+
+**No authentication or payment.** Identity is an email string; payment is a
+no-op adapter. Both are explicit non-goals for v1, with the architecture
+designed so real implementations slot in without disturbing the decision core.
+
+**SSE connection cap.** HTTP/1.1 limits browsers to roughly 6 concurrent
+connections per origin. A single-tab demo is unaffected, but multiple tabs from
+one browser will exhaust the budget. HTTP/2 or a managed WebSocket tier removes
+the limit.
+
+**Redis command timeout can 503 a committed order.** A network timeout may
+return 503 for an order that actually committed server-side. The idempotent
+retry recovers on the next attempt, but the first response was wrong.
+
+## Roadmap
+
+Improvements below are ordered by value, with the highest-impact items first.
+Each builds on the current architecture without disturbing the decision core.
+
+**Payment integration.** The `PaymentProvider` port already exists with a no-op
+implementation. A real adapter (Stripe, etc.) slots in after the Redis `OK`,
+with a reserve-then-confirm flow activating the dormant `Reservation` schema.
+This is the first feature that turns the system from a demo into a real sale.
+
+**Outbox pattern for audit durability.** The accepting Lua script pushes an
+event to a Redis list alongside the `SADD`/`DECR`; a background worker drains
+the list to Mongo. Closes the audit under-count window (the one known data-loss
+path) without putting Mongo on the hot path.
+
+**Authentication and account identity.** Replace the raw email with an
+authenticated user id. The set-membership mechanism is unchanged — only the key
+stored in `orders:users` changes. Eliminates the email aliasing bypass entirely.
+
+**Rate limiting.** A per-IP or per-email throttle at the API edge (or via a
+reverse proxy). Prevents bandwidth waste from abusive clients without affecting
+the fairness guarantee.
+
+**Observability.** Structured metrics (Prometheus counters for orders, stock,
+latency histograms), distributed tracing (OpenTelemetry), and alerting.
+Currently the system logs one pino line per request.
+
+**CI pipeline.** Automated gates: lint, typecheck, unit tests, integration
+tests, and the stress harness on every push. Currently all gates are manual
+(`npm test`, `npm run typecheck`, `make stress`).
+
+**Multi-node scale-out.** Redis Cluster or Redlock for write distribution across
+nodes. The single-writer Lua script is the correct design for one primary; at
+true horizontal scale, per-node sub-inventories with a coordinator become
+necessary.
+
+**Runtime sale administration.** An admin endpoint to adjust the sale window or
+stock without restarting the API. Currently all config is boot-parsed env vars.
+
+**Service decomposition.** If the system grows beyond a single product and sale,
+the monolith splits along its existing layer boundaries: an order service, an
+inventory service, and a notification service, each owning its store.
