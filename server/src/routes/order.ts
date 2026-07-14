@@ -1,8 +1,13 @@
 // Validate the request (a 400 never touches Redis), call the order service,
 // map the outcome to the wire contract. Rejections propagate via Express 5
 // async handling to the central error middleware — no try/catch.
+//
+// Story 4.4: both handlers read req.sale (attached by the sale-resolver
+// middleware) and pass its saleId/window through to the order service on
+// every call, instead of a bootstrap-frozen saleId baked into the deps.
 import { Router, type Request, type Response } from "express";
 import type { OrderService } from "../services/order.ts";
+import { windowFromSale } from "../middleware/sale-resolver.ts";
 
 export interface OrderRouterDeps {
   orderService: OrderService;
@@ -45,13 +50,20 @@ export function createOrderRouter({ orderService }: OrderRouterDeps): Router {
   const router = Router();
 
   router.post("/", async (req: Request, res: Response) => {
+    const sale = req.sale;
+    if (sale === undefined) {
+      // Unreachable in practice — forSlug() 404s first, and forActiveSale()
+      // always finds the single boot-seeded sale. Defensive narrowing only.
+      res.status(404).json({ success: false, error: "Sale not found." });
+      return;
+    }
     const email = validEmail(req.body);
     if (email === undefined) {
       res.status(400).json({ success: false, error: "Email is required." });
       return;
     }
 
-    const result = await orderService.attempt(email);
+    const result = await orderService.attempt({ saleId: sale._id, window: windowFromSale(sale) }, email);
     switch (result.outcome) {
       case "created":
         res.status(201).json({ success: true, email, message: "Order successful." });
@@ -78,13 +90,19 @@ export function createOrderRouter({ orderService }: OrderRouterDeps): Router {
   // Convenience/idempotency read — answered from Redis membership only, never
   // Mongo, and never clock-gated. Both branches are 200 success bodies.
   router.get("/:email", async (req: Request, res: Response) => {
+    const sale = req.sale;
+    if (sale === undefined) {
+      // Unreachable in practice — see the POST handler's comment above.
+      res.status(404).json({ success: false, error: "Sale not found." });
+      return;
+    }
     const email = canonicalEmail(req.params.email);
     if (email === undefined) {
       res.status(400).json({ success: false, error: "Email is required." });
       return;
     }
 
-    const ordered = await orderService.hasOrdered(email);
+    const ordered = await orderService.hasOrdered(sale._id, email);
     res.status(200).json({ success: true, ordered, email });
   });
 

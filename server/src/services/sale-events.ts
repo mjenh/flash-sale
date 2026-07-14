@@ -11,8 +11,24 @@
 // Also owns the window-boundary timers: boot arms sale.started / sale.ended
 // for FUTURE boundaries only; elapsed boundaries arm nothing —
 // snapshot-on-connect heals.
+//
+// Story 4.4: sale-status.getStatus() now takes (saleId, window) per call
+// instead of a bootstrap-frozen window. This broadcaster stays a SINGLE
+// shared state machine (sinks, the coalescing chain, the heartbeat, and the
+// window-boundary timers are all still boot-scoped, unchanged) — v1.1
+// enforces exactly one active sale at a time, so one instance is correct.
+// Two call sites need a saleId+window to compose a frame, and they differ in
+// whether they have request context:
+//   - snapshotFrame(saleId, window): called from the SSE route at connect
+//     time, which already has req.sale in hand — accepts it explicitly
+//     ("subscribe-time" parameterization).
+//   - emit() / ensureTerminalIfSoldOut(): triggered by the Redis pub/sub
+//     subscriber or the heartbeat timer, neither of which has a request —
+//     these re-derive the current active sale via the injected
+//     getActiveSale() on every call, rather than freezing one at
+//     construction, so the broadcaster tracks whichever sale is active.
 import type { Clock } from "./clock.ts";
-import type { SaleStatus, SaleStatusService } from "./sale-status.ts";
+import type { SaleStatus, SaleStatusService, SaleWindow } from "./sale-status.ts";
 
 /** Type-only domain events on the `sale:events` channel. */
 export type SaleEventType = "order.accepted" | "sale.sold_out" | "sale.started" | "sale.ended";
@@ -45,10 +61,11 @@ export interface SseSink {
 
 export interface SaleEventsBroadcaster {
   /** Snapshot-on-connect frame (fresh Redis read via the sale-status
-   *  service). A RedisUnavailableError rejection propagates untouched —
-   *  the route lets it reach the central middleware before headers are
-   *  sent, so new streams 503 while Redis is down. */
-  snapshotFrame(): Promise<string>;
+   *  service) for the given resolved sale. A RedisUnavailableError
+   *  rejection propagates untouched — the route lets it reach the central
+   *  middleware before headers are sent, so new streams 503 while Redis is
+   *  down. */
+  snapshotFrame(saleId: string, window: SaleWindow): Promise<string>;
   /** Adds a connection; returns an idempotent unregister function. The
    *  shared heartbeat interval runs lazily while >= 1 sink is registered. */
   register(sink: SseSink): () => void;
@@ -66,6 +83,13 @@ export interface SaleEventsBroadcasterDeps {
   /** Compose failures are reported here (bootstrap wires logger.error),
    *  then every stream is closed — never thrown into a request path. */
   reportBroadcastFailure: (err: unknown) => void;
+  /** Resolves the currently active sale's identity + window for the
+   *  pubsub/heartbeat-driven composition paths (emit, the sold-out safety
+   *  net), which have no per-request context. Re-derived on every call
+   *  (bootstrap wires this to the cached sale-resolver) rather than frozen
+   *  once at construction — v1.1 only ever has one active sale, but this
+   *  keeps the broadcaster tracking whichever one that is. */
+  getActiveSale: () => Promise<{ saleId: string; window: SaleWindow }>;
   /** Test-only overrides for the coalescing and heartbeat intervals. */
   coalesceMs?: number;
   heartbeatMs?: number;
@@ -75,6 +99,7 @@ export function createSaleEventsBroadcaster({
   saleStatus,
   clock,
   reportBroadcastFailure,
+  getActiveSale,
   coalesceMs = COALESCE_MS,
   heartbeatMs = HEARTBEAT_MS,
 }: SaleEventsBroadcasterDeps): SaleEventsBroadcaster {
@@ -127,7 +152,8 @@ export function createSaleEventsBroadcaster({
     }
     let status: SaleStatus;
     try {
-      ({ status } = await saleStatus.getStatus());
+      const active = await getActiveSale();
+      ({ status } = await saleStatus.getStatus(active.saleId, active.window));
     } catch {
       return;
     }
@@ -187,7 +213,8 @@ export function createSaleEventsBroadcaster({
         if (sinks.size === 0) {
           return; // nobody listening — skip the read entirely
         }
-        const frame = formatStatusFrame(await saleStatus.getStatus());
+        const active = await getActiveSale();
+        const frame = formatStatusFrame(await saleStatus.getStatus(active.saleId, active.window));
         for (const sink of [...sinks]) {
           writeTo(sink, frame);
         }
@@ -199,8 +226,8 @@ export function createSaleEventsBroadcaster({
   };
 
   return {
-    async snapshotFrame(): Promise<string> {
-      return formatStatusFrame(await saleStatus.getStatus());
+    async snapshotFrame(saleId: string, window: SaleWindow): Promise<string> {
+      return formatStatusFrame(await saleStatus.getStatus(saleId, window));
     },
 
     register(sink: SseSink): () => void {

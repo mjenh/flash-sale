@@ -111,6 +111,70 @@ describe("GET /api/sale/events — stream contract", () => {
   });
 });
 
+// Story 4.4 (AC4, AC5, AC6): the slug-scoped SSE route must be byte-for-byte
+// identical to the v1.0 alias — both flow through the same broadcaster and
+// resolve the same req.sale (forSlug() on the one valid slug vs.
+// forActiveSale() on the alias mount), so their snapshots, live updates, and
+// terminal frames must never diverge.
+describe("GET /api/sales/:slug/events — identical to the v1.0 alias", () => {
+  it("the connect-time snapshot is byte-for-byte identical to GET /api/sale/events", async () => {
+    const { app } = await boot({ nowMs: IN_WINDOW, stock: "37" });
+
+    const alias = await openSse(app, "/api/sale/events");
+    const [aliasSnapshot] = await alias.waitForFrames(1);
+
+    const scoped = await openSse(app, "/api/sales/flash-sale/events");
+    const [scopedSnapshot] = await scoped.waitForFrames(1);
+
+    expect(scopedSnapshot).toBe(aliasSnapshot);
+    expect(frameData(scopedSnapshot as string)).toEqual({
+      success: true,
+      status: "active",
+      stock: 37,
+      startTime: START_ISO,
+      endTime: END_ISO,
+    });
+  });
+
+  it("a live order.accepted update reaches BOTH the alias and slug-scoped connections with the identical frame", async () => {
+    const { app } = await boot({ nowMs: IN_WINDOW, stock: "3" });
+    const alias = await openSse(app, "/api/sale/events");
+    const scoped = await openSse(app, "/api/sales/flash-sale/events");
+    await alias.waitForFrames(1);
+    await scoped.waitForFrames(1);
+
+    const res = await request(app).post("/api/sales/flash-sale/order").send({ email: "buyer@example.com" });
+    expect(res.status).toBe(201);
+    await drain();
+
+    const aliasFrames = await alias.waitForFrames(2);
+    const scopedFrames = await scoped.waitForFrames(2);
+    expect(scopedFrames[1]).toBe(aliasFrames[1]);
+    expect(frameData(scopedFrames[1] as string)).toEqual({
+      success: true,
+      status: "active",
+      stock: 2,
+      startTime: START_ISO,
+      endTime: END_ISO,
+    });
+  });
+
+  it("returns 404 for an unknown slug — never opens a stream", async () => {
+    const { app } = await boot({ nowMs: IN_WINDOW, stock: "37" });
+    const res = await request(app).get("/api/sales/nonexistent/events");
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ success: false, error: "Sale not found." });
+  });
+
+  it("fails closed with the exact 503 envelope while Redis is down, same as the v1.0 alias", async () => {
+    const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "37" });
+    fake.failing = true;
+    const res = await request(app).get("/api/sales/flash-sale/events");
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({ success: false, error: "Service temporarily unavailable." });
+  });
+});
+
 describe("live update path", () => {
   it("an accepted order publishes order.accepted and the stream receives the decremented truth", async () => {
     const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "3" });

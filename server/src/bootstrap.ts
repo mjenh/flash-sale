@@ -23,12 +23,17 @@ import {
 } from "./adapters/mongo/seed.ts";
 import { createCatalogReader, mongoCatalogModelOps, type CatalogModelOps } from "./adapters/mongo/catalog.ts";
 import { noopPaymentProvider } from "./adapters/payment/noop.ts";
-import { createSaleStatusService, type StockReader } from "./services/sale-status.ts";
+import { createSaleStatusService, type SaleWindow } from "./services/sale-status.ts";
 import { armWindowTimers, createSaleEventsBroadcaster } from "./services/sale-events.ts";
 import { createOrderService, type OrderAttemptPort, type OrderEventsPort } from "./services/order.ts";
 import type { PaymentProvider } from "./services/payment.ts";
 import { systemClock, type Clock } from "./services/clock.ts";
-import { createSaleResolver, type SaleLookupOps, type SaleSummary } from "./middleware/sale-resolver.ts";
+import {
+  createSaleResolver,
+  windowFromSale,
+  type SaleLookupOps,
+  type SaleSummary,
+} from "./middleware/sale-resolver.ts";
 import { createApiRouter } from "./routes/index.ts";
 import { createApp } from "./app.ts";
 
@@ -114,15 +119,51 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
   };
   const seeder = createDomainSeeder(mongoOps.seed);
   const saleRefs = await seeder.seed(config);
-  // Story 4.2: Redis keys/channel are namespaced by saleId — the resolved
-  // Sale's Mongo ObjectId string (req.sale._id per the sale-resolver
-  // middleware). v1.0 handlers (routes/sale.ts, routes/order.ts) don't yet
-  // read req.sale (that's Story 4.4's job), so this boot-resolved saleId is
-  // the interim "the one sale" identity threaded into the adapters below.
-  // The v1.0 flat keys (stock:remaining, orders:users, sale:events) are no
-  // longer written or read by the live request path; Story 4.6 owns
-  // migrating any surviving flat-key data from a pre-4.2 deployment.
+  // Redis keys/channel are namespaced by saleId (Story 4.2) — the resolved
+  // Sale's Mongo ObjectId string, i.e. req.sale._id per the sale-resolver
+  // middleware. The v1.0 flat keys (stock:remaining, orders:users,
+  // sale:events) are no longer written or read by the live request path;
+  // Story 4.6 owns migrating any surviving flat-key data from a pre-4.2
+  // deployment.
   const saleId = saleRefs.saleId;
+
+  // Shared clock: the same instance feeds HTTP, the order service, and the
+  // SSE broadcaster/timers.
+  const clock = overrides.clock ?? systemClock;
+
+  // Sale resolution middleware — slug -> Sale doc with in-memory cache.
+  // Boot validation: the slug "active" is reserved for the discovery endpoint.
+  if ((SALE_SLUG as string) === "active") {
+    throw new ConfigError('The slug "active" is reserved for the discovery endpoint and cannot be used as a sale slug.');
+  }
+  // Single-sale ops derived from boot-seeded data. A later story will
+  // replace this with a Mongoose-backed implementation for true multi-sale
+  // slug lookup (Story 4.3 added the Mongo-backed product/inventory join
+  // below, but sale identity itself is still this boot-seeded singleton).
+  const seededSale: SaleSummary = {
+    _id: saleRefs.saleId,
+    slug: SALE_SLUG,
+    name: SALE_NAME,
+    startTime: new Date(config.saleStartMs),
+    endTime: new Date(config.saleEndMs),
+    stockQuantity: config.stockQuantity,
+  };
+  const defaultSaleLookupOps: SaleLookupOps = {
+    async findBySlug(slug: string): Promise<SaleSummary | null> {
+      return slug === seededSale.slug ? seededSale : null;
+    },
+    async findActiveSale(): Promise<SaleSummary | null> {
+      return seededSale;
+    },
+  };
+  // Constructed early (right after seeding) because Story 4.4's SSE
+  // broadcaster wiring below needs saleResolver.findActive() to derive the
+  // currently-active sale for its pubsub/heartbeat-driven frame composition.
+  const saleResolver = createSaleResolver({
+    ops: overrides.saleLookupOps ?? defaultSaleLookupOps,
+    clock,
+  });
+
   const reconciler = createReconciler(redis, {
     commandTimeoutMs: config.redisCommandTimeoutMs,
   });
@@ -149,23 +190,11 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
   const stockStore = createStockStore(redis, {
     commandTimeoutMs: config.redisCommandTimeoutMs,
   });
-  // Bind the boot-resolved saleId into the narrower StockReader port the
-  // sale-status service expects — keeps that service framework-free and
-  // saleId-agnostic (Story 4.4 will make this per-request).
-  const stockReader: StockReader = {
-    getRemaining: () => stockStore.getRemaining(saleId),
-  };
 
-  // Shared clock + window + status service: the same instances feed
-  // HTTP, the order service, and the SSE broadcaster.
-  const clock = overrides.clock ?? systemClock;
-  const window = {
-    startMs: config.saleStartMs,
-    endMs: config.saleEndMs,
-    startIso: config.saleStartIso,
-    endIso: config.saleEndIso,
-  };
-  const saleStatus = createSaleStatusService({ clock, stock: stockReader, window });
+  // Story 4.4: saleId/window are per-call arguments now, not a bootstrap-
+  // frozen dep — stockStore.getRemaining(saleId) already matches the
+  // StockReader port shape exactly (Story 4.2), so it's injected unwrapped.
+  const saleStatus = createSaleStatusService({ clock, stock: stockStore });
 
   // Sale-events realtime layer: PUBLISH rides the main client; SUBSCRIBE runs
   // on a dedicated duplicated connection; boot arms window timers for FUTURE
@@ -174,12 +203,28 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
   const eventPublisher = createEventPublisher(redis, {
     commandTimeoutMs: config.redisCommandTimeoutMs,
   });
+  // Story 4.4: the broadcaster's pubsub/heartbeat-driven composition (no
+  // request context) re-derives the active sale on every call through the
+  // same cached resolver req.sale routes use, rather than a saleId frozen at
+  // construction — see services/sale-events.ts's file header for why this
+  // differs from snapshotFrame(), which takes req.sale explicitly.
+  const getActiveSale = async (): Promise<{ saleId: string; window: SaleWindow }> => {
+    const active = await saleResolver.findActive();
+    if (active === null) {
+      // Unreachable given this system always boot-seeds exactly one sale;
+      // treated as a compose failure by the broadcaster's callers (report +
+      // fail closed) rather than fabricating a sale identity.
+      throw new Error("no active sale configured");
+    }
+    return { saleId: active._id, window: windowFromSale(active) };
+  };
   const saleEvents = createSaleEventsBroadcaster({
     saleStatus,
     clock,
     reportBroadcastFailure: (err) => {
       logger.error({ err }, "sse broadcast failed; closing open streams");
     },
+    getActiveSale,
   });
   const duplicateRedis = overrides.duplicateRedis ?? ((client: RedisClient) => client.duplicate());
   const subscription = await createSaleEventsSubscription(duplicateRedis(redis), {
@@ -203,58 +248,30 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
     },
   });
 
-  // 4. Sale resolution middleware — slug -> Sale doc with in-memory cache.
-  // Boot validation: the slug "active" is reserved for the discovery endpoint.
-  if ((SALE_SLUG as string) === "active") {
-    throw new ConfigError('The slug "active" is reserved for the discovery endpoint and cannot be used as a sale slug.');
-  }
-  // Single-sale ops derived from boot-seeded data. A later story will
-  // replace this with a Mongoose-backed implementation for true multi-sale
-  // slug lookup (Story 4.3 added the Mongo-backed product/inventory join
-  // below, but sale identity itself is still this boot-seeded singleton).
-  const seededSale: SaleSummary = {
-    _id: saleRefs.saleId,
-    slug: SALE_SLUG,
-    name: SALE_NAME,
-    startTime: new Date(config.saleStartMs),
-    endTime: new Date(config.saleEndMs),
-    stockQuantity: config.stockQuantity,
-  };
-  const defaultSaleLookupOps: SaleLookupOps = {
-    async findBySlug(slug: string): Promise<SaleSummary | null> {
-      return slug === seededSale.slug ? seededSale : null;
-    },
-    async findActiveSale(): Promise<SaleSummary | null> {
-      return seededSale;
-    },
-  };
-  const saleResolver = createSaleResolver({
-    ops: overrides.saleLookupOps ?? defaultSaleLookupOps,
-    clock,
-  });
-
   // Story 4.3: the Sale -> SaleProduct -> Product -> Inventory join, read by
   // the sale details endpoint. Reuses the unbound `stockStore` (getRemaining
-  // takes saleId directly) rather than the boot-bound `stockReader`, since
-  // the endpoint resolves its saleId per request via req.sale.
+  // takes saleId directly) since the endpoint resolves its saleId per
+  // request via req.sale.
   const catalog = createCatalogReader(mongoOps.catalog);
 
-  // 5. App assembly.
-  // Bind the boot-resolved saleId into the narrower ports createOrderService
-  // expects — the order service itself stays framework-free and saleId-
-  // agnostic (Story 4.4 threads req.sale through per-request instead).
+  // 4. App assembly.
+  // Story 4.4: these ports are now pure saleId-parameterized passthroughs —
+  // no bootstrap-frozen saleId closure. The route handlers (routes/order.ts)
+  // pass req.sale._id through to the order service on every call.
   const orderAttemptPort: OrderAttemptPort = {
-    attempt: (email) => orderStore.attempt(saleId, email),
-    hasOrdered: (email) => orderStore.hasOrdered(saleId, email),
+    attempt: (id, email) => orderStore.attempt(id, email),
+    hasOrdered: (id, email) => orderStore.hasOrdered(id, email),
   };
   const orderEventsPort: OrderEventsPort = {
-    publish: (event) => eventPublisher.publish(event, saleId),
+    publish: (event, id) => eventPublisher.publish(event, id),
   };
   const orderService = createOrderService({
     clock,
-    window,
     orders: orderAttemptPort,
-    audit: createOrderRecorder(saleRefs, mongoOps.audit),
+    // productId still closes over the single boot-seeded product (v1.1 ships
+    // exactly one product per sale, per Story 4.3) — only saleId travels
+    // per-call now.
+    audit: createOrderRecorder(saleRefs.productId, mongoOps.audit),
     payment: overrides.payment ?? noopPaymentProvider,
     events: orderEventsPort,
     reportSideEffectFailure: (effect, err) => {

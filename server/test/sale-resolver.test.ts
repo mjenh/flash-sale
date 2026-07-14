@@ -3,7 +3,12 @@
 // request augmentation. Tests call the middleware directly with fake
 // req/res/next objects — no bootstrap, no Express app.
 import { describe, expect, it, vi } from "vitest";
-import { createSaleResolver, type SaleLookupOps, type SaleSummary } from "../src/middleware/sale-resolver.ts";
+import {
+  createSaleResolver,
+  windowFromSale,
+  type SaleLookupOps,
+  type SaleSummary,
+} from "../src/middleware/sale-resolver.ts";
 import type { Request, Response, NextFunction } from "express";
 
 const FLASH_SALE: SaleSummary = {
@@ -264,6 +269,30 @@ describe("findActive()", () => {
 
     const sale = await resolver.findActive();
     expect(sale).toBeNull();
+  });
+});
+
+describe("windowFromSale() (Story 4.4)", () => {
+  it("converts a SaleSummary's Date fields into a SaleWindow of epoch ms + ISO strings", () => {
+    expect(windowFromSale(FLASH_SALE)).toEqual({
+      startMs: FLASH_SALE.startTime.getTime(),
+      endMs: FLASH_SALE.endTime.getTime(),
+      startIso: FLASH_SALE.startTime.toISOString(),
+      endIso: FLASH_SALE.endTime.toISOString(),
+    });
+  });
+
+  it("round-trips exactly for a sale resolved via forSlug()", async () => {
+    const ops = createFakeOps();
+    const resolver = createSaleResolver({ ops, clock: () => startMs });
+    const req = fakeReq({ slug: "flash-sale" });
+    await resolver.forSlug()(req, fakeRes(), vi.fn());
+
+    const window = windowFromSale(req.sale as SaleSummary);
+    expect(window.startMs).toBe(startMs);
+    expect(window.endMs).toBe(endMs);
+    expect(window.startIso).toBe("2026-07-10T04:00:00.000Z");
+    expect(window.endIso).toBe("2026-07-10T05:00:00.000Z");
   });
 });
 

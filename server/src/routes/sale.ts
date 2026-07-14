@@ -3,9 +3,15 @@
 // coalescing, and fail-closed. Snapshot is awaited before headers are sent,
 // so a Redis-down rejection still becomes the 503 envelope through the
 // central middleware.
+//
+// Story 4.4: both handlers read req.sale (attached by the sale-resolver
+// middleware — forSlug() for /api/sales/:slug/*, forActiveSale() for the
+// v1.0 alias mounts) instead of a bootstrap-frozen saleId/window, so the
+// same handler serves both route shapes identically.
 import { Router } from "express";
 import type { SaleStatusService } from "../services/sale-status.ts";
 import type { SaleEventsBroadcaster, SseSink } from "../services/sale-events.ts";
+import { windowFromSale } from "../middleware/sale-resolver.ts";
 
 export interface SaleRouterDeps {
   saleStatus: SaleStatusService;
@@ -15,11 +21,25 @@ export interface SaleRouterDeps {
 export function createSaleRouter({ saleStatus, saleEvents }: SaleRouterDeps): Router {
   const router = Router();
 
-  router.get("/status", async (_req, res) => {
-    res.json(await saleStatus.getStatus());
+  router.get("/status", async (req, res) => {
+    const sale = req.sale;
+    if (sale === undefined) {
+      // Unreachable in practice — forSlug() 404s first, and forActiveSale()
+      // always finds the single boot-seeded sale. Defensive narrowing only.
+      res.status(404).json({ success: false, error: "Sale not found." });
+      return;
+    }
+    res.json(await saleStatus.getStatus(sale._id, windowFromSale(sale)));
   });
 
-  router.get("/events", async (_req, res) => {
+  router.get("/events", async (req, res) => {
+    const sale = req.sale;
+    if (sale === undefined) {
+      // Unreachable in practice — see the /status handler's comment above.
+      res.status(404).json({ success: false, error: "Sale not found." });
+      return;
+    }
+
     // Register the sink BEFORE composing the snapshot so a domain event that
     // arrives during the awaited read (e.g. sale.sold_out) is buffered, not
     // lost. Buffered frames flush right after the snapshot lands, preserving
@@ -46,8 +66,10 @@ export function createSaleRouter({ saleStatus, saleEvents }: SaleRouterDeps): Ro
 
     let snapshot: string;
     try {
-      // Fresh-read snapshot FIRST: fails closed (503) while headers are unsent.
-      snapshot = await saleEvents.snapshotFrame();
+      // Fresh-read snapshot FIRST: fails closed (503) while headers are
+      // unsent. Scoped to req.sale's saleId — the connect-time snapshot
+      // always reflects the sale this specific connection resolved to.
+      snapshot = await saleEvents.snapshotFrame(sale._id, windowFromSale(sale));
     } catch (err) {
       unregister();
       throw err; // headers unsent -> central middleware -> exact 503 envelope

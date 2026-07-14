@@ -7,6 +7,7 @@
 // lookup ops port is satisfied by the adapter layer and injected at boot.
 import type { Request, Response, NextFunction } from "express";
 import type { Clock } from "../services/clock.ts";
+import type { SaleWindow } from "../services/sale-status.ts";
 
 /** The subset of a Sale document that downstream handlers read from req.sale. */
 export interface SaleSummary {
@@ -37,6 +38,19 @@ export interface SaleLookupOps {
 interface CacheEntry {
   sale: SaleSummary;
   expiresAt: number;
+}
+
+/** Story 4.4: the single conversion point from a resolved SaleSummary (Date
+ *  fields) to the SaleWindow shape the status/order services expect (epoch
+ *  ms + ISO strings) — every route handler that needs a window derives it
+ *  from req.sale via this helper instead of re-deriving ad hoc. */
+export function windowFromSale(sale: SaleSummary): SaleWindow {
+  return {
+    startMs: sale.startTime.getTime(),
+    endMs: sale.endTime.getTime(),
+    startIso: sale.startTime.toISOString(),
+    endIso: sale.endTime.toISOString(),
+  };
 }
 
 export interface SaleResolverDeps {
