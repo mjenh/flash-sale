@@ -6,7 +6,7 @@
 //   app. Teardown unwinds in reverse.
 import { pino, type Logger } from "pino";
 import type { Express } from "express";
-import { loadConfig, type AppConfig } from "./adapters/config.ts";
+import { ConfigError, loadConfig, type AppConfig } from "./adapters/config.ts";
 import { createRedisClient, type RedisClient } from "./adapters/redis/client.ts";
 import { createStockStore } from "./adapters/redis/stock.ts";
 import { createOrderStore } from "./adapters/redis/orders.ts";
@@ -14,13 +14,14 @@ import { createReconciler } from "./adapters/redis/reconcile.ts";
 import { createEventPublisher, createSaleEventsSubscription } from "./adapters/redis/events.ts";
 import { connectMongo, disconnectMongo } from "./adapters/mongo/client.ts";
 import { createOrderRecorder, mongoAuditModelOps, type AuditModelOps } from "./adapters/mongo/audit.ts";
-import { createDomainSeeder, mongoSeedModelOps, type SeedModelOps } from "./adapters/mongo/seed.ts";
+import { createDomainSeeder, mongoSeedModelOps, SALE_SLUG, type SeedModelOps } from "./adapters/mongo/seed.ts";
 import { noopPaymentProvider } from "./adapters/payment/noop.ts";
 import { createSaleStatusService } from "./services/sale-status.ts";
 import { armWindowTimers, createSaleEventsBroadcaster } from "./services/sale-events.ts";
 import { createOrderService } from "./services/order.ts";
 import type { PaymentProvider } from "./services/payment.ts";
 import { systemClock, type Clock } from "./services/clock.ts";
+import { createSaleResolver, type SaleLookupOps, type SaleSummary } from "./middleware/sale-resolver.ts";
 import { createApiRouter } from "./routes/index.ts";
 import { createApp } from "./app.ts";
 
@@ -39,6 +40,9 @@ export interface BootstrapOverrides {
   payment?: PaymentProvider;
   /** Dedicated subscriber connection for sale:events pub/sub. */
   duplicateRedis?: (client: RedisClient) => RedisClient;
+  /** Test seam for the sale resolution middleware's lookup operations.
+   *  When omitted, ops are derived from the boot-seeded sale data. */
+  saleLookupOps?: SaleLookupOps;
 }
 
 export interface BootstrapResult {
@@ -172,7 +176,34 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
     },
   });
 
-  // 4. App assembly.
+  // 4. Sale resolution middleware — slug -> Sale doc with in-memory cache.
+  // Boot validation: the slug "active" is reserved for the discovery endpoint.
+  if ((SALE_SLUG as string) === "active") {
+    throw new ConfigError('The slug "active" is reserved for the discovery endpoint and cannot be used as a sale slug.');
+  }
+  // Single-sale ops derived from boot-seeded data. A later story (4.3+) will
+  // replace this with a Mongoose-backed implementation for true multi-sale.
+  const seededSale: SaleSummary = {
+    _id: saleRefs.saleId,
+    slug: SALE_SLUG,
+    startTime: new Date(config.saleStartMs),
+    endTime: new Date(config.saleEndMs),
+    stockQuantity: config.stockQuantity,
+  };
+  const defaultSaleLookupOps: SaleLookupOps = {
+    async findBySlug(slug: string): Promise<SaleSummary | null> {
+      return slug === seededSale.slug ? seededSale : null;
+    },
+    async findActiveSale(): Promise<SaleSummary | null> {
+      return seededSale;
+    },
+  };
+  const saleResolver = createSaleResolver({
+    ops: overrides.saleLookupOps ?? defaultSaleLookupOps,
+    clock,
+  });
+
+  // 5. App assembly.
   const orderService = createOrderService({
     clock,
     window,
@@ -186,7 +217,7 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
   });
   const app = createApp({
     logger,
-    apiRouter: createApiRouter({ saleStatus, saleEvents, orderService }),
+    apiRouter: createApiRouter({ saleStatus, saleEvents, orderService, saleResolver }),
     clientDistDir: env.CLIENT_DIST_DIR,
   });
 
