@@ -2,12 +2,18 @@
 // boot. The Redis client is the shared in-memory fake whose eval executes a
 // faithful, atomic-per-call port of order.lua; swap it for a real client
 // against compose-run Redis and this file runs unchanged.
+//
+// Story 4.2: Redis keys are namespaced by saleId (the resolved Sale's Mongo
+// ObjectId string). reserveSaleId() learns the boot-time id up front so the
+// fake Redis can be pre-seeded with the correctly scoped `stock:{saleId}:
+// remaining` key before bootstrap() runs (see helpers/fake-mongo.ts).
 import { describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { pino } from "pino";
 import { bootstrap, type BootstrapOverrides } from "../src/bootstrap.ts";
-import { createFakeRedis, orderSetSize, type FakeRedis } from "./helpers/fake-redis.ts";
-import { createFakeMongo } from "./helpers/fake-mongo.ts";
+import { SALE_SLUG } from "../src/adapters/mongo/seed.ts";
+import { createFakeRedis, orderSetSize, stockKeyFor, ordersKeyFor, type FakeRedis } from "./helpers/fake-redis.ts";
+import { createFakeMongo, reserveSaleId, type FakeMongo } from "./helpers/fake-mongo.ts";
 
 const SALE_START = "2026-07-10T04:00:00Z";
 const SALE_END = "2026-07-10T05:00:00Z";
@@ -16,7 +22,9 @@ const endMs = Date.parse(SALE_END);
 const IN_WINDOW = startMs + 1000;
 
 async function boot(opts: { nowMs: number; stock?: string; stockQuantity?: string }) {
-  const fake: FakeRedis = createFakeRedis(opts.stock === undefined ? {} : { stock: opts.stock });
+  const mongo = createFakeMongo();
+  const saleId = await reserveSaleId(mongo, SALE_SLUG);
+  const fake: FakeRedis = createFakeRedis(opts.stock === undefined ? {} : { stock: opts.stock, saleId });
   const overrides: BootstrapOverrides = {
     env: {
       SALE_START_TIME: SALE_START,
@@ -30,15 +38,15 @@ async function boot(opts: { nowMs: number; stock?: string; stockQuantity?: strin
     disconnectRedis: vi.fn(async () => {}),
     connectMongoDb: vi.fn(async () => {}),
     disconnectMongoDb: vi.fn(async () => {}),
-    mongoModelOps: createFakeMongo().ops,
+    mongoModelOps: mongo.ops,
   };
   const { app } = await bootstrap(overrides);
-  return { fake, app };
+  return { fake, mongo, saleId, app };
 }
 
 describe("POST /api/order (booted via bootstrap())", () => {
   it("201 with the exact body for a new email in-window; stock decrements; email joins the set", async () => {
-    const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "3" });
+    const { fake, saleId, app } = await boot({ nowMs: IN_WINDOW, stock: "3" });
     const res = await request(app).post("/api/order").send({ email: "buyer@example.com" });
     expect(res.status).toBe(201);
     expect(res.body).toEqual({
@@ -46,12 +54,12 @@ describe("POST /api/order (booted via bootstrap())", () => {
       email: "buyer@example.com",
       message: "Order successful.",
     });
-    expect(fake.kv.get("stock:remaining")).toBe("2");
-    expect(fake.sets.get("orders:users")?.has("buyer@example.com")).toBe(true);
+    expect(fake.kv.get(stockKeyFor(saleId))).toBe("2");
+    expect(fake.sets.get(ordersKeyFor(saleId))?.has("buyer@example.com")).toBe(true);
   });
 
   it("retry -> 200 idempotent body; the confirmed-order count and stock do not change", async () => {
-    const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "3" });
+    const { fake, saleId, app } = await boot({ nowMs: IN_WINDOW, stock: "3" });
     await request(app).post("/api/order").send({ email: "buyer@example.com" });
 
     const retry = await request(app).post("/api/order").send({ email: "buyer@example.com" });
@@ -61,23 +69,23 @@ describe("POST /api/order (booted via bootstrap())", () => {
       email: "buyer@example.com",
       message: "You have already ordered this item.",
     });
-    expect(fake.kv.get("stock:remaining")).toBe("2");
-    expect(orderSetSize(fake)).toBe(1);
+    expect(fake.kv.get(stockKeyFor(saleId))).toBe("2");
+    expect(orderSetSize(fake, saleId)).toBe(1);
   });
 
   it("case + whitespace variants of an email are ONE customer; the stored key and echo are canonical", async () => {
-    const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "3" });
+    const { fake, saleId, app } = await boot({ nowMs: IN_WINDOW, stock: "3" });
 
     const first = await request(app).post("/api/order").send({ email: "  Buyer@Example.COM " });
     expect(first.status).toBe(201);
     expect(first.body.email).toBe("buyer@example.com"); // trimmed + case-folded
-    expect(fake.sets.get("orders:users")?.has("buyer@example.com")).toBe(true);
+    expect(fake.sets.get(ordersKeyFor(saleId))?.has("buyer@example.com")).toBe(true);
 
     // A different casing is the SAME customer: idempotent 200, no second unit sold.
     const again = await request(app).post("/api/order").send({ email: "BUYER@example.com" });
     expect(again.status).toBe(200);
-    expect(fake.kv.get("stock:remaining")).toBe("2"); // only one unit gone
-    expect(orderSetSize(fake)).toBe(1);
+    expect(fake.kv.get(stockKeyFor(saleId))).toBe("2"); // only one unit gone
+    expect(orderSetSize(fake, saleId)).toBe(1);
 
     // The order check collapses casing too, so it can't miss the held order.
     const check = await request(app).get("/api/order/Buyer@Example.com");
@@ -86,17 +94,17 @@ describe("POST /api/order (booted via bootstrap())", () => {
   });
 
   it("409 sold out for a new email at stock 0 inside the window; the set is untouched", async () => {
-    const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "0" });
+    const { fake, saleId, app } = await boot({ nowMs: IN_WINDOW, stock: "0" });
     const res = await request(app).post("/api/order").send({ email: "late@example.com" });
     expect(res.status).toBe(409);
     expect(res.body).toEqual({ success: false, error: "Item is sold out." });
-    expect(orderSetSize(fake)).toBe(0);
+    expect(orderSetSize(fake, saleId)).toBe(0);
   });
 
   it("sold out still yields 200 already for an order holder (already outranks stock)", async () => {
-    const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "1" });
+    const { fake, saleId, app } = await boot({ nowMs: IN_WINDOW, stock: "1" });
     await request(app).post("/api/order").send({ email: "winner@example.com" });
-    expect(fake.kv.get("stock:remaining")).toBe("0");
+    expect(fake.kv.get(stockKeyFor(saleId))).toBe("0");
 
     const res = await request(app).post("/api/order").send({ email: "winner@example.com" });
     expect(res.status).toBe(200);
@@ -119,13 +127,15 @@ describe("POST /api/order (booted via bootstrap())", () => {
   }
 
   it("200 already outside the window for an order holder, via SISMEMBER alone", async () => {
-    const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "5" });
+    const { fake, mongo, app } = await boot({ nowMs: IN_WINDOW, stock: "5" });
     await request(app).post("/api/order").send({ email: "held@example.com" });
     const scriptCallsAfterPurchase = fake.calls.evalSha + fake.calls.eval;
 
     // Same booted app, clock can't move — emulate post-window by booting anew
-    // with surviving Redis state (the fake persists across the second boot).
-    const after = await bootWithSurvivingState(fake, endMs + 1000);
+    // with surviving Redis + Mongo state (both fakes persist across the
+    // second boot; reusing the same mongo keeps the saleId — and therefore
+    // the sale-scoped Redis keys — identical across both boots).
+    const after = await bootWithSurvivingState(fake, mongo, endMs + 1000);
     const res = await request(after).post("/api/order").send({ email: "held@example.com" });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
@@ -167,11 +177,11 @@ describe("POST /api/order (booted via bootstrap())", () => {
   });
 
   it("trims the email and uses the trimmed form everywhere", async () => {
-    const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "5" });
+    const { fake, saleId, app } = await boot({ nowMs: IN_WINDOW, stock: "5" });
     const res = await request(app).post("/api/order").send({ email: "  padded@example.com  " });
     expect(res.status).toBe(201);
     expect(res.body.email).toBe("padded@example.com");
-    expect(fake.sets.get("orders:users")?.has("padded@example.com")).toBe(true);
+    expect(fake.sets.get(ordersKeyFor(saleId))?.has("padded@example.com")).toBe(true);
 
     const retry = await request(app).post("/api/order").send({ email: "padded@example.com" });
     expect(retry.status).toBe(200);
@@ -204,7 +214,7 @@ describe("POST /api/order (booted via bootstrap())", () => {
 
   describe("concurrent burst", () => {
     it("20 unique emails vs stock 5 -> exactly 5x201 + 15x409 sold out; stock 0; set size 5", async () => {
-      const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "5", stockQuantity: "5" });
+      const { fake, saleId, app } = await boot({ nowMs: IN_WINDOW, stock: "5", stockQuantity: "5" });
       const emails = Array.from({ length: 20 }, (_, i) => `burst-${i}@example.com`);
       const responses = await Promise.all(
         emails.map((email) => request(app).post("/api/order").send({ email })),
@@ -217,15 +227,15 @@ describe("POST /api/order (booted via bootstrap())", () => {
       for (const r of soldOut) {
         expect(r.body).toEqual({ success: false, error: "Item is sold out." });
       }
-      expect(fake.kv.get("stock:remaining")).toBe("0");
-      expect(orderSetSize(fake)).toBe(5);
+      expect(fake.kv.get(stockKeyFor(saleId))).toBe("0");
+      expect(orderSetSize(fake, saleId)).toBe(5);
     });
 
     it("second mixed burst (5 winners + 15 new) -> 5x200 + 15x409; counts unchanged", async () => {
-      const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "5", stockQuantity: "5" });
+      const { fake, saleId, app } = await boot({ nowMs: IN_WINDOW, stock: "5", stockQuantity: "5" });
       const winners = Array.from({ length: 5 }, (_, i) => `w-${i}@example.com`);
       await Promise.all(winners.map((email) => request(app).post("/api/order").send({ email })));
-      expect(orderSetSize(fake)).toBe(5);
+      expect(orderSetSize(fake, saleId)).toBe(5);
 
       const second = await Promise.all(
         [...winners, ...Array.from({ length: 15 }, (_, i) => `n-${i}@example.com`)].map((email) =>
@@ -235,12 +245,12 @@ describe("POST /api/order (booted via bootstrap())", () => {
       expect(second.filter((r) => r.status === 200)).toHaveLength(5);
       expect(second.filter((r) => r.status === 409)).toHaveLength(15);
       expect(second.filter((r) => r.status === 201)).toHaveLength(0);
-      expect(fake.kv.get("stock:remaining")).toBe("0");
-      expect(orderSetSize(fake)).toBe(5);
+      expect(fake.kv.get(stockKeyFor(saleId))).toBe("0");
+      expect(orderSetSize(fake, saleId)).toBe(5);
     });
 
     it("the same email fired concurrently never succeeds twice", async () => {
-      const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "10" });
+      const { fake, saleId, app } = await boot({ nowMs: IN_WINDOW, stock: "10" });
       const responses = await Promise.all(
         Array.from({ length: 10 }, () =>
           request(app).post("/api/order").send({ email: "dup@example.com" }),
@@ -248,13 +258,13 @@ describe("POST /api/order (booted via bootstrap())", () => {
       );
       expect(responses.filter((r) => r.status === 201)).toHaveLength(1);
       expect(responses.filter((r) => r.status === 200)).toHaveLength(9);
-      expect(fake.kv.get("stock:remaining")).toBe("9");
-      expect(orderSetSize(fake)).toBe(1);
+      expect(fake.kv.get(stockKeyFor(saleId))).toBe("9");
+      expect(orderSetSize(fake, saleId)).toBe(1);
     });
   });
 });
 
-async function bootWithSurvivingState(fake: FakeRedis, nowMs: number) {
+async function bootWithSurvivingState(fake: FakeRedis, mongo: FakeMongo, nowMs: number) {
   const overrides: BootstrapOverrides = {
     env: {
       SALE_START_TIME: SALE_START,
@@ -268,7 +278,7 @@ async function bootWithSurvivingState(fake: FakeRedis, nowMs: number) {
     disconnectRedis: vi.fn(async () => {}),
     connectMongoDb: vi.fn(async () => {}),
     disconnectMongoDb: vi.fn(async () => {}),
-    mongoModelOps: createFakeMongo().ops,
+    mongoModelOps: mongo.ops,
   };
   const { app } = await bootstrap(overrides);
   return app;

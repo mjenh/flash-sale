@@ -156,3 +156,20 @@ export function createFakeMongo(): FakeMongo {
   fake.ops = { audit: fake.audit, seed: fake.seed };
   return fake;
 }
+
+/** Story 4.2 test seam: Redis keys/channel are namespaced by the resolved
+ *  sale's Mongo ObjectId string, but that id is only known once the REAL
+ *  bootstrap() seeder runs. Endpoint tests that need to pre-seed a fake
+ *  Redis with a scoped `stock:{saleId}:remaining` key (simulating a warm
+ *  boot) must know the id BEFORE calling bootstrap(). Since upsertSale is
+ *  idempotent by slug ($set semantics — see fake.seed.upsertSale above),
+ *  reserving the id here and letting the real seeder's later upsertSale call
+ *  land on the same doc is safe and keeps the fake and the production seeder
+ *  in lockstep. */
+export async function reserveSaleId(mongo: FakeMongo, slug: string): Promise<string> {
+  return mongo.seed.upsertSale(slug, {
+    startTime: new Date(0),
+    endTime: new Date(0),
+    stockQuantity: 0,
+  });
+}

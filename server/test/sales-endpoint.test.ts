@@ -7,8 +7,9 @@ import { describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { pino } from "pino";
 import { bootstrap, type BootstrapOverrides } from "../src/bootstrap.ts";
-import { createFakeRedis, type FakeRedis } from "./helpers/fake-redis.ts";
-import { createFakeMongo } from "./helpers/fake-mongo.ts";
+import { SALE_SLUG } from "../src/adapters/mongo/seed.ts";
+import { createFakeRedis, stockKeyFor, type FakeRedis } from "./helpers/fake-redis.ts";
+import { createFakeMongo, reserveSaleId } from "./helpers/fake-mongo.ts";
 
 const SALE_START = "2026-07-10T04:00:00Z";
 const SALE_END = "2026-07-10T05:00:00Z";
@@ -17,7 +18,9 @@ const endMs = Date.parse(SALE_END);
 const IN_WINDOW = startMs + 1000;
 
 async function boot(opts: { nowMs: number; stock?: string; stockQuantity?: string }) {
-  const fake: FakeRedis = createFakeRedis(opts.stock === undefined ? {} : { stock: opts.stock });
+  const mongo = createFakeMongo();
+  const saleId = await reserveSaleId(mongo, SALE_SLUG);
+  const fake: FakeRedis = createFakeRedis(opts.stock === undefined ? {} : { stock: opts.stock, saleId });
   const overrides: BootstrapOverrides = {
     env: {
       SALE_START_TIME: SALE_START,
@@ -31,10 +34,10 @@ async function boot(opts: { nowMs: number; stock?: string; stockQuantity?: strin
     disconnectRedis: vi.fn(async () => {}),
     connectMongoDb: vi.fn(async () => {}),
     disconnectMongoDb: vi.fn(async () => {}),
-    mongoModelOps: createFakeMongo().ops,
+    mongoModelOps: mongo.ops,
   };
   const { app } = await bootstrap(overrides);
-  return { fake, app };
+  return { fake, saleId, app };
 }
 
 describe("GET /api/sales/active (discovery endpoint)", () => {
@@ -131,7 +134,7 @@ describe("GET /api/sales/:slug/status", () => {
 
 describe("POST /api/sales/:slug/order", () => {
   it("201 for a new email inside the window — identical to v1.0", async () => {
-    const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "3" });
+    const { fake, saleId, app } = await boot({ nowMs: IN_WINDOW, stock: "3" });
 
     const res = await request(app)
       .post("/api/sales/flash-sale/order")
@@ -142,7 +145,7 @@ describe("POST /api/sales/:slug/order", () => {
       email: "buyer@example.com",
       message: "Order successful.",
     });
-    expect(fake.kv.get("stock:remaining")).toBe("2");
+    expect(fake.kv.get(stockKeyFor(saleId))).toBe("2");
   });
 
   it("200 already for a retry — identical to v1.0", async () => {

@@ -2,9 +2,14 @@
 // DEL -> SADD -> SET rebuild ordering (stock is the sentinel, written
 // LAST), the empty-set shortcut, and fail-closed wrapping of
 // timeouts/rejections into RedisUnavailableError.
+//
+// Story 4.2: keys are namespaced by saleId.
 import { describe, expect, it, vi } from "vitest";
 import { createReconciler, type ReconcileCommands } from "../src/adapters/redis/reconcile.ts";
-import { RedisUnavailableError } from "../src/adapters/redis/stock.ts";
+import { RedisUnavailableError, stockKeyFor } from "../src/adapters/redis/stock.ts";
+import { ordersKeyFor } from "../src/adapters/redis/orders.ts";
+
+const SALE_ID = "sale-abc123";
 
 function fakeClient() {
   return {
@@ -18,23 +23,23 @@ function fakeClient() {
 const opts = { commandTimeoutMs: 50 };
 
 describe("createReconciler (restart safety)", () => {
-  it("hasStockKey: EXISTS stock:remaining, truthy-coerced", async () => {
+  it("hasStockKey: EXISTS stock:{saleId}:remaining, truthy-coerced", async () => {
     const cold = fakeClient();
-    await expect(createReconciler(cold, opts).hasStockKey()).resolves.toBe(false);
-    expect(cold.exists).toHaveBeenCalledExactlyOnceWith("stock:remaining");
+    await expect(createReconciler(cold, opts).hasStockKey(SALE_ID)).resolves.toBe(false);
+    expect(cold.exists).toHaveBeenCalledExactlyOnceWith(stockKeyFor(SALE_ID));
 
     const warm = fakeClient();
     warm.exists.mockResolvedValue(1);
-    await expect(createReconciler(warm, opts).hasStockKey()).resolves.toBe(true);
+    await expect(createReconciler(warm, opts).hasStockKey(SALE_ID)).resolves.toBe(true);
   });
 
-  it("rebuild issues DEL orders:users -> SADD members -> SET stock:remaining, in that order", async () => {
+  it("rebuild issues DEL orders:{saleId}:users -> SADD members -> SET stock:{saleId}:remaining, in that order", async () => {
     const client = fakeClient();
-    await createReconciler(client, opts).rebuild(["a@x.com", "b@x.com"], 98);
+    await createReconciler(client, opts).rebuild(["a@x.com", "b@x.com"], 98, SALE_ID);
 
-    expect(client.del).toHaveBeenCalledExactlyOnceWith("orders:users");
-    expect(client.sAdd).toHaveBeenCalledExactlyOnceWith("orders:users", ["a@x.com", "b@x.com"]);
-    expect(client.set).toHaveBeenCalledExactlyOnceWith("stock:remaining", "98");
+    expect(client.del).toHaveBeenCalledExactlyOnceWith(ordersKeyFor(SALE_ID));
+    expect(client.sAdd).toHaveBeenCalledExactlyOnceWith(ordersKeyFor(SALE_ID), ["a@x.com", "b@x.com"]);
+    expect(client.set).toHaveBeenCalledExactlyOnceWith(stockKeyFor(SALE_ID), "98");
 
     const [delOrder] = client.del.mock.invocationCallOrder;
     const [sAddOrder] = client.sAdd.mock.invocationCallOrder;
@@ -47,17 +52,24 @@ describe("createReconciler (restart safety)", () => {
 
   it("rebuild with zero orders skips SADD but still clears the set and writes stock", async () => {
     const client = fakeClient();
-    await createReconciler(client, opts).rebuild([], 100);
-    expect(client.del).toHaveBeenCalledExactlyOnceWith("orders:users");
+    await createReconciler(client, opts).rebuild([], 100, SALE_ID);
+    expect(client.del).toHaveBeenCalledExactlyOnceWith(ordersKeyFor(SALE_ID));
     expect(client.sAdd).not.toHaveBeenCalled();
-    expect(client.set).toHaveBeenCalledExactlyOnceWith("stock:remaining", "100");
+    expect(client.set).toHaveBeenCalledExactlyOnceWith(stockKeyFor(SALE_ID), "100");
+  });
+
+  it("a different saleId targets different keys", async () => {
+    const client = fakeClient();
+    await createReconciler(client, opts).rebuild(["a@x.com"], 5, "other-sale");
+    expect(client.del).toHaveBeenCalledExactlyOnceWith(ordersKeyFor("other-sale"));
+    expect(client.set).toHaveBeenCalledExactlyOnceWith(stockKeyFor("other-sale"), "5");
   });
 
   it("a command rejection wraps into RedisUnavailableError (boot fails fast)", async () => {
     const client = fakeClient();
     client.del.mockRejectedValue(new Error("The client is closed"));
     const err = await createReconciler(client, opts)
-      .rebuild(["a@x.com"], 99)
+      .rebuild(["a@x.com"], 99, SALE_ID)
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(RedisUnavailableError);
     expect((err as { status: number }).status).toBe(503);
@@ -68,7 +80,7 @@ describe("createReconciler (restart safety)", () => {
     const client = fakeClient();
     client.exists.mockImplementation(() => new Promise<never>(() => {}));
     await expect(
-      createReconciler(client, { commandTimeoutMs: 10 }).hasStockKey(),
+      createReconciler(client, { commandTimeoutMs: 10 }).hasStockKey(SALE_ID),
     ).rejects.toBeInstanceOf(RedisUnavailableError);
   });
 });

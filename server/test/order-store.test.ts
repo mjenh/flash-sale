@@ -2,15 +2,20 @@
 // invocation shape, automatic NOSCRIPT -> EVAL fallback, defensive reply
 // parsing, bounded timeouts and fail-closed wrapping, and the
 // outside-window SISMEMBER probe.
+//
+// Story 4.2: saleId travels as ARGV[1] and no KEYS[] are passed — the script
+// derives `orders:{saleId}:users` / `stock:{saleId}:remaining` internally.
 import { describe, expect, it, vi } from "vitest";
 import {
   createOrderStore,
+  ordersKeyFor,
   ORDER_SCRIPT_SOURCE,
   type OrderCommands,
 } from "../src/adapters/redis/orders.ts";
 import { RedisUnavailableError } from "../src/adapters/redis/stock.ts";
 
 const OPTS = { commandTimeoutMs: 50 };
+const SALE_ID = "sale-abc123";
 
 function fakeClient(overrides: Partial<OrderCommands> = {}): OrderCommands {
   return {
@@ -29,10 +34,10 @@ describe("createOrderStore", () => {
     await store.register();
     expect(client.scriptLoad).toHaveBeenCalledWith(ORDER_SCRIPT_SOURCE);
 
-    await store.attempt("a@example.com");
+    await store.attempt(SALE_ID, "a@example.com");
     expect(client.evalSha).toHaveBeenCalledWith("sha-1", {
-      keys: ["orders:users", "stock:remaining"],
-      arguments: ["a@example.com"],
+      keys: [],
+      arguments: [SALE_ID, "a@example.com"],
     });
     expect(client.eval).not.toHaveBeenCalled();
   });
@@ -47,9 +52,9 @@ describe("createOrderStore", () => {
     const store = createOrderStore(client, OPTS);
     await store.register();
 
-    expect(await store.attempt("a@x.com")).toEqual({ verdict: "OK", remaining: 99 });
-    expect(await store.attempt("b@x.com")).toEqual({ verdict: "ALREADY", remaining: 37 });
-    expect(await store.attempt("c@x.com")).toEqual({ verdict: "SOLD_OUT", remaining: 0 });
+    expect(await store.attempt(SALE_ID, "a@x.com")).toEqual({ verdict: "OK", remaining: 99 });
+    expect(await store.attempt(SALE_ID, "b@x.com")).toEqual({ verdict: "ALREADY", remaining: 37 });
+    expect(await store.attempt(SALE_ID, "c@x.com")).toEqual({ verdict: "SOLD_OUT", remaining: 0 });
   });
 
   it("falls back to EVAL with the source on NOSCRIPT, returns the decision, and re-caches", async () => {
@@ -71,16 +76,16 @@ describe("createOrderStore", () => {
     await store.register();
     scriptCacheFlushed = true; // simulate SCRIPT FLUSH after registration
 
-    const decision = await store.attempt("a@x.com");
+    const decision = await store.attempt(SALE_ID, "a@x.com");
     expect(decision).toEqual({ verdict: "OK", remaining: 7 });
     expect(client.eval).toHaveBeenCalledWith(ORDER_SCRIPT_SOURCE, {
-      keys: ["orders:users", "stock:remaining"],
-      arguments: ["a@x.com"],
+      keys: [],
+      arguments: [SALE_ID, "a@x.com"],
     });
 
     // Re-registration is fired; subsequent attempts use EVALSHA again.
     await vi.waitFor(() => expect(client.scriptLoad).toHaveBeenCalledTimes(2));
-    const next = await store.attempt("b@x.com");
+    const next = await store.attempt(SALE_ID, "b@x.com");
     expect(next).toEqual({ verdict: "ALREADY", remaining: 12 });
     expect(client.eval).toHaveBeenCalledTimes(1);
   });
@@ -93,7 +98,7 @@ describe("createOrderStore", () => {
     });
     const store = createOrderStore(client, OPTS);
     await store.register();
-    await expect(store.attempt("a@x.com")).rejects.toBeInstanceOf(RedisUnavailableError);
+    await expect(store.attempt(SALE_ID, "a@x.com")).rejects.toBeInstanceOf(RedisUnavailableError);
     expect(client.eval).not.toHaveBeenCalled(); // no blind fallback on non-NOSCRIPT
   });
 
@@ -103,7 +108,7 @@ describe("createOrderStore", () => {
     });
     const store = createOrderStore(client, { commandTimeoutMs: 20 });
     await store.register();
-    await expect(store.attempt("a@x.com")).rejects.toBeInstanceOf(RedisUnavailableError);
+    await expect(store.attempt(SALE_ID, "a@x.com")).rejects.toBeInstanceOf(RedisUnavailableError);
   });
 
   it("rejects malformed replies instead of guessing a verdict", async () => {
@@ -111,7 +116,7 @@ describe("createOrderStore", () => {
       const client = fakeClient({ evalSha: vi.fn(async () => bad) });
       const store = createOrderStore(client, OPTS);
       await store.register();
-      await expect(store.attempt("a@x.com")).rejects.toBeInstanceOf(RedisUnavailableError);
+      await expect(store.attempt(SALE_ID, "a@x.com")).rejects.toBeInstanceOf(RedisUnavailableError);
     }
   });
 
@@ -125,12 +130,19 @@ describe("createOrderStore", () => {
     await expect(store.register()).rejects.toBeInstanceOf(RedisUnavailableError);
   });
 
-  it("hasOrdered() issues one SISMEMBER on orders:users and coerces the reply", async () => {
+  it("hasOrdered() issues one SISMEMBER on orders:{saleId}:users and coerces the reply", async () => {
     const client = fakeClient({ sIsMember: vi.fn(async (_k: string, m: string) => (m === "in@x.com" ? 1 : 0)) });
     const store = createOrderStore(client, OPTS);
-    expect(await store.hasOrdered("in@x.com")).toBe(true);
-    expect(await store.hasOrdered("out@x.com")).toBe(false);
-    expect(client.sIsMember).toHaveBeenCalledWith("orders:users", "in@x.com");
+    expect(await store.hasOrdered(SALE_ID, "in@x.com")).toBe(true);
+    expect(await store.hasOrdered(SALE_ID, "out@x.com")).toBe(false);
+    expect(client.sIsMember).toHaveBeenCalledWith(ordersKeyFor(SALE_ID), "in@x.com");
+  });
+
+  it("hasOrdered() with a different saleId targets a different key", async () => {
+    const client = fakeClient();
+    const store = createOrderStore(client, OPTS);
+    await store.hasOrdered("other-sale", "x@x.com");
+    expect(client.sIsMember).toHaveBeenCalledWith(ordersKeyFor("other-sale"), "x@x.com");
   });
 
   it("hasOrdered() rejection wraps into RedisUnavailableError", async () => {
@@ -140,6 +152,6 @@ describe("createOrderStore", () => {
       }),
     });
     const store = createOrderStore(client, OPTS);
-    await expect(store.hasOrdered("a@x.com")).rejects.toBeInstanceOf(RedisUnavailableError);
+    await expect(store.hasOrdered(SALE_ID, "a@x.com")).rejects.toBeInstanceOf(RedisUnavailableError);
   });
 });

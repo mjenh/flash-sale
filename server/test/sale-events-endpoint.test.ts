@@ -16,8 +16,10 @@ import { Writable } from "node:stream";
 import request from "supertest";
 import { pino, type Logger } from "pino";
 import { bootstrap, type BootstrapOverrides } from "../src/bootstrap.ts";
+import { SALE_SLUG } from "../src/adapters/mongo/seed.ts";
+import { saleEventsChannel } from "../src/adapters/redis/events.ts";
 import { createFakeRedis, type FakeRedis } from "./helpers/fake-redis.ts";
-import { createFakeMongo } from "./helpers/fake-mongo.ts";
+import { createFakeMongo, reserveSaleId } from "./helpers/fake-mongo.ts";
 import { closeAllSse, frameData, openSse } from "./helpers/sse.ts";
 
 const SALE_START = "2026-07-10T04:00:00Z";
@@ -49,7 +51,9 @@ async function boot(opts: {
   stock?: string;
   env?: Record<string, string>;
 }) {
-  const fake: FakeRedis = createFakeRedis(opts.stock === undefined ? {} : { stock: opts.stock });
+  const mongo = createFakeMongo();
+  const saleId = await reserveSaleId(mongo, SALE_SLUG);
+  const fake: FakeRedis = createFakeRedis(opts.stock === undefined ? {} : { stock: opts.stock, saleId });
   const { lines, logger } = captureLogger();
   const overrides: BootstrapOverrides = {
     env: opts.env ?? {
@@ -64,10 +68,10 @@ async function boot(opts: {
     disconnectRedis: vi.fn(async () => {}),
     connectMongoDb: vi.fn(async () => {}),
     disconnectMongoDb: vi.fn(async () => {}),
-    mongoModelOps: createFakeMongo().ops,
+    mongoModelOps: mongo.ops,
   };
   const { app } = await bootstrap(overrides);
-  return { fake, app, lines };
+  return { fake, saleId, app, lines };
 }
 
 /** Drain the microtask/immediate queue so fire-and-forget publishes settle. */
@@ -205,14 +209,14 @@ describe("fail closed", () => {
   });
 
   it("mid-stream Redis loss: an emit's fresh read fails -> the stream ENDS and the failure is logged", async () => {
-    const { fake, app, lines } = await boot({ nowMs: IN_WINDOW, stock: "37" });
+    const { fake, saleId, app, lines } = await boot({ nowMs: IN_WINDOW, stock: "37" });
     const stream = await openSse(app);
     await stream.waitForFrames(1);
 
     fake.failing = true;
     // failing=true blocks the bus too — inject the event at the subscription,
     // as if published just before the outage.
-    fake.deliver("sale:events", "order.accepted");
+    fake.deliver(saleEventsChannel(saleId), "order.accepted");
 
     await stream.closed(); // the socket actually ends — not internal state
     expect(lines.some((line) => line.includes("sse broadcast failed"))).toBe(true);

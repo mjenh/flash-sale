@@ -6,8 +6,9 @@ import { describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { pino } from "pino";
 import { bootstrap, type BootstrapOverrides } from "../src/bootstrap.ts";
+import { SALE_SLUG } from "../src/adapters/mongo/seed.ts";
 import { createFakeRedis, type FakeRedis } from "./helpers/fake-redis.ts";
-import { createFakeMongo, type FakeMongo } from "./helpers/fake-mongo.ts";
+import { createFakeMongo, reserveSaleId, type FakeMongo } from "./helpers/fake-mongo.ts";
 
 const SALE_START = "2026-07-10T04:00:00Z";
 const SALE_END = "2026-07-10T05:00:00Z";
@@ -34,10 +35,11 @@ function overridesFor(fake: FakeRedis, mongo: FakeMongo, nowMs: number): Bootstr
 }
 
 async function boot(opts: { nowMs: number; stock?: string }) {
-  const fake = createFakeRedis(opts.stock === undefined ? {} : { stock: opts.stock });
   const mongo = createFakeMongo();
+  const saleId = await reserveSaleId(mongo, SALE_SLUG);
+  const fake = createFakeRedis(opts.stock === undefined ? {} : { stock: opts.stock, saleId });
   const { app } = await bootstrap(overridesFor(fake, mongo, opts.nowMs));
-  return { fake, mongo, app };
+  return { fake, mongo, saleId, app };
 }
 
 /** Re-boot at another instant against surviving fake state (clock can't move). */

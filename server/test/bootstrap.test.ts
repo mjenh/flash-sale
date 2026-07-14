@@ -1,14 +1,24 @@
 // Boot runs seed upserts + warm/cold reconcile strictly before returning
-// (hence before any listen()). It also wires the sale:events realtime layer
-// on a dedicated duplicate()d connection (subscribed before returning) with
-// future-boundaries-only window timers; teardown closes the subscriber.
+// (hence before any listen()). It also wires the sale:{saleId}:events
+// realtime layer on a dedicated duplicate()d connection (subscribed before
+// returning) with future-boundaries-only window timers; teardown closes the
+// subscriber.
+//
+// Story 4.2: Redis keys/channel are namespaced by saleId. fakeOverrides()
+// reserves the (idempotent) saleId up front from the fresh fake mongo so
+// tests can pre-seed a scoped `stock:{saleId}:remaining` key before
+// bootstrap() runs (the warm-boot test) and assert against the exact
+// sale-scoped key/channel names elsewhere.
 import { describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { pino } from "pino";
 import { bootstrap, type BootstrapOverrides } from "../src/bootstrap.ts";
 import { ConfigError } from "../src/adapters/config.ts";
+import { SALE_SLUG } from "../src/adapters/mongo/seed.ts";
+import { stockKeyFor } from "../src/adapters/redis/stock.ts";
+import { saleEventsChannel } from "../src/adapters/redis/events.ts";
 import type { RedisClient } from "../src/adapters/redis/client.ts";
-import { createFakeMongo } from "./helpers/fake-mongo.ts";
+import { createFakeMongo, reserveSaleId } from "./helpers/fake-mongo.ts";
 
 const validEnv = {
   SALE_START_TIME: "2026-07-10T04:00:00Z",
@@ -34,12 +44,17 @@ function fakeSubscriber() {
   return subscriber;
 }
 
-function fakeOverrides(env: Record<string, string | undefined>, initialKv?: Map<string, string>) {
+async function fakeOverrides(
+  env: Record<string, string | undefined>,
+  buildInitialKv?: (saleId: string) => Map<string, string>,
+) {
   // In-memory command surface for the stock adapter (get), the order store's
   // boot-time registration (scriptLoad), the reconciler (exists/del/sAdd/set),
-  // the sale:events publisher (publish) + the duplicate()d subscriber
-  // connection + isOpen for teardown.
-  const kv = initialKv ?? new Map<string, string>();
+  // the sale:{saleId}:events publisher (publish) + the duplicate()d
+  // subscriber connection + isOpen for teardown.
+  const mongo = createFakeMongo();
+  const saleId = await reserveSaleId(mongo, SALE_SLUG);
+  const kv = buildInitialKv?.(saleId) ?? new Map<string, string>();
   const sets = new Map<string, Set<string>>();
   const subscriber = fakeSubscriber();
   const fakeRedis = {
@@ -67,7 +82,6 @@ function fakeOverrides(env: Record<string, string | undefined>, initialKv?: Map<
     publish: vi.fn(async () => 1),
     duplicate: vi.fn(() => subscriber),
   } as unknown as RedisClient;
-  const mongo = createFakeMongo();
   const overrides = {
     env,
     logger: pino({ level: "silent" }),
@@ -78,12 +92,12 @@ function fakeOverrides(env: Record<string, string | undefined>, initialKv?: Map<
     disconnectMongoDb: vi.fn(async () => {}),
     mongoModelOps: mongo.ops,
   } satisfies BootstrapOverrides;
-  return { fakeRedis, subscriber, kv, sets, mongo, overrides };
+  return { fakeRedis, subscriber, kv, sets, mongo, saleId, overrides };
 }
 
 describe("bootstrap", () => {
   it("fails fast on invalid config before touching any store", async () => {
-    const { overrides } = fakeOverrides({});
+    const { overrides } = await fakeOverrides({});
     await expect(bootstrap(overrides)).rejects.toBeInstanceOf(ConfigError);
     expect(overrides.createRedis).not.toHaveBeenCalled();
     expect(overrides.connectRedis).not.toHaveBeenCalled();
@@ -91,7 +105,7 @@ describe("bootstrap", () => {
   });
 
   it("connects Redis before Mongo, then serves the assembled app", async () => {
-    const { overrides } = fakeOverrides(validEnv);
+    const { overrides } = await fakeOverrides(validEnv);
     const { app, config } = await bootstrap(overrides);
 
     expect(overrides.connectRedis).toHaveBeenCalledTimes(1);
@@ -107,15 +121,15 @@ describe("bootstrap", () => {
   });
 
   it("registers the order script (SCRIPT LOAD) during bootstrap — before any listen()", async () => {
-    const { fakeRedis, overrides } = fakeOverrides(validEnv);
+    const { fakeRedis, overrides } = await fakeOverrides(validEnv);
     const scriptLoad = (fakeRedis as unknown as { scriptLoad: ReturnType<typeof vi.fn> }).scriptLoad;
     await bootstrap(overrides);
     expect(scriptLoad).toHaveBeenCalledTimes(1);
     expect(String(scriptLoad.mock.calls[0]?.[0])).toContain("SISMEMBER");
   });
 
-  it("cold boot: seeds the four domain docs and rebuilds stock:remaining during bootstrap", async () => {
-    const { kv, mongo, overrides } = fakeOverrides(validEnv);
+  it("cold boot: seeds the four domain docs and rebuilds stock:{saleId}:remaining during bootstrap", async () => {
+    const { kv, mongo, saleId, overrides } = await fakeOverrides(validEnv);
     await bootstrap(overrides);
 
     // Seed upserts (Product, Sale, SaleProduct, Inventory) from env config.
@@ -125,17 +139,17 @@ describe("bootstrap", () => {
     expect(mongo.inventories.size).toBe(1);
     expect([...mongo.sales.values()][0]?.stockQuantity).toBe(100);
 
-    // Cold rebuild: no orders in Mongo -> stock:remaining = STOCK_QUANTITY.
-    expect(kv.get("stock:remaining")).toBe("100");
+    // Cold rebuild: no orders in Mongo -> stock:{saleId}:remaining = STOCK_QUANTITY.
+    expect(kv.get(stockKeyFor(saleId))).toBe("100");
   });
 
-  it("warm boot: surviving stock:remaining is never touched (STOCK_QUANTITY change is a no-op)", async () => {
-    const { fakeRedis, kv, overrides } = fakeOverrides(
+  it("warm boot: surviving stock:{saleId}:remaining is never touched (STOCK_QUANTITY change is a no-op)", async () => {
+    const { fakeRedis, kv, saleId, overrides } = await fakeOverrides(
       { ...validEnv, STOCK_QUANTITY: "500" },
-      new Map([["stock:remaining", "7"]]),
+      (id) => new Map([[stockKeyFor(id), "7"]]),
     );
     await bootstrap(overrides);
-    expect(kv.get("stock:remaining")).toBe("7");
+    expect(kv.get(stockKeyFor(saleId))).toBe("7");
     const spies = fakeRedis as unknown as Record<"set" | "del" | "sAdd", ReturnType<typeof vi.fn>>;
     expect(spies.set).not.toHaveBeenCalled();
     expect(spies.del).not.toHaveBeenCalled();
@@ -143,7 +157,7 @@ describe("bootstrap", () => {
   });
 
   it("boot order: mongo connect -> script registration -> seed -> reconcile, all inside bootstrap()", async () => {
-    const { fakeRedis, mongo, overrides } = fakeOverrides(validEnv);
+    const { fakeRedis, mongo, overrides } = await fakeOverrides(validEnv);
     const upsertProduct = vi.fn(mongo.seed.upsertProduct);
     mongo.seed.upsertProduct = upsertProduct;
     await bootstrap(overrides);
@@ -161,22 +175,22 @@ describe("bootstrap", () => {
   });
 
   it("teardown disconnects both stores", async () => {
-    const { fakeRedis, overrides } = fakeOverrides(validEnv);
+    const { fakeRedis, overrides } = await fakeOverrides(validEnv);
     const { teardown } = await bootstrap(overrides);
     await teardown();
     expect(overrides.disconnectMongoDb).toHaveBeenCalledTimes(1);
     expect(overrides.disconnectRedis).toHaveBeenCalledWith(fakeRedis);
   });
 
-  it("subscribes the duplicated connection to exactly sale:events during bootstrap() — error listener before connect", async () => {
-    const { fakeRedis, subscriber, overrides } = fakeOverrides(validEnv);
+  it("subscribes the duplicated connection to exactly sale:{saleId}:events during bootstrap() — error listener before connect", async () => {
+    const { fakeRedis, subscriber, saleId, overrides } = await fakeOverrides(validEnv);
     await bootstrap(overrides);
 
     const duplicate = (fakeRedis as unknown as { duplicate: ReturnType<typeof vi.fn> }).duplicate;
     expect(duplicate).toHaveBeenCalledTimes(1);
     expect(subscriber.connect).toHaveBeenCalledTimes(1);
     expect(subscriber.subscribe).toHaveBeenCalledTimes(1);
-    expect(subscriber.subscribe.mock.calls[0]?.[0]).toBe("sale:events");
+    expect(subscriber.subscribe.mock.calls[0]?.[0]).toBe(saleEventsChannel(saleId));
 
     // The error listener (connection-lost trigger) is wired first.
     const onOrder = subscriber.on.mock.invocationCallOrder[0];
@@ -186,18 +200,18 @@ describe("bootstrap", () => {
   });
 
   it("a subscriber connect failure rejects bootstrap() — fail-fast strictly before listen()", async () => {
-    const { subscriber, overrides } = fakeOverrides(validEnv);
+    const { subscriber, overrides } = await fakeOverrides(validEnv);
     subscriber.connect = vi.fn(async () => {
       throw new Error("subscriber refused");
     }) as typeof subscriber.connect;
     await expect(bootstrap(overrides)).rejects.toThrow("Service temporarily unavailable.");
   });
 
-  it("teardown closes the sale:events subscriber (unsubscribe + close)", async () => {
-    const { subscriber, overrides } = fakeOverrides(validEnv);
+  it("teardown closes the sale:{saleId}:events subscriber (unsubscribe + close)", async () => {
+    const { subscriber, saleId, overrides } = await fakeOverrides(validEnv);
     const { teardown } = await bootstrap(overrides);
     await teardown();
-    expect(subscriber.unsubscribe).toHaveBeenCalledExactlyOnceWith("sale:events");
+    expect(subscriber.unsubscribe).toHaveBeenCalledExactlyOnceWith(saleEventsChannel(saleId));
     expect(subscriber.close).toHaveBeenCalledTimes(1);
     // Subscriber teardown runs before the store disconnects.
     const closeOrder = subscriber.close.mock.invocationCallOrder[0];
@@ -206,7 +220,7 @@ describe("bootstrap", () => {
   });
 
   it("a boot pinned after endMs arms NO boundary timers — zero publishes ever", async () => {
-    const { fakeRedis, overrides } = fakeOverrides(validEnv);
+    const { fakeRedis, overrides } = await fakeOverrides(validEnv);
     await bootstrap({ ...overrides, clock: () => Date.parse(validEnv.SALE_END_TIME) + 60_000 });
     await new Promise((resolve) => setTimeout(resolve, 20));
     const publish = (fakeRedis as unknown as { publish: ReturnType<typeof vi.fn> }).publish;

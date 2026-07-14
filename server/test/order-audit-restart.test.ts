@@ -2,19 +2,26 @@
 // safety. Redis is the shared in-memory fake; Mongo model ops are the shared
 // in-memory fake, but the REAL createOrderRecorder / createDomainSeeder /
 // createReconciler compositions run over them.
+//
+// Story 4.2: Redis keys are namespaced by saleId. boot() always reserves the
+// (idempotent) saleId up front from the shared mongo — reused across boots
+// so the sale-scoped keys stay identical across restarts.
 import { Writable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { pino, type Logger } from "pino";
 import { bootstrap, type BootstrapOverrides } from "../src/bootstrap.ts";
+import { SALE_SLUG } from "../src/adapters/mongo/seed.ts";
 import type { PaymentProvider } from "../src/services/payment.ts";
 import {
   createFakeRedis,
   orderSetMembers,
   orderSetSize,
+  stockKeyFor,
+  ordersKeyFor,
   type FakeRedis,
 } from "./helpers/fake-redis.ts";
-import { createFakeMongo, type FakeMongo } from "./helpers/fake-mongo.ts";
+import { createFakeMongo, reserveSaleId, type FakeMongo } from "./helpers/fake-mongo.ts";
 
 const SALE_START = "2026-07-10T04:00:00Z";
 const SALE_END = "2026-07-10T05:00:00Z";
@@ -44,8 +51,10 @@ async function boot(opts: {
   payment?: PaymentProvider;
   logger?: Logger;
 }) {
-  const fake = opts.redis ?? createFakeRedis(opts.stock === undefined ? {} : { stock: opts.stock });
   const mongo = opts.mongo ?? createFakeMongo();
+  // Idempotent by slug — reserving again on a reused mongo returns the same id.
+  const saleId = await reserveSaleId(mongo, SALE_SLUG);
+  const fake = opts.redis ?? createFakeRedis(opts.stock === undefined ? {} : { stock: opts.stock, saleId });
   const overrides: BootstrapOverrides = {
     env: {
       SALE_START_TIME: SALE_START,
@@ -63,14 +72,14 @@ async function boot(opts: {
     ...(opts.payment === undefined ? {} : { payment: opts.payment }),
   };
   const { app } = await bootstrap(overrides);
-  return { fake, mongo, app };
+  return { fake, mongo, saleId, app };
 }
 
 describe("boot seed", () => {
   it("cold boot seeds Product, Sale, SaleProduct, Inventory from env and is idempotent across boots", async () => {
     const mongo = createFakeMongo();
     const first = await boot({ nowMs: IN_WINDOW, mongo, stockQuantity: "5" });
-    expect(first.fake.kv.get("stock:remaining")).toBe("5");
+    expect(first.fake.kv.get(stockKeyFor(first.saleId))).toBe("5");
     expect(mongo.products.size).toBe(1);
     expect(mongo.sales.size).toBe(1);
     expect(mongo.saleProducts.size).toBe(1);
@@ -169,7 +178,7 @@ describe("async Mongo audit + payment after OK", () => {
 describe("Mongo write failure: logged, never rolled back, response unchanged", () => {
   it("failing audit -> exact 201 body, Redis decrement kept, one error log line", async () => {
     const { lines, logger } = captureLogger();
-    const { app, fake, mongo } = await boot({ nowMs: IN_WINDOW, stock: "5", logger });
+    const { app, fake, saleId, mongo } = await boot({ nowMs: IN_WINDOW, stock: "5", logger });
     mongo.failingAudit = true;
 
     const res = await request(app).post("/api/order").send({ email: "unlucky@example.com" });
@@ -182,8 +191,8 @@ describe("Mongo write failure: logged, never rolled back, response unchanged", (
     await drain();
 
     // No rollback: the buyer keeps their unit.
-    expect(fake.kv.get("stock:remaining")).toBe("4");
-    expect(fake.sets.get("orders:users")?.has("unlucky@example.com")).toBe(true);
+    expect(fake.kv.get(stockKeyFor(saleId))).toBe("4");
+    expect(fake.sets.get(ordersKeyFor(saleId))?.has("unlucky@example.com")).toBe(true);
     // The accepted, documented audit undercount.
     expect(mongo.orders).toHaveLength(0);
     // The error is logged.
@@ -199,12 +208,12 @@ describe("restart safety", () => {
     await request(first.app).post("/api/order").send({ email: "w-1@x.com" });
     await request(first.app).post("/api/order").send({ email: "w-2@x.com" });
     await drain();
-    expect(first.fake.kv.get("stock:remaining")).toBe("3");
+    expect(first.fake.kv.get(stockKeyFor(first.saleId))).toBe("3");
 
     const writesBefore = { ...first.fake.calls };
     await boot({ nowMs: IN_WINDOW, redis: first.fake, mongo: first.mongo, stockQuantity: "100" });
-    expect(first.fake.kv.get("stock:remaining")).toBe("3");
-    expect(orderSetSize(first.fake)).toBe(2);
+    expect(first.fake.kv.get(stockKeyFor(first.saleId))).toBe("3");
+    expect(orderSetSize(first.fake, first.saleId)).toBe(2);
     expect(first.fake.calls.del).toBe(writesBefore.del);
     expect(first.fake.calls.set).toBe(writesBefore.set);
     expect(first.fake.calls.sAdd).toBe(writesBefore.sAdd);
@@ -229,8 +238,8 @@ describe("restart safety", () => {
     });
 
     // Membership and stock restored from Mongo truth.
-    expect(orderSetMembers(first.fake)).toEqual(["w-1@x.com", "w-2@x.com", "w-3@x.com"]);
-    expect(first.fake.kv.get("stock:remaining")).toBe("2");
+    expect(orderSetMembers(first.fake, first.saleId)).toEqual(["w-1@x.com", "w-2@x.com", "w-3@x.com"]);
+    expect(first.fake.kv.get(stockKeyFor(first.saleId))).toBe("2");
 
     const status = await request(second.app).get("/api/sale/status");
     expect(status.body.stock).toBe(2);
@@ -248,7 +257,7 @@ describe("restart safety", () => {
     // And the sale continues where it left off.
     const fresh = await request(second.app).post("/api/order").send({ email: "w-4@x.com" });
     expect(fresh.status).toBe(201);
-    expect(first.fake.kv.get("stock:remaining")).toBe("1");
+    expect(first.fake.kv.get(stockKeyFor(first.saleId))).toBe("1");
     await drain();
     expect(first.mongo.orders).toHaveLength(4);
   });
@@ -266,18 +275,18 @@ describe("restart safety", () => {
     await drain();
     first.mongo.failingAudit = false;
     expect(first.mongo.orders).toHaveLength(2);
-    expect(first.fake.kv.get("stock:remaining")).toBe("2");
+    expect(first.fake.kv.get(stockKeyFor(first.saleId))).toBe("2");
 
     // Cold restart: Redis is rebuilt FROM Mongo — never the reverse.
     first.fake.flush();
     await boot({ nowMs: IN_WINDOW, redis: first.fake, mongo: first.mongo, stockQuantity: "5" });
 
     expect(first.mongo.orders).toHaveLength(2); // boot wrote nothing to Mongo
-    expect(orderSetMembers(first.fake)).toEqual(["audited-1@x.com", "audited-2@x.com"]);
-    expect(first.fake.kv.get("stock:remaining")).toBe("3"); // 5 - 2: the lost slot is re-issuable
+    expect(orderSetMembers(first.fake, first.saleId)).toEqual(["audited-1@x.com", "audited-2@x.com"]);
+    expect(first.fake.kv.get(stockKeyFor(first.saleId))).toBe("3"); // 5 - 2: the lost slot is re-issuable
   });
 
-  it("cold rebuild clamps stock:remaining at 0 when confirmed orders exceed STOCK_QUANTITY", async () => {
+  it("cold rebuild clamps stock:{saleId}:remaining at 0 when confirmed orders exceed STOCK_QUANTITY", async () => {
     const first = await boot({ nowMs: IN_WINDOW, stock: "10", stockQuantity: "10" });
     for (let i = 0; i < 6; i += 1) {
       await request(first.app).post("/api/order").send({ email: `b-${i}@x.com` });
@@ -294,8 +303,8 @@ describe("restart safety", () => {
       stockQuantity: "4",
     });
 
-    expect(first.fake.kv.get("stock:remaining")).toBe("0"); // clamped, never negative
-    expect(orderSetSize(first.fake)).toBe(6);
+    expect(first.fake.kv.get(stockKeyFor(first.saleId))).toBe("0"); // clamped, never negative
+    expect(orderSetSize(first.fake, first.saleId)).toBe(6);
     const status = await request(second.app).get("/api/sale/status");
     expect(status.body.status).toBe("sold_out");
   });

@@ -9,14 +9,22 @@
 // Fail closed: every command is bounded by redisCommandTimeoutMs; a timeout,
 // any command rejection, or an unparseable reply surfaces as
 // RedisUnavailableError -> 503 at the central error middleware.
+//
+// Story 4.2 key namespacing: saleId travels as ARGV[1] and the script
+// constructs `orders:{saleId}:users` / `stock:{saleId}:remaining` internally
+// (see order.lua) rather than via KEYS[]. Redis Cluster best practice is
+// normally to route by KEYS[] so a cluster can hash-slot the command, but
+// this codebase runs single-node Redis (docker-compose.yml) and the saleId-
+// as-ARGV shape is a deliberate, already-decided trade-off for this project.
 import { readFileSync } from "node:fs";
 import { RedisUnavailableError } from "./stock.ts";
 
-const ORDERS_KEY = "orders:users";
-const STOCK_KEY = "stock:remaining";
-
 /** The authoritative script source — order.lua is the implementation of record. */
 export const ORDER_SCRIPT_SOURCE = readFileSync(new URL("./order.lua", import.meta.url), "utf8");
+
+export function ordersKeyFor(saleId: string): string {
+  return `orders:${saleId}:users`;
+}
 
 export type OrderVerdict = "OK" | "ALREADY" | "SOLD_OUT";
 
@@ -41,10 +49,10 @@ export interface OrderStoreOptions {
 export interface OrderStore {
   /** SCRIPT LOAD + sha cache. Called once in bootstrap, before listen(). */
   register(): Promise<void>;
-  /** Runs the Lua script — the only runtime writer of the two keys. */
-  attempt(email: string): Promise<OrderDecision>;
+  /** Runs the Lua script — the only runtime writer of the two sale-scoped keys. */
+  attempt(saleId: string, email: string): Promise<OrderDecision>;
   /** One SISMEMBER — the outside-window already-vs-inactive probe. */
-  hasOrdered(email: string): Promise<boolean>;
+  hasOrdered(saleId: string, email: string): Promise<boolean>;
 }
 
 function isNoScript(err: unknown): boolean {
@@ -100,9 +108,10 @@ export function createOrderStore(
     }
   };
 
-  const scriptOptions = (email: string) => ({
-    keys: [ORDERS_KEY, STOCK_KEY],
-    arguments: [email],
+  // No KEYS[] — order.lua constructs its key names from ARGV[1] (saleId).
+  const scriptOptions = (saleId: string, email: string) => ({
+    keys: [],
+    arguments: [saleId, email],
   });
 
   return {
@@ -110,14 +119,17 @@ export function createOrderStore(
       await loadScript();
     },
 
-    async attempt(email: string): Promise<OrderDecision> {
+    async attempt(saleId: string, email: string): Promise<OrderDecision> {
       const cachedSha = sha;
       let reply: unknown;
       try {
         reply =
           cachedSha === undefined
-            ? await raced(client.eval(ORDER_SCRIPT_SOURCE, scriptOptions(email)), commandTimeoutMs)
-            : await raced(client.evalSha(cachedSha, scriptOptions(email)), commandTimeoutMs);
+            ? await raced(client.eval(ORDER_SCRIPT_SOURCE, scriptOptions(saleId, email)), commandTimeoutMs)
+            : await raced(
+                client.evalSha(cachedSha, scriptOptions(saleId, email)),
+                commandTimeoutMs,
+              );
       } catch (err) {
         if (!isNoScript(err)) {
           throw err instanceof RedisUnavailableError ? err : new RedisUnavailableError(err);
@@ -125,7 +137,10 @@ export function createOrderStore(
         // Script cache lost (e.g. SCRIPT FLUSH / restart without AOF of the
         // cache) — automatic fallback: EVAL the source and re-register.
         try {
-          reply = await raced(client.eval(ORDER_SCRIPT_SOURCE, scriptOptions(email)), commandTimeoutMs);
+          reply = await raced(
+            client.eval(ORDER_SCRIPT_SOURCE, scriptOptions(saleId, email)),
+            commandTimeoutMs,
+          );
         } catch (evalErr) {
           throw evalErr instanceof RedisUnavailableError
             ? evalErr
@@ -138,9 +153,9 @@ export function createOrderStore(
       return parseDecision(reply);
     },
 
-    async hasOrdered(email: string): Promise<boolean> {
+    async hasOrdered(saleId: string, email: string): Promise<boolean> {
       try {
-        const reply = await raced(client.sIsMember(ORDERS_KEY, email), commandTimeoutMs);
+        const reply = await raced(client.sIsMember(ordersKeyFor(saleId), email), commandTimeoutMs);
         return Boolean(reply);
       } catch (err) {
         throw err instanceof RedisUnavailableError ? err : new RedisUnavailableError(err);

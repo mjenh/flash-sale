@@ -18,8 +18,13 @@
 // command order are pinned by order-script.test.ts). Each eval executes
 // SYNCHRONOUSLY within one call, the honest in-process analogue of Redis's
 // single-threaded script atomicity: nothing interleaves mid-decision.
+//
+// Story 4.2: keys are namespaced by saleId. The script no longer receives
+// KEYS[] — it receives ARGV = [saleId, email] and derives key names itself,
+// mirroring order.lua exactly (see stockKeyFor/ordersKeyFor).
 import { createHash } from "node:crypto";
-import { ORDER_SCRIPT_SOURCE } from "../../src/adapters/redis/orders.ts";
+import { ORDER_SCRIPT_SOURCE, ordersKeyFor } from "../../src/adapters/redis/orders.ts";
+import { stockKeyFor } from "../../src/adapters/redis/stock.ts";
 import type { RedisClient } from "../../src/adapters/redis/client.ts";
 
 export interface FakeRedis {
@@ -56,10 +61,13 @@ export interface FakeRedis {
   client: RedisClient;
 }
 
-export function createFakeRedis(initial?: { stock?: string }): FakeRedis {
+export function createFakeRedis(initial?: { stock?: string; saleId?: string }): FakeRedis {
   const kv = new Map<string, string>();
   if (initial?.stock !== undefined) {
-    kv.set("stock:remaining", initial.stock);
+    if (initial.saleId === undefined) {
+      throw new Error("createFakeRedis: saleId is required to seed initial stock (keys are sale-scoped)");
+    }
+    kv.set(stockKeyFor(initial.saleId), initial.stock);
   }
   const sets = new Map<string, Set<string>>();
   const scripts = new Map<string, string>();
@@ -104,13 +112,16 @@ export function createFakeRedis(initial?: { stock?: string }): FakeRedis {
   // Faithful port of order.lua, executed atomically (synchronously) per call.
   // Branch order mirrors the .lua source exactly:
   //   missing stock key -> error | ALREADY | SOLD_OUT | SADD + DECR -> OK.
-  const runOrderScript = (keys: string[], args: string[]): [string, number] => {
-    const [ordersKey, stockKey] = keys as [string, string];
-    const email = args[0] as string;
+  // ARGV = [saleId, email] — no KEYS[]; key names are derived here exactly
+  // as order.lua derives them internally.
+  const runOrderScript = (args: string[]): [string, number] => {
+    const [saleId, email] = args as [string, string];
+    const stockKey = stockKeyFor(saleId);
+    const ordersKey = ordersKeyFor(saleId);
     const rawStock = kv.get(stockKey);
     const stock = rawStock === undefined ? Number.NaN : Number.parseInt(rawStock, 10);
     if (Number.isNaN(stock)) {
-      throw new Error("stock:remaining missing"); // error_reply analogue
+      throw new Error(`${stockKey} missing`); // error_reply analogue
     }
     const members = sets.get(ordersKey) ?? new Set<string>();
     if (members.has(email)) {
@@ -187,7 +198,7 @@ export function createFakeRedis(initial?: { stock?: string }): FakeRedis {
       if (source !== ORDER_SCRIPT_SOURCE) {
         throw new Error(`fake-redis only implements order.lua, got sha ${sha}`);
       }
-      return runOrderScript(options.keys, options.arguments);
+      return runOrderScript(options.arguments);
     },
     eval: async (source: string, options: { keys: string[]; arguments: string[] }) => {
       assertUp();
@@ -195,7 +206,7 @@ export function createFakeRedis(initial?: { stock?: string }): FakeRedis {
       if (source !== ORDER_SCRIPT_SOURCE) {
         throw new Error("fake-redis only implements order.lua");
       }
-      return runOrderScript(options.keys, options.arguments);
+      return runOrderScript(options.arguments);
     },
     publish: async (channel: string, message: string) => {
       assertUp();
@@ -256,11 +267,15 @@ export function createFakeRedis(initial?: { stock?: string }): FakeRedis {
 }
 
 /** Set-size helper for count assertions. */
-export function orderSetSize(fake: FakeRedis): number {
-  return (fake.sets.get("orders:users") ?? new Set()).size;
+export function orderSetSize(fake: FakeRedis, saleId: string): number {
+  return (fake.sets.get(ordersKeyFor(saleId)) ?? new Set()).size;
 }
 
 /** Membership helper for rebuild assertions. */
-export function orderSetMembers(fake: FakeRedis): string[] {
-  return [...(fake.sets.get("orders:users") ?? new Set<string>())].sort();
+export function orderSetMembers(fake: FakeRedis, saleId: string): string[] {
+  return [...(fake.sets.get(ordersKeyFor(saleId)) ?? new Set<string>())].sort();
 }
+
+/** Re-exported so endpoint tests can build the exact sale-scoped key names
+ *  for direct kv/sets assertions without duplicating the naming scheme. */
+export { stockKeyFor, ordersKeyFor };

@@ -1,16 +1,21 @@
-// Fake clients, zero I/O. The publisher is one bounded PUBLISH on the spine
-// channel (timeout and rejection wrap into RedisUnavailableError); the
-// subscription wires the dedicated duplicated connection: error listener
-// before connect, fail-fast bounded connect, SUBSCRIBE sale:events,
+// Fake clients, zero I/O. The publisher is one bounded PUBLISH on the
+// sale-scoped channel (timeout and rejection wrap into RedisUnavailableError);
+// the subscription wires the dedicated duplicated connection: error listener
+// before connect, fail-fast bounded connect, SUBSCRIBE sale:{saleId}:events,
 // best-effort teardown.
+//
+// Story 4.2: the channel is `sale:{saleId}:events`, not the v1.0 flat
+// `sale:events`.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  SALE_EVENTS_CHANNEL,
+  saleEventsChannel,
   createEventPublisher,
   createSaleEventsSubscription,
 } from "../src/adapters/redis/events.ts";
 import { RedisUnavailableError } from "../src/adapters/redis/stock.ts";
 import type { SaleEventType } from "../src/services/sale-events.ts";
+
+const SALE_ID = "sale-abc123";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -24,24 +29,34 @@ describe("createEventPublisher", () => {
     "sale.ended",
   ];
 
-  it("the channel is exactly the spine's sale:events", () => {
-    expect(SALE_EVENTS_CHANNEL).toBe("sale:events");
+  it("saleEventsChannel builds sale:{saleId}:events", () => {
+    expect(saleEventsChannel(SALE_ID)).toBe(`sale:${SALE_ID}:events`);
+    expect(saleEventsChannel("other-sale")).toBe("sale:other-sale:events");
   });
 
   for (const event of ALL_EVENTS) {
-    it(`publishes exactly PUBLISH("sale:events", "${event}") — type-only payload, no envelope`, async () => {
+    it(`publishes exactly PUBLISH("sale:{saleId}:events", "${event}") — type-only payload, no envelope`, async () => {
       const client = { publish: vi.fn(async () => 1) };
       const publisher = createEventPublisher(client, { commandTimeoutMs: 1000 });
-      await publisher.publish(event);
-      expect(client.publish).toHaveBeenCalledExactlyOnceWith("sale:events", event);
+      await publisher.publish(event, SALE_ID);
+      expect(client.publish).toHaveBeenCalledExactlyOnceWith(saleEventsChannel(SALE_ID), event);
     });
   }
+
+  it("a different saleId publishes on a different channel", async () => {
+    const client = { publish: vi.fn(async () => 1) };
+    const publisher = createEventPublisher(client, { commandTimeoutMs: 1000 });
+    await publisher.publish("order.accepted", "sale-x");
+    await publisher.publish("order.accepted", "sale-y");
+    expect(client.publish).toHaveBeenNthCalledWith(1, "sale:sale-x:events", "order.accepted");
+    expect(client.publish).toHaveBeenNthCalledWith(2, "sale:sale-y:events", "order.accepted");
+  });
 
   it("a hung publish rejects with RedisUnavailableError within commandTimeoutMs", async () => {
     vi.useFakeTimers();
     const client = { publish: vi.fn(() => new Promise<number>(() => {})) };
     const publisher = createEventPublisher(client, { commandTimeoutMs: 1000 });
-    const outcome = expect(publisher.publish("order.accepted")).rejects.toBeInstanceOf(
+    const outcome = expect(publisher.publish("order.accepted", SALE_ID)).rejects.toBeInstanceOf(
       RedisUnavailableError,
     );
     await vi.advanceTimersByTimeAsync(1000);
@@ -55,7 +70,9 @@ describe("createEventPublisher", () => {
       }),
     };
     const publisher = createEventPublisher(client, { commandTimeoutMs: 1000 });
-    await expect(publisher.publish("sale.sold_out")).rejects.toBeInstanceOf(RedisUnavailableError);
+    await expect(publisher.publish("sale.sold_out", SALE_ID)).rejects.toBeInstanceOf(
+      RedisUnavailableError,
+    );
   });
 });
 
@@ -91,23 +108,31 @@ function fakeSubscriber() {
 
 describe("createSaleEventsSubscription", () => {
   const options = (overrides: Partial<Parameters<typeof createSaleEventsSubscription>[1]> = {}) => ({
+    saleId: SALE_ID,
     onEvent: vi.fn(),
     onConnectionLost: vi.fn(),
     connectTimeoutMs: 1000,
     ...overrides,
   });
 
-  it("subscribes to exactly sale:events and forwards messages to onEvent", async () => {
+  it("subscribes to exactly sale:{saleId}:events and forwards messages to onEvent", async () => {
     const { subscriber, listeners } = fakeSubscriber();
     const opts = options();
     await createSaleEventsSubscription(subscriber, opts);
 
+    const channel = saleEventsChannel(SALE_ID);
     expect(subscriber.subscribe).toHaveBeenCalledTimes(1);
-    expect(subscriber.subscribe.mock.calls[0]?.[0]).toBe("sale:events");
-    expect([...listeners.keys()]).toEqual(["sale:events"]);
+    expect(subscriber.subscribe.mock.calls[0]?.[0]).toBe(channel);
+    expect([...listeners.keys()]).toEqual([channel]);
 
-    listeners.get("sale:events")?.("order.accepted");
+    listeners.get(channel)?.("order.accepted");
     expect(opts.onEvent).toHaveBeenCalledExactlyOnceWith("order.accepted");
+  });
+
+  it("a different saleId subscribes to a different channel", async () => {
+    const { subscriber, listeners } = fakeSubscriber();
+    await createSaleEventsSubscription(subscriber, options({ saleId: "other-sale" }));
+    expect([...listeners.keys()]).toEqual(["sale:other-sale:events"]);
   });
 
   it("registers the error listener BEFORE connecting and forwards errors to onConnectionLost", async () => {
@@ -161,11 +186,11 @@ describe("createSaleEventsSubscription", () => {
     expect(subscriber.destroy).toHaveBeenCalledTimes(1);
   });
 
-  it("close() unsubscribes from sale:events and closes the open connection", async () => {
+  it("close() unsubscribes from sale:{saleId}:events and closes the open connection", async () => {
     const { subscriber } = fakeSubscriber();
     const subscription = await createSaleEventsSubscription(subscriber, options());
     await subscription.close();
-    expect(subscriber.unsubscribe).toHaveBeenCalledExactlyOnceWith("sale:events");
+    expect(subscriber.unsubscribe).toHaveBeenCalledExactlyOnceWith(saleEventsChannel(SALE_ID));
     expect(subscriber.close).toHaveBeenCalledTimes(1);
   });
 

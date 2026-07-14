@@ -1,6 +1,10 @@
 // Loaded through the SAME loader production uses (ORDER_SCRIPT_SOURCE). Pins
-// the keys, commands, and mutation ordering so the .lua file and the test
-// fake's JS port cannot drift silently.
+// the ARGV shape, commands, and mutation ordering so the .lua file and the
+// test fake's JS port cannot drift silently.
+//
+// Story 4.2: the script no longer receives KEYS[] — it receives
+// ARGV = [saleId, email] and constructs `orders:{saleId}:users` /
+// `stock:{saleId}:remaining` internally.
 import { describe, expect, it } from "vitest";
 import { ORDER_SCRIPT_SOURCE } from "../src/adapters/redis/orders.ts";
 
@@ -14,14 +18,20 @@ describe("order.lua (authoritative source)", () => {
     expect(ORDER_SCRIPT_SOURCE).toContain("order.lua");
   });
 
-  it("addresses exactly KEYS[1] (orders:users), KEYS[2] (stock:remaining), ARGV[1] (email)", () => {
-    expect(stripped).toContain("KEYS[1]");
-    expect(stripped).toContain("KEYS[2]");
+  it("addresses exactly ARGV[1] (saleId) and ARGV[2] (email) — no KEYS[] at all", () => {
     expect(stripped).toContain("ARGV[1]");
-    expect(stripped).not.toMatch(/KEYS\[[3-9]\]/);
-    expect(stripped).not.toMatch(/ARGV\[[2-9]\]/);
-    // Key NAMES never appear in the script — they arrive via KEYS (adapter-owned).
-    expect(stripped).not.toContain("orders:users");
+    expect(stripped).toContain("ARGV[2]");
+    expect(stripped).not.toMatch(/ARGV\[[3-9]\]/);
+    // Story 4.2 AC2: key construction moved INSIDE the script — no KEYS[]
+    // reference anywhere, and no hardcoded v1.0 flat key names.
+    expect(stripped).not.toContain("KEYS[");
+    expect(stripped).not.toContain("'orders:users'");
+    expect(stripped).not.toContain("'stock:remaining'");
+  });
+
+  it("constructs the sale-scoped key names from ARGV[1] via string concatenation", () => {
+    expect(stripped).toContain("'orders:' .. saleId .. ':users'");
+    expect(stripped).toContain("'stock:' .. saleId .. ':remaining'");
   });
 
   it("contains the four decision commands and the three verdicts", () => {
@@ -50,6 +60,6 @@ describe("order.lua (authoritative source)", () => {
 
   it("fails closed on a missing stock key (error_reply, never a fabricated number)", () => {
     expect(stripped).toContain("error_reply");
-    expect(stripped).toContain("stock:remaining missing");
+    expect(stripped).toContain("stockKey .. ' missing'");
   });
 });

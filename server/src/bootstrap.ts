@@ -16,9 +16,9 @@ import { connectMongo, disconnectMongo } from "./adapters/mongo/client.ts";
 import { createOrderRecorder, mongoAuditModelOps, type AuditModelOps } from "./adapters/mongo/audit.ts";
 import { createDomainSeeder, mongoSeedModelOps, SALE_SLUG, type SeedModelOps } from "./adapters/mongo/seed.ts";
 import { noopPaymentProvider } from "./adapters/payment/noop.ts";
-import { createSaleStatusService } from "./services/sale-status.ts";
+import { createSaleStatusService, type StockReader } from "./services/sale-status.ts";
 import { armWindowTimers, createSaleEventsBroadcaster } from "./services/sale-events.ts";
-import { createOrderService } from "./services/order.ts";
+import { createOrderService, type OrderAttemptPort, type OrderEventsPort } from "./services/order.ts";
 import type { PaymentProvider } from "./services/payment.ts";
 import { systemClock, type Clock } from "./services/clock.ts";
 import { createSaleResolver, type SaleLookupOps, type SaleSummary } from "./middleware/sale-resolver.ts";
@@ -99,14 +99,23 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
   await orderStore.register();
 
   // Durable audit + restart safety, strictly before listen():
-  // idempotent seed upserts, then the warm/cold gate on stock:remaining.
+  // idempotent seed upserts, then the warm/cold gate on stock:{saleId}:remaining.
   const mongoOps = overrides.mongoModelOps ?? { audit: mongoAuditModelOps, seed: mongoSeedModelOps };
   const seeder = createDomainSeeder(mongoOps.seed);
   const saleRefs = await seeder.seed(config);
+  // Story 4.2: Redis keys/channel are namespaced by saleId — the resolved
+  // Sale's Mongo ObjectId string (req.sale._id per the sale-resolver
+  // middleware). v1.0 handlers (routes/sale.ts, routes/order.ts) don't yet
+  // read req.sale (that's Story 4.4's job), so this boot-resolved saleId is
+  // the interim "the one sale" identity threaded into the adapters below.
+  // The v1.0 flat keys (stock:remaining, orders:users, sale:events) are no
+  // longer written or read by the live request path; Story 4.6 owns
+  // migrating any surviving flat-key data from a pre-4.2 deployment.
+  const saleId = saleRefs.saleId;
   const reconciler = createReconciler(redis, {
     commandTimeoutMs: config.redisCommandTimeoutMs,
   });
-  if (await reconciler.hasStockKey()) {
+  if (await reconciler.hasStockKey(saleId)) {
     // Warm start: surviving Redis state is authoritative — touch nothing.
     // A changed STOCK_QUANTITY against surviving state is thereby a no-op;
     // a sale reset happens only via the explicit offline reset script.
@@ -120,7 +129,7 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
         "cold rebuild: confirmed orders exceed STOCK_QUANTITY; clamping stock:remaining to 0",
       );
     }
-    await reconciler.rebuild(emails, remaining);
+    await reconciler.rebuild(emails, remaining, saleId);
     logger.info(
       { confirmedOrders: emails.length, remaining },
       "cold start: rebuilt Redis order state from MongoDB",
@@ -129,6 +138,12 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
   const stockStore = createStockStore(redis, {
     commandTimeoutMs: config.redisCommandTimeoutMs,
   });
+  // Bind the boot-resolved saleId into the narrower StockReader port the
+  // sale-status service expects — keeps that service framework-free and
+  // saleId-agnostic (Story 4.4 will make this per-request).
+  const stockReader: StockReader = {
+    getRemaining: () => stockStore.getRemaining(saleId),
+  };
 
   // Shared clock + window + status service: the same instances feed
   // HTTP, the order service, and the SSE broadcaster.
@@ -139,7 +154,7 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
     startIso: config.saleStartIso,
     endIso: config.saleEndIso,
   };
-  const saleStatus = createSaleStatusService({ clock, stock: stockStore, window });
+  const saleStatus = createSaleStatusService({ clock, stock: stockReader, window });
 
   // Sale-events realtime layer: PUBLISH rides the main client; SUBSCRIBE runs
   // on a dedicated duplicated connection; boot arms window timers for FUTURE
@@ -157,11 +172,12 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
   });
   const duplicateRedis = overrides.duplicateRedis ?? ((client: RedisClient) => client.duplicate());
   const subscription = await createSaleEventsSubscription(duplicateRedis(redis), {
+    saleId,
     onEvent: (event) => {
       saleEvents.onDomainEvent(event);
     },
     onConnectionLost: (err) => {
-      logger.error({ err }, "sale:events subscriber connection lost; closing open streams");
+      logger.error({ err }, "sale:{saleId}:events subscriber connection lost; closing open streams");
       saleEvents.closeAll();
     },
     connectTimeoutMs: config.redisConnectTimeoutMs * 5,
@@ -170,7 +186,7 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
     clock,
     startMs: config.saleStartMs,
     endMs: config.saleEndMs,
-    publish: (event) => eventPublisher.publish(event),
+    publish: (event) => eventPublisher.publish(event, saleId),
     onPublishFailure: (err) => {
       logger.error({ err }, "window-boundary event publish failed (logged, never thrown)");
     },
@@ -204,13 +220,23 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
   });
 
   // 5. App assembly.
+  // Bind the boot-resolved saleId into the narrower ports createOrderService
+  // expects — the order service itself stays framework-free and saleId-
+  // agnostic (Story 4.4 threads req.sale through per-request instead).
+  const orderAttemptPort: OrderAttemptPort = {
+    attempt: (email) => orderStore.attempt(saleId, email),
+    hasOrdered: (email) => orderStore.hasOrdered(saleId, email),
+  };
+  const orderEventsPort: OrderEventsPort = {
+    publish: (event) => eventPublisher.publish(event, saleId),
+  };
   const orderService = createOrderService({
     clock,
     window,
-    orders: orderStore,
+    orders: orderAttemptPort,
     audit: createOrderRecorder(saleRefs, mongoOps.audit),
     payment: overrides.payment ?? noopPaymentProvider,
-    events: eventPublisher,
+    events: orderEventsPort,
     reportSideEffectFailure: (effect, err) => {
       logger.error({ err, effect }, "post-accept side effect failed (never alters the HTTP outcome)");
     },
