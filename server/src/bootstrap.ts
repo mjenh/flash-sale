@@ -11,6 +11,7 @@ import { createRedisClient, type RedisClient } from "./adapters/redis/client.ts"
 import { createStockStore } from "./adapters/redis/stock.ts";
 import { createOrderStore } from "./adapters/redis/orders.ts";
 import { createReconciler } from "./adapters/redis/reconcile.ts";
+import { createFlatKeyMigrator } from "./adapters/redis/migrate.ts";
 import { createEventPublisher, createSaleEventsSubscription } from "./adapters/redis/events.ts";
 import { connectMongo, disconnectMongo } from "./adapters/mongo/client.ts";
 import { createOrderRecorder, mongoAuditModelOps, type AuditModelOps } from "./adapters/mongo/audit.ts";
@@ -162,8 +163,8 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
   // active Sale's Mongo ObjectId string, i.e. req.sale._id per the
   // sale-resolver middleware. The v1.0 flat keys (stock:remaining,
   // orders:users, sale:events) are no longer written or read by the live
-  // request path; Story 4.6 owns migrating any surviving flat-key data from
-  // a pre-4.2 deployment.
+  // request path; Story 4.6's flat-key migrator below (strictly before
+  // reconciliation) is the one transient exception, running only at boot.
   const saleId = activeSale._id;
 
   // Sale resolution middleware — slug -> Sale doc with in-memory cache.
@@ -191,6 +192,17 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
     ops: overrides.saleLookupOps ?? defaultSaleLookupOps,
     clock,
   });
+
+  // Story 4.6: one-time v1.0 -> v1.1 flat-key migration, strictly BEFORE
+  // reconciliation below. If a pre-4.2 deployment left surviving
+  // stock:remaining/orders:users data, this RENAMEs it onto the resolved
+  // active sale's namespaced keys so reconciliation's warm-start check sees
+  // it as warm state rather than cold-rebuilding over it. No-op on a fresh
+  // v1.1 install (no flat keys) and on every boot after the first migration.
+  const flatKeyMigrator = createFlatKeyMigrator(redis, logger, {
+    commandTimeoutMs: config.redisCommandTimeoutMs,
+  });
+  await flatKeyMigrator.migrate(saleId, activeSale.slug);
 
   const reconciler = createReconciler(redis, {
     commandTimeoutMs: config.redisCommandTimeoutMs,

@@ -5,13 +5,14 @@
 //
 // The authority is Redis, which the Lua script writes atomically:
 //
-//   SCARD orders:users == min(API stockQuantity, attempts)
-//   distinct emails    == confirmed (Mongo) orders
-//   stock:remaining    == API stockQuantity - SCARD
+//   SCARD orders:{saleId}:users == min(API stockQuantity, attempts)
+//   distinct emails             == confirmed (Mongo) orders
+//   stock:{saleId}:remaining    == API stockQuantity - SCARD
 //
 // The stock BASIS is the API's own seeded `sales.stockQuantity`, cross-checked
 // against the harness config — the verifier never marks its own homework by
-// asserting against a number the harness chose.
+// asserting against a number the harness chose. The same seeded sale document
+// also resolves {saleId} (Story 4.6) for the namespaced Redis keys below.
 //
 // The fairness equalities keep a no-`<=` discipline: 99 accepts out of 5,000
 // against stock 100 fails as loudly as 101. The ONE place a tolerance is
@@ -26,7 +27,7 @@
 import { createClient } from "redis";
 import mongoose from "mongoose";
 import { loadStressConfig, SALE_SLUG, type StressConfig } from "./config.ts";
-import { ORDERS_KEY, STOCK_KEY } from "./reset.ts";
+import { ordersKeyFor, stockKeyFor } from "./reset.ts";
 
 export interface Observed {
   /** Confirmed Order documents for the sale — the async Mongo audit,
@@ -34,10 +35,12 @@ export interface Observed {
   orders: number;
   /** Distinct `email` values among those Mongo orders. */
   distinctEmails: number;
-  /** SCARD orders:users — the authoritative record of who was accepted.
-   *  Redis membership is the fairness truth; Mongo is the downstream audit. */
+  /** SCARD orders:{saleId}:users — the authoritative record of who was
+   *  accepted. Redis membership is the fairness truth; Mongo is the
+   *  downstream audit. */
   orderUsers: number;
-  /** GET stock:remaining — null when the key is missing (never coerce to 0). */
+  /** GET stock:{saleId}:remaining — null when the key is missing (never
+   *  coerce to 0). */
   stockRemaining: number | null;
   /** The API's own seeded `sales.stockQuantity` — the single source of truth
    *  for how many units the sale ran with. The harness must NOT mark
@@ -64,10 +67,15 @@ export interface CheckResult {
 }
 
 /** The whole assertion engine, pure — every branch is unit-tested without I/O.
+ *  Deliberately saleId-agnostic (Observed/Expected carry only counts, never
+ *  key names) so it stays testable without a resolved sale — the report
+ *  labels below name the KEY SCHEME (`{saleId}` as a literal placeholder),
+ *  not any one run's actual key.
  *
- *  The fairness invariants key off Redis (SCARD orders:users + stock:remaining),
- *  which is the authority the Lua script writes atomically. The Mongo audit is
- *  reconciled with a tolerance: an undercount is an accepted, documented
+ *  The fairness invariants key off Redis (SCARD orders:{saleId}:users +
+ *  stock:{saleId}:remaining), which is the authority the Lua script writes
+ *  atomically. The Mongo audit is reconciled with a tolerance: an undercount
+ *  is an accepted, documented
  *  property and passes with a note; an OVERCOUNT (Mongo holds an order Redis
  *  never accepted — a phantom) is always a hard fail. The stock basis is the
  *  API's own seeded quantity. */
@@ -105,7 +113,7 @@ export function evaluate(observed: Observed, expected: Expected): CheckResult[] 
       note: distinctEmails === orders ? undefined : "a duplicate order reached the audit trail",
     },
     {
-      name: `      Mongo audit orders vs SCARD ${ORDERS_KEY} (undercount tolerance ${tolerance})`,
+      name: `      Mongo audit orders vs SCARD orders:{saleId}:users (undercount tolerance ${tolerance})`,
       pass: auditPass,
       expected: `${accepted} (undercount up to ${tolerance} accepted; overcount forbidden)`,
       actual: String(orders),
@@ -119,13 +127,13 @@ export function evaluate(observed: Observed, expected: Expected): CheckResult[] 
               : `audit undercount of ${auditUnder} EXCEEDS tolerance ${tolerance} — too many accepted orders never reached the audit`,
     },
     {
-      name: `      ${STOCK_KEY} == API stockQuantity - accepted (SCARD)`,
+      name: "      stock:{saleId}:remaining == API stockQuantity - accepted (SCARD)",
       pass: stockRemaining !== null && stockRemaining === apiStockQuantity - accepted,
       expected: String(apiStockQuantity - accepted),
       actual: stockRemaining === null ? "<key missing>" : String(stockRemaining),
       note:
         stockRemaining === null
-          ? "stock:remaining is absent — the harness never fabricates a 0 (a fabricated 0 reads as a clean sell-out)"
+          ? "stock:{saleId}:remaining is absent — the harness never fabricates a 0 (a fabricated 0 reads as a clean sell-out)"
           : undefined,
     },
     {
@@ -199,7 +207,7 @@ function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Strict integer parse for `stock:remaining`. `Number.parseInt`
+/** Strict integer parse for `stock:{saleId}:remaining`. `Number.parseInt`
  *  truncates trailing garbage — `"100abc" -> 100` — which could accidentally
  *  equal the expected value and pass a corrupt run. A non-integer yields `NaN`,
  *  which fails the equality check loudly instead of reading as a clean value. */
@@ -233,14 +241,17 @@ export async function observe(config: StressConfig): Promise<Observed> {
         `sale document "${SALE_SLUG}" has no integer stockQuantity — cannot establish the authoritative stock basis`,
       );
     }
+    // Story 4.6: the resolved sale's own Mongo ObjectId string is {saleId} —
+    // the same identity server/src/adapters/redis namespaces its keys by.
+    const saleId = String(sale._id);
     const filter = { saleId: sale._id, status: "confirmed" };
 
     const orders = await pollUntilStable({
       countOrders: () => db.collection("orders").countDocuments(filter),
     });
     const distinctEmails = (await db.collection("orders").distinct("email", filter)).length;
-    const orderUsers = await redis.sCard(ORDERS_KEY);
-    const rawStock = await redis.get(STOCK_KEY);
+    const orderUsers = await redis.sCard(ordersKeyFor(saleId));
+    const rawStock = await redis.get(stockKeyFor(saleId));
 
     return {
       orders,

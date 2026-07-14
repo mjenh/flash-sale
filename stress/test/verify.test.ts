@@ -24,6 +24,17 @@ describe("evaluate", () => {
     expect(results).toHaveLength(5);
   });
 
+  it("Story 4.6: report labels name the namespaced key scheme, never the retired v1.0 flat keys", () => {
+    const results = evaluate(observed(), EXPECTED);
+    const labels = results.map((r) => r.name).join(" | ");
+
+    expect(labels).toContain("orders:{saleId}:users");
+    expect(labels).toContain("stock:{saleId}:remaining");
+    // The exact retired v1.0 flat-key literals must never appear in a label.
+    expect(labels).not.toContain("orders:users");
+    expect(labels).not.toContain("stock:remaining");
+  });
+
   it("fails an oversell (101 orders against stock 100)", () => {
     const results = evaluate(
       observed({ orders: 101, distinctEmails: 101, orderUsers: 101, stockRemaining: -1 }),

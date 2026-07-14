@@ -10,8 +10,9 @@
 // bootstrap() runs (the warm-boot test) and assert against the exact
 // sale-scoped key/channel names elsewhere.
 import { describe, expect, it, vi } from "vitest";
+import { Writable } from "node:stream";
 import request from "supertest";
-import { pino } from "pino";
+import { pino, type Logger } from "pino";
 import { bootstrap, type BootstrapOverrides } from "../src/bootstrap.ts";
 import { ConfigError } from "../src/adapters/config.ts";
 import { SALE_SLUG } from "../src/adapters/mongo/seed.ts";
@@ -25,6 +26,20 @@ const validEnv = {
   SALE_START_TIME: "2026-07-10T04:00:00Z",
   SALE_END_TIME: "2026-07-10T05:00:00Z",
 };
+
+const FLAT_STOCK_KEY = "stock:remaining";
+const FLAT_ORDERS_KEY = "orders:users";
+
+function captureLogger(): { lines: string[]; logger: Logger } {
+  const lines: string[] = [];
+  const stream = new Writable({
+    write(chunk: Buffer, _enc, cb) {
+      lines.push(chunk.toString());
+      cb();
+    },
+  });
+  return { lines, logger: pino(stream) };
+}
 
 function fakeSubscriber() {
   const subscriber = {
@@ -48,15 +63,23 @@ function fakeSubscriber() {
 async function fakeOverrides(
   env: Record<string, string | undefined>,
   buildInitialKv?: (saleId: string) => Map<string, string>,
+  opts?: {
+    /** Story 4.6: pre-seed initial Redis SET membership (e.g. a flat
+     *  `orders:users` set) keyed by whatever the caller wants — independent
+     *  of the saleId-keyed `kv`/string map above. */
+    buildInitialSets?: (saleId: string) => Map<string, Set<string>>;
+    logger?: Logger;
+  },
 ) {
   // In-memory command surface for the stock adapter (get), the order store's
   // boot-time registration (scriptLoad), the reconciler (exists/del/sAdd/set),
-  // the sale:{saleId}:events publisher (publish) + the duplicate()d
-  // subscriber connection + isOpen for teardown.
+  // Story 4.6's flat-key migrator (exists/rename/del), the sale:{saleId}:events
+  // publisher (publish) + the duplicate()d subscriber connection + isOpen for
+  // teardown.
   const mongo = createFakeMongo();
   const saleId = await reserveSaleId(mongo, SALE_SLUG);
   const kv = buildInitialKv?.(saleId) ?? new Map<string, string>();
-  const sets = new Map<string, Set<string>>();
+  const sets = opts?.buildInitialSets?.(saleId) ?? new Map<string, Set<string>>();
   const subscriber = fakeSubscriber();
   const fakeRedis = {
     isOpen: false,
@@ -65,11 +88,22 @@ async function fakeOverrides(
       kv.set(key, value);
       return "OK";
     }),
-    exists: vi.fn(async (key: string) => (kv.has(key) ? 1 : 0)),
+    exists: vi.fn(async (key: string) => (kv.has(key) || sets.has(key) ? 1 : 0)),
     del: vi.fn(async (key: string) => {
       kv.delete(key);
       sets.delete(key);
       return 1;
+    }),
+    rename: vi.fn(async (source: string, destination: string) => {
+      if (kv.has(source)) {
+        kv.set(destination, kv.get(source) as string);
+        kv.delete(source);
+      }
+      if (sets.has(source)) {
+        sets.set(destination, sets.get(source) as Set<string>);
+        sets.delete(source);
+      }
+      return "OK";
     }),
     sAdd: vi.fn(async (key: string, members: string[]) => {
       const set = sets.get(key) ?? new Set<string>();
@@ -85,7 +119,7 @@ async function fakeOverrides(
   } as unknown as RedisClient;
   const overrides = {
     env,
-    logger: pino({ level: "silent" }),
+    logger: opts?.logger ?? pino({ level: "silent" }),
     createRedis: vi.fn(() => fakeRedis),
     connectRedis: vi.fn(async () => {}),
     disconnectRedis: vi.fn(async () => {}),
@@ -291,6 +325,81 @@ describe("bootstrap", () => {
       await expect(
         bootstrap({ ...overrides, clock: () => Date.parse(validEnv.SALE_START_TIME) + 1000 }),
       ).resolves.toBeDefined();
+    });
+  });
+
+  // Story 4.6: one-time v1.0 -> v1.1 flat-key migration, wired strictly
+  // before Story 4.5's warm/cold reconciliation.
+  describe("v1.0 flat-key migration (Story 4.6)", () => {
+    it("AC1: surviving flat keys are RENAMEd onto the namespaced keys, warn-logged, and reconciliation then sees a WARM boot (no cold rebuild)", async () => {
+      const { lines, logger } = captureLogger();
+      const { fakeRedis, kv, sets, saleId, overrides } = await fakeOverrides(
+        { ...validEnv, STOCK_QUANTITY: "500" },
+        () => new Map([[FLAT_STOCK_KEY, "42"]]),
+        { buildInitialSets: () => new Map([[FLAT_ORDERS_KEY, new Set(["a@x.com", "b@x.com"])]]), logger },
+      );
+
+      await bootstrap(overrides);
+
+      // Renamed onto the namespaced keys, with the migrated VALUE preserved
+      // (42, not the current STOCK_QUANTITY=500) — proof reconciliation ran
+      // AFTER migration and treated the migrated key as warm.
+      expect(kv.get(stockKeyFor(saleId))).toBe("42");
+      expect(sets.get(ordersKeyFor(saleId))).toEqual(new Set(["a@x.com", "b@x.com"]));
+      expect(kv.has(FLAT_STOCK_KEY)).toBe(false);
+      expect(sets.has(FLAT_ORDERS_KEY)).toBe(false);
+
+      // Reconciliation's cold-rebuild writer (SET) was never invoked for the
+      // stock key beyond the migrator's own RENAME — no cold-rebuild SET call.
+      const setSpy = fakeRedis as unknown as { set: ReturnType<typeof vi.fn> };
+      expect(setSpy.set).not.toHaveBeenCalled();
+
+      const warnLine = lines.find((l) => l.includes("Migrated v1.0 flat Redis keys"));
+      expect(warnLine).toBeDefined();
+      const parsed = JSON.parse(warnLine as string) as { level: number; msg: string; saleId: string; slug: string };
+      expect(parsed.level).toBe(40); // pino warn
+      expect(parsed.msg).toBe(`Migrated v1.0 flat Redis keys to namespaced keys for sale ${SALE_SLUG}`);
+      expect(parsed.saleId).toBe(saleId);
+      expect(parsed.slug).toBe(SALE_SLUG);
+    });
+
+    it("AC1: both namespaced and flat keys exist — namespaced keys take precedence; flat keys are DEL'd with a warning", async () => {
+      const { lines, logger } = captureLogger();
+      const { kv, sets, saleId, overrides } = await fakeOverrides(
+        validEnv,
+        (id) => new Map([[stockKeyFor(id), "77"], [FLAT_STOCK_KEY, "999"]]),
+        { buildInitialSets: (id) => new Map([[ordersKeyFor(id), new Set(["already@x.com"])], [FLAT_ORDERS_KEY, new Set(["stale@x.com"])]]), logger },
+      );
+
+      await bootstrap(overrides);
+
+      // The namespaced key's own value survives untouched (warm boot).
+      expect(kv.get(stockKeyFor(saleId))).toBe("77");
+      expect(sets.get(ordersKeyFor(saleId))).toEqual(new Set(["already@x.com"]));
+      // The flat leftovers were deleted, not merged or renamed over.
+      expect(kv.has(FLAT_STOCK_KEY)).toBe(false);
+      expect(sets.has(FLAT_ORDERS_KEY)).toBe(false);
+
+      const warnLine = lines.find((l) => l.includes("namespaced keys take precedence"));
+      expect(warnLine).toBeDefined();
+      const parsed = JSON.parse(warnLine as string) as { level: number };
+      expect(parsed.level).toBe(40);
+    });
+
+    it("AC2: a fresh v1.1 install (no flat keys anywhere) boots with no migration warning logged", async () => {
+      const { lines, logger } = captureLogger();
+      const { overrides } = await fakeOverrides(validEnv, undefined, { logger });
+
+      await bootstrap(overrides);
+
+      expect(lines.some((l) => l.includes("Migrated v1.0 flat Redis keys"))).toBe(false);
+      expect(lines.some((l) => l.includes("namespaced keys take precedence"))).toBe(false);
+    });
+
+    it("runs strictly before reconciliation: a cold boot (no namespaced OR flat keys) still cold-rebuilds normally", async () => {
+      const { kv, saleId, overrides } = await fakeOverrides(validEnv);
+      await bootstrap(overrides);
+      expect(kv.get(stockKeyFor(saleId))).toBe("100");
     });
   });
 });

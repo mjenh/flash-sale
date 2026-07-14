@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve as resolvePath } from "node:path";
 import { loadStressConfig, type StressConfig } from "./config.ts";
-import { runReset } from "./reset.ts";
+import { runReset, stockKeyFor } from "./reset.ts";
 import { runVerify } from "./verify.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -341,7 +341,9 @@ async function main(): Promise<void> {
   announce("2/6 reset (API stopped)");
   try {
     const result = await runReset(config);
-    console.log(`stock:remaining = ${result.stockQuantity}; cleared ${result.cleared.join(", ")}`);
+    console.log(
+      `${stockKeyFor(result.saleId)} = ${result.stockQuantity}; cleared ${result.cleared.join(", ")}`,
+    );
     record("reset", true);
   } catch (err) {
     record("reset", false, err instanceof Error ? err.message : String(err));
