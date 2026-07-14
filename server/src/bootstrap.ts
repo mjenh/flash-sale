@@ -14,7 +14,14 @@ import { createReconciler } from "./adapters/redis/reconcile.ts";
 import { createEventPublisher, createSaleEventsSubscription } from "./adapters/redis/events.ts";
 import { connectMongo, disconnectMongo } from "./adapters/mongo/client.ts";
 import { createOrderRecorder, mongoAuditModelOps, type AuditModelOps } from "./adapters/mongo/audit.ts";
-import { createDomainSeeder, mongoSeedModelOps, SALE_SLUG, type SeedModelOps } from "./adapters/mongo/seed.ts";
+import {
+  createDomainSeeder,
+  mongoSeedModelOps,
+  SALE_NAME,
+  SALE_SLUG,
+  type SeedModelOps,
+} from "./adapters/mongo/seed.ts";
+import { createCatalogReader, mongoCatalogModelOps, type CatalogModelOps } from "./adapters/mongo/catalog.ts";
 import { noopPaymentProvider } from "./adapters/payment/noop.ts";
 import { createSaleStatusService, type StockReader } from "./services/sale-status.ts";
 import { armWindowTimers, createSaleEventsBroadcaster } from "./services/sale-events.ts";
@@ -35,8 +42,8 @@ export interface BootstrapOverrides {
   disconnectRedis?: (client: RedisClient) => Promise<void>;
   connectMongoDb?: (uri: string) => Promise<unknown>;
   disconnectMongoDb?: () => Promise<void>;
-  /** Test seams — tests run the real recorder/seeder over fake model ops. */
-  mongoModelOps?: { audit: AuditModelOps; seed: SeedModelOps };
+  /** Test seams — tests run the real recorder/seeder/catalog reader over fake model ops. */
+  mongoModelOps?: { audit: AuditModelOps; seed: SeedModelOps; catalog: CatalogModelOps };
   payment?: PaymentProvider;
   /** Dedicated subscriber connection for sale:events pub/sub. */
   duplicateRedis?: (client: RedisClient) => RedisClient;
@@ -100,7 +107,11 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
 
   // Durable audit + restart safety, strictly before listen():
   // idempotent seed upserts, then the warm/cold gate on stock:{saleId}:remaining.
-  const mongoOps = overrides.mongoModelOps ?? { audit: mongoAuditModelOps, seed: mongoSeedModelOps };
+  const mongoOps = overrides.mongoModelOps ?? {
+    audit: mongoAuditModelOps,
+    seed: mongoSeedModelOps,
+    catalog: mongoCatalogModelOps,
+  };
   const seeder = createDomainSeeder(mongoOps.seed);
   const saleRefs = await seeder.seed(config);
   // Story 4.2: Redis keys/channel are namespaced by saleId — the resolved
@@ -197,11 +208,14 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
   if ((SALE_SLUG as string) === "active") {
     throw new ConfigError('The slug "active" is reserved for the discovery endpoint and cannot be used as a sale slug.');
   }
-  // Single-sale ops derived from boot-seeded data. A later story (4.3+) will
-  // replace this with a Mongoose-backed implementation for true multi-sale.
+  // Single-sale ops derived from boot-seeded data. A later story will
+  // replace this with a Mongoose-backed implementation for true multi-sale
+  // slug lookup (Story 4.3 added the Mongo-backed product/inventory join
+  // below, but sale identity itself is still this boot-seeded singleton).
   const seededSale: SaleSummary = {
     _id: saleRefs.saleId,
     slug: SALE_SLUG,
+    name: SALE_NAME,
     startTime: new Date(config.saleStartMs),
     endTime: new Date(config.saleEndMs),
     stockQuantity: config.stockQuantity,
@@ -218,6 +232,12 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
     ops: overrides.saleLookupOps ?? defaultSaleLookupOps,
     clock,
   });
+
+  // Story 4.3: the Sale -> SaleProduct -> Product -> Inventory join, read by
+  // the sale details endpoint. Reuses the unbound `stockStore` (getRemaining
+  // takes saleId directly) rather than the boot-bound `stockReader`, since
+  // the endpoint resolves its saleId per request via req.sale.
+  const catalog = createCatalogReader(mongoOps.catalog);
 
   // 5. App assembly.
   // Bind the boot-resolved saleId into the narrower ports createOrderService
@@ -243,7 +263,7 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
   });
   const app = createApp({
     logger,
-    apiRouter: createApiRouter({ saleStatus, saleEvents, orderService, saleResolver }),
+    apiRouter: createApiRouter({ saleStatus, saleEvents, orderService, saleResolver, catalog, stock: stockStore }),
     clientDistDir: env.CLIENT_DIST_DIR,
   });
 

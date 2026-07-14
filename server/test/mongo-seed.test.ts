@@ -7,6 +7,7 @@ import {
   createDomainSeeder,
   PRODUCT_NAME,
   PRODUCT_SKU,
+  SALE_NAME,
   SALE_SLUG,
   type SeedModelOps,
 } from "../src/adapters/mongo/seed.ts";
@@ -35,6 +36,7 @@ describe("createDomainSeeder (boot seed)", () => {
 
     expect(ops.upsertProduct).toHaveBeenCalledExactlyOnceWith(PRODUCT_SKU, PRODUCT_NAME);
     expect(ops.upsertSale).toHaveBeenCalledExactlyOnceWith(SALE_SLUG, {
+      name: SALE_NAME,
       startTime: new Date(config.saleStartMs),
       endTime: new Date(config.saleEndMs),
       stockQuantity: 7,
@@ -44,9 +46,10 @@ describe("createDomainSeeder (boot seed)", () => {
     expect(refs).toEqual({ saleId: "sale-1", productId: "product-1" });
   });
 
-  it("stable identities: the sku and slug are constants (single-sale system)", () => {
+  it("stable identities: the sku, slug, and name are constants (single-sale system)", () => {
     expect(PRODUCT_SKU).toBe("KEYCAP-ONE");
     expect(SALE_SLUG).toBe("flash-sale");
+    expect(SALE_NAME).toBe("Flash Sale");
   });
 
   it("listConfirmedOrderEmails passes through to the model op with the saleId", async () => {

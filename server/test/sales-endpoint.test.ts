@@ -7,9 +7,9 @@ import { describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { pino } from "pino";
 import { bootstrap, type BootstrapOverrides } from "../src/bootstrap.ts";
-import { SALE_SLUG } from "../src/adapters/mongo/seed.ts";
+import { PRODUCT_NAME, PRODUCT_SKU, SALE_NAME, SALE_SLUG } from "../src/adapters/mongo/seed.ts";
 import { createFakeRedis, stockKeyFor, type FakeRedis } from "./helpers/fake-redis.ts";
-import { createFakeMongo, reserveSaleId } from "./helpers/fake-mongo.ts";
+import { addCatalogProduct, createFakeMongo, reserveSaleId } from "./helpers/fake-mongo.ts";
 
 const SALE_START = "2026-07-10T04:00:00Z";
 const SALE_END = "2026-07-10T05:00:00Z";
@@ -17,9 +17,18 @@ const startMs = Date.parse(SALE_START);
 const endMs = Date.parse(SALE_END);
 const IN_WINDOW = startMs + 1000;
 
-async function boot(opts: { nowMs: number; stock?: string; stockQuantity?: string }) {
+async function boot(opts: {
+  nowMs: number;
+  stock?: string;
+  stockQuantity?: string;
+  /** Runs after the saleId is reserved but before bootstrap() seeds the
+   *  default product — lets tests add extra catalog products via
+   *  addCatalogProduct() ahead of the real seeder's own upsert. */
+  beforeBootstrap?: (mongo: ReturnType<typeof createFakeMongo>, saleId: string) => Promise<void>;
+}) {
   const mongo = createFakeMongo();
   const saleId = await reserveSaleId(mongo, SALE_SLUG);
+  await opts.beforeBootstrap?.(mongo, saleId);
   const fake: FakeRedis = createFakeRedis(opts.stock === undefined ? {} : { stock: opts.stock, saleId });
   const overrides: BootstrapOverrides = {
     env: {
@@ -37,7 +46,7 @@ async function boot(opts: { nowMs: number; stock?: string; stockQuantity?: strin
     mongoModelOps: mongo.ops,
   };
   const { app } = await bootstrap(overrides);
-  return { fake, saleId, app };
+  return { fake, mongo, saleId, app };
 }
 
 describe("GET /api/sales/active (discovery endpoint)", () => {
@@ -56,19 +65,69 @@ describe("GET /api/sales/active (discovery endpoint)", () => {
   });
 });
 
-describe("GET /api/sales/:slug (sale details placeholder)", () => {
-  it("returns sale info for a valid slug", async () => {
-    const { app } = await boot({ nowMs: IN_WINDOW, stock: "50" });
+describe("GET /api/sales/:slug (sale details with inventory, Story 4.3)", () => {
+  it("returns sale info + the joined product with remaining from Redis (AC1)", async () => {
+    const { app } = await boot({ nowMs: IN_WINDOW, stock: "42" });
     const res = await request(app).get("/api/sales/flash-sale");
     expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.sale.slug).toBe("flash-sale");
-    expect(res.body.sale.stockQuantity).toBe(100);
-    expect(res.body.sale.startTime).toBe("2026-07-10T04:00:00.000Z");
-    expect(res.body.sale.endTime).toBe("2026-07-10T05:00:00.000Z");
+    expect(res.body).toEqual({
+      success: true,
+      sale: {
+        slug: "flash-sale",
+        name: SALE_NAME,
+        startTime: "2026-07-10T04:00:00.000Z",
+        endTime: "2026-07-10T05:00:00.000Z",
+        stockQuantity: 100,
+        products: [
+          { sku: PRODUCT_SKU, name: PRODUCT_NAME, initialQuantity: 100, remaining: 42 },
+        ],
+      },
+    });
   });
 
-  it("returns 404 for an unknown slug", async () => {
+  it("joins multiple products for the sale, each carrying the sale's remaining stock (AC1, AC4)", async () => {
+    const { app } = await boot({
+      nowMs: IN_WINDOW,
+      stock: "7",
+      beforeBootstrap: async (mongo, saleId) => {
+        await addCatalogProduct(mongo, saleId, { sku: "EXTRA-1", name: "Extra Widget", initialQuantity: 25 });
+      },
+    });
+
+    const res = await request(app).get("/api/sales/flash-sale");
+    expect(res.status).toBe(200);
+    // beforeBootstrap adds EXTRA-1 before bootstrap()'s own seeder links the
+    // default KEYCAP-ONE product, so SaleProduct listing order (and thus the
+    // response order) has EXTRA-1 first — proving the join preserves
+    // SaleProduct order rather than sorting or reordering by sku/name.
+    expect(res.body.sale.products).toEqual([
+      { sku: "EXTRA-1", name: "Extra Widget", initialQuantity: 25, remaining: 7 },
+      { sku: PRODUCT_SKU, name: PRODUCT_NAME, initialQuantity: 100, remaining: 7 },
+    ]);
+  });
+
+  it("degrades gracefully when Redis is unreachable — remaining: null, sale/product details unaffected (AC3)", async () => {
+    const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "50" });
+    fake.failing = true;
+
+    const res = await request(app).get("/api/sales/flash-sale");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      success: true,
+      sale: {
+        slug: "flash-sale",
+        name: SALE_NAME,
+        startTime: "2026-07-10T04:00:00.000Z",
+        endTime: "2026-07-10T05:00:00.000Z",
+        stockQuantity: 100,
+        products: [
+          { sku: PRODUCT_SKU, name: PRODUCT_NAME, initialQuantity: 100, remaining: null },
+        ],
+      },
+    });
+  });
+
+  it("returns 404 for an unknown slug (AC2)", async () => {
     const { app } = await boot({ nowMs: IN_WINDOW, stock: "50" });
     const res = await request(app).get("/api/sales/nonexistent");
     expect(res.status).toBe(404);

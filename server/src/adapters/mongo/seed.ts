@@ -11,6 +11,7 @@ import type { SaleRefs } from "./audit.ts";
 // Single-sale system: the sale keys on a constant slug and its window/stock
 // are $set from env each boot so the durable record mirrors current config.
 export const SALE_SLUG = "flash-sale";
+export const SALE_NAME = "Flash Sale";
 export const PRODUCT_SKU = "KEYCAP-ONE";
 export const PRODUCT_NAME = "Keycap One";
 
@@ -19,7 +20,7 @@ export interface SeedModelOps {
   upsertProduct(sku: string, name: string): Promise<string>;
   upsertSale(
     slug: string,
-    sale: { startTime: Date; endTime: Date; stockQuantity: number },
+    sale: { name: string; startTime: Date; endTime: Date; stockQuantity: number },
   ): Promise<string>;
   upsertSaleProduct(saleId: string, productId: string): Promise<void>;
   upsertInventory(productId: string, initialQuantity: number): Promise<void>;
@@ -39,10 +40,10 @@ export const mongoSeedModelOps: SeedModelOps = {
     return String(product._id);
   },
 
-  async upsertSale(slug, { startTime, endTime, stockQuantity }): Promise<string> {
+  async upsertSale(slug, { name, startTime, endTime, stockQuantity }): Promise<string> {
     const sale = await Sale.findOneAndUpdate(
       { slug },
-      { $set: { startTime, endTime, stockQuantity } },
+      { $set: { name, startTime, endTime, stockQuantity } },
       { upsert: true, new: true },
     );
     if (sale === null) {
@@ -83,6 +84,7 @@ export function createDomainSeeder(ops: SeedModelOps = mongoSeedModelOps): Domai
     async seed(config: AppConfig): Promise<SaleRefs> {
       const productId = await ops.upsertProduct(PRODUCT_SKU, PRODUCT_NAME);
       const saleId = await ops.upsertSale(SALE_SLUG, {
+        name: SALE_NAME,
         startTime: new Date(config.saleStartMs),
         endTime: new Date(config.saleEndMs),
         stockQuantity: config.stockQuantity,
