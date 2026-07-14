@@ -1,9 +1,7 @@
-// GET /api/order/:email endpoint tests through the REAL bootstrap() (Story
-// 1.5 AC 1-4) — tests never re-implement boot. Same harness as the POST
-// tests: shared in-memory fake Redis + fake Mongo model ops, pinned clock,
-// silent pino; swap the fake for a real client against compose-run Redis and
-// this file runs unchanged (compose validation deferred to Story 3.1 —
-// Docker unavailable here).
+// Endpoint tests through the REAL bootstrap() — tests never re-implement
+// boot. Same harness as the POST tests: shared in-memory fake Redis + fake
+// Mongo model ops, pinned clock, silent pino; swap the fake for a real
+// client against compose-run Redis and this file runs unchanged.
 import { describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { pino } from "pino";
@@ -52,7 +50,7 @@ const redisCommandCount = (fake: FakeRedis): number =>
   Object.values(fake.calls).reduce((sum, n) => sum + n, 0);
 
 describe("GET /api/order/:email (booted via bootstrap())", () => {
-  it("200 ordered:true with the exact body after a 201 order (AC 1)", async () => {
+  it("200 ordered:true with the exact body after a 201 order", async () => {
     const { app } = await boot({ nowMs: IN_WINDOW, stock: "5" });
     await request(app).post("/api/order").send({ email: "winner@example.com" });
 
@@ -61,15 +59,15 @@ describe("GET /api/order/:email (booted via bootstrap())", () => {
     expect(res.body).toEqual({ success: true, ordered: true, email: "winner@example.com" });
   });
 
-  it("200 ordered:false with the exact body for an email with no order (AC 2)", async () => {
+  it("200 ordered:false with the exact body for an email with no order", async () => {
     const { app } = await boot({ nowMs: IN_WINDOW, stock: "5" });
     const res = await request(app).get("/api/order/nobody@example.com");
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ success: true, ordered: false, email: "nobody@example.com" });
   });
 
-  it("answers from Redis only — an order that exists ONLY in Mongo reads ordered:false (AC 1, AD-3)", async () => {
-    // Warm boot (stock key present) — the AD-4 cold rebuild does NOT run, so
+  it("answers from Redis only — an order that exists ONLY in Mongo reads ordered:false", async () => {
+    // Warm boot (stock key present) — the cold rebuild does NOT run, so
     // Redis never learns about the Mongo-only order below.
     const { fake, mongo, app } = await boot({ nowMs: IN_WINDOW, stock: "5" });
     const saleId = mongo.sales.get("flash-sale")?.id;
@@ -97,7 +95,7 @@ describe("GET /api/order/:email (booted via bootstrap())", () => {
     expect(fake.calls.del).toBe(snapshot.del);
   });
 
-  describe("400 validation precedes the Redis read (AC 3) — no Redis command runs", () => {
+  describe("400 validation precedes the Redis read — no Redis command runs", () => {
     const paths: Array<[string, string]> = [
       ["no path param (GET /api/order)", "/api/order"],
       ["trailing slash (GET /api/order/)", "/api/order/"],
@@ -142,7 +140,7 @@ describe("GET /api/order/:email (booted via bootstrap())", () => {
     expect(res.body).toEqual({ success: true, ordered: true, email: "a+b@example.com" });
   });
 
-  it("answers identically outside the window — never 409, never a window error (AD-2/AD-8)", async () => {
+  it("answers identically outside the window — never 409, never a window error", async () => {
     const { fake, mongo, app } = await boot({ nowMs: IN_WINDOW, stock: "5" });
     await request(app).post("/api/order").send({ email: "held@example.com" });
 
@@ -158,7 +156,7 @@ describe("GET /api/order/:email (booted via bootstrap())", () => {
     }
   });
 
-  it("fails closed with the exact 503 envelope when Redis is unreachable (AC 4)", async () => {
+  it("fails closed with the exact 503 envelope when Redis is unreachable", async () => {
     const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "5" });
     fake.failing = true;
     const res = await request(app).get("/api/order/who@example.com");

@@ -119,8 +119,8 @@ the happy path):
 
 | Endpoint | Codes |
 | --- | --- |
-| `POST /api/order` | `201` created · `200` already ordered (AD-2, outranks window/stock) · `409` sold out / sale not active · `400` empty or > 256-char email · `503` Redis loss (AD-5) |
-| `GET /api/order/:email` | `200 { ordered: true｜false }` · `400` empty or > 256-char email · `503` Redis loss (AD-5) — the membership read is a live Redis read, so it fails closed too |
+| `POST /api/order` | `201` created · `200` already ordered (outranks window/stock) · `409` sold out / sale not active · `400` empty or > 256-char email · `503` Redis loss |
+| `GET /api/order/:email` | `200 { ordered: true｜false }` · `400` empty or > 256-char email · `503` Redis loss — the membership read is a live Redis read, so it fails closed too |
 
 ### 3.4 Services (`src/services/`)
 

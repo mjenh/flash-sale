@@ -1,8 +1,7 @@
-// Unit tests for the sale:events Redis adapter (Story 1.6 AC 1/5) — fake
-// clients, zero I/O. The publisher is one bounded PUBLISH on the exact spine
-// channel (timeout AND rejection wrap into RedisUnavailableError); the
-// subscription wires the DEDICATED duplicated connection: error listener
-// BEFORE connect, fail-fast bounded connect, SUBSCRIBE sale:events,
+// Fake clients, zero I/O. The publisher is one bounded PUBLISH on the spine
+// channel (timeout and rejection wrap into RedisUnavailableError); the
+// subscription wires the dedicated duplicated connection: error listener
+// before connect, fail-fast bounded connect, SUBSCRIBE sale:events,
 // best-effort teardown.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -38,7 +37,7 @@ describe("createEventPublisher", () => {
     });
   }
 
-  it("a hung publish rejects with RedisUnavailableError within commandTimeoutMs (AD-5 bounded)", async () => {
+  it("a hung publish rejects with RedisUnavailableError within commandTimeoutMs", async () => {
     vi.useFakeTimers();
     const client = { publish: vi.fn(() => new Promise<number>(() => {})) };
     const publisher = createEventPublisher(client, { commandTimeoutMs: 1000 });

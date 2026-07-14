@@ -1,5 +1,5 @@
-// AD-6: Date.now() on the API server is the sole clock. Services receive it
-// injected; routes/adapters never call Date.now() for window decisions.
+// The sole clock — services receive it injected; routes and adapters never
+// call Date.now() directly for window decisions.
 
 export type Clock = () => number;
 

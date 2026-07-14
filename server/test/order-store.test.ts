@@ -1,7 +1,7 @@
-// Unit tests for the order-store adapter (AC 1, 4, 7) — fake client, zero I/O.
-// Covers: registration + sha cache, EVALSHA invocation shape, automatic
-// NOSCRIPT -> EVAL fallback (AD-1), defensive reply parsing, bounded timeouts
-// and fail-closed wrapping (AD-5), and the outside-window SISMEMBER probe.
+// Fake client, zero I/O. Covers: registration + sha cache, EVALSHA
+// invocation shape, automatic NOSCRIPT -> EVAL fallback, defensive reply
+// parsing, bounded timeouts and fail-closed wrapping, and the
+// outside-window SISMEMBER probe.
 import { describe, expect, it, vi } from "vitest";
 import {
   createOrderStore,
@@ -85,7 +85,7 @@ describe("createOrderStore", () => {
     expect(client.eval).toHaveBeenCalledTimes(1);
   });
 
-  it("wraps non-NOSCRIPT command rejections into RedisUnavailableError (AD-5)", async () => {
+  it("wraps non-NOSCRIPT command rejections into RedisUnavailableError", async () => {
     const client = fakeClient({
       evalSha: vi.fn(async () => {
         throw new Error("The client is closed");

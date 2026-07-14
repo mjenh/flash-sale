@@ -17,14 +17,14 @@ function expectedLine(iso: string): string {
     .toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })
     .replace(/,/g, "");
   const doors = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-  return `${day} · doors ${doors} · one day only`;
+  return `${day} · doors ${doors}`;
 }
 
 describe("formatDateLine", () => {
   it("derives the date line from the server's ISO instant, viewer-local", () => {
     const line = formatDateLine(START);
     expect(line).toBe(expectedLine(START));
-    expect(line).toMatch(/ · doors .+ · one day only$/);
+    expect(line).toMatch(/ · doors .+$/);
     // Never hand-maintained: the copy carries no hard-coded date.
     expect(line).not.toContain("undefined");
   });

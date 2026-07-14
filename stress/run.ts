@@ -1,13 +1,11 @@
-// The one command (NFR-18, NFR-20): `npm run stress` / `make stress`.
-//
 // The protocol, in the only order that is honest:
 //   stop API → reset → start API → k6 → verifier → (window phase)
 //
-// - Reset while the API serves would race the AD-1 Lua script's sole-writer rule.
-// - The API restarts AFTER the wipe so AD-4's boot rebuild re-establishes a
+// - Reset while the API serves would race the Lua script's sole-writer rule.
+// - The API restarts AFTER the wipe so the boot rebuild re-establishes a
 //   clean, boot-verified state.
 // - The verifier runs LAST and polls, because the Mongo audit write is async
-//   by design (AD-3).
+//   by design.
 //
 // Every phase prints as it starts and hard-fails the run on error. The combined
 // exit code is the pass/fail signal: 0 only when every phase passed.
@@ -56,13 +54,13 @@ interface Phase {
 const phases: Phase[] = [];
 
 /** k6's corroborating counters, folded in from .out/k6-summary.json for the
- *  finish() report (AI-S3-13). Undefined until the burst has run. */
+ *  finish() report. Undefined until the burst has run. */
 let k6Summary: string | undefined;
 
 /** A Node fetch() connection refusal surfaces as a TypeError whose `cause`
  *  carries `code: "ECONNREFUSED"`. A TimeoutError/AbortError (a wedged but
  *  still-bound API) is NOT a refusal — only a genuine refusal proves nothing is
- *  listening (AI-S3-03). */
+ *  listening. */
 function isConnectionRefused(err: unknown): boolean {
   const cause = (err as { cause?: { code?: unknown } } | null)?.cause;
   return typeof cause === "object" && cause !== null && (cause as { code?: unknown }).code === "ECONNREFUSED";
@@ -115,7 +113,7 @@ async function waitForApiStopped(config: StressConfig, timeoutMs = 30_000): Prom
     } catch (err) {
       // ONLY a genuine connection refusal proves nothing is listening. A
       // timeout/abort means the API is wedged-but-alive — keep waiting, never
-      // declare it stopped and let the reset race the Lua script (AI-S3-03).
+      // declare it stopped and let the reset race the Lua script.
       if (isConnectionRefused(err)) {
         return true;
       }
@@ -180,7 +178,7 @@ function runK6(config: StressConfig): K6Result {
     "--rm",
     "-i",
     // grafana/k6 runs as a non-root user; run it as the host UID so it can
-    // write .out/ on the host-owned bind mount (AI-S3-13).
+    // write .out/ on the host-owned bind mount.
     ...(process.getuid ? ["--user", String(process.getuid())] : []),
     "--network",
     "host",
@@ -223,7 +221,7 @@ function classify(status: number | null, runner: string): K6Result {
 
 /** The burst writes .out/k6-summary.json (handleSummary) — fold its
  *  corroborating counters (201/409/200 and any 5xx) into the harness report so
- *  the finish() output prints the shape the README promises (AI-S3-13). */
+ *  the finish() output prints the shape the README promises. */
 function readK6Summary(): string | undefined {
   try {
     const raw = readFileSync(resolvePath(HERE, ".out", "k6-summary.json"), "utf8");
@@ -235,8 +233,8 @@ function readK6Summary(): string | undefined {
   }
 }
 
-/** SM-3 / NFR-13: attempts outside the window are ALL rejected with
- *  { success: false }. The window is boot-parsed config (AD-6), so the only
+/** Attempts outside the window are ALL rejected with
+ *  { success: false }. The window is boot-parsed config, so the only
  *  honest way to prove this against the deployed stack is to restart the API
  *  with a past window and knock on the door. */
 async function windowPhase(config: StressConfig): Promise<boolean> {
@@ -249,13 +247,13 @@ async function windowPhase(config: StressConfig): Promise<boolean> {
   // The restore is wrapped in a finally so it ALWAYS runs — even on an early
   // return or a throw. An interrupted window phase must never leave the API
   // pinned to the 2020 closed window while the run can still print PASS
-  // (AI-S3-08). The restore is its own recorded pass/fail phase.
+  // The restore is its own recorded pass/fail phase.
   try {
     if (compose(["up", "-d", "--wait", "api"], closed) !== 0) {
-      return record("window phase (SM-3)", false, "could not restart the api with a closed window");
+      return record("window phase", false, "could not restart the api with a closed window");
     }
     if (!(await waitForApi(config))) {
-      return record("window phase (SM-3)", false, "api never became ready with the closed window");
+      return record("window phase", false, "api never became ready with the closed window");
     }
 
     const failures: string[] = [];
@@ -280,20 +278,20 @@ async function windowPhase(config: StressConfig): Promise<boolean> {
     if (failures.length > 0) {
       console.error(failures.join("\n"));
       return record(
-        "window phase (SM-3)",
+        "window phase",
         false,
         `${failures.length}/20 out-of-window attempts were not rejected with 409 { success: false, error: "Sale is not active." }`,
       );
     }
     console.log('20/20 out-of-window attempts rejected: 409 { success: false, error: "Sale is not active." }');
-    return record("window phase (SM-3)", true);
+    return record("window phase", true);
   } finally {
     await restoreOpenWindow(config);
   }
 }
 
 /** Restore the compose-default (active) window so the stack is left usable, and
- *  PROVE it landed there before the harness can declare success (AI-S3-08). */
+ *  PROVE it landed there before the harness can declare success. */
 async function restoreOpenWindow(config: StressConfig): Promise<boolean> {
   if (compose(["up", "-d", "--wait", "api"]) !== 0) {
     return record("window restore", false, "docker compose could not restart the api on the default (open) window");
@@ -381,7 +379,7 @@ async function main(): Promise<void> {
     record("verifier", false, err instanceof Error ? err.message : String(err));
   }
 
-  announce("6/6 window phase (SM-3)");
+  announce("6/6 window phase");
   await windowPhase(config);
 
   finish();
@@ -402,7 +400,7 @@ function finish(): void {
 
 // A bare `await main()` would let a StressConfigError, an unhandled rejection,
 // or any throw before finish() escape as a raw stack trace instead of the
-// pass/fail summary (AI-S3-09). Record the abort as a failed phase and route
+// pass/fail summary. Record the abort as a failed phase and route
 // through finish() so the summary and the non-zero exit code are still honored.
 main().catch((err) => {
   const message = err instanceof Error ? err.message : String(err);

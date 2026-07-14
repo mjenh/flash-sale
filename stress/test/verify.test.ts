@@ -1,4 +1,4 @@
-// The judge, proven with fakes. The load-bearing case is the SM-C1 one:
+// The judge, proven with fakes. The load-bearing case is the no-tolerance one:
 // 99 orders must fail exactly as loudly as 101.
 import { describe, expect, it, vi } from "vitest";
 import { evaluate, passed, pollUntilStable, type Observed } from "../verify.ts";
@@ -35,7 +35,7 @@ describe("evaluate", () => {
     expect(results[0]?.note).toContain("OVERSOLD");
   });
 
-  it("fails an under-accept (99 orders) — SM-C1: an inflated rejection rate is also a bug", () => {
+  it("fails an under-accept (99 orders) — an inflated rejection rate is also a bug", () => {
     const results = evaluate(
       observed({ orders: 99, distinctEmails: 99, orderUsers: 99, stockRemaining: 1 }),
       EXPECTED,
@@ -46,7 +46,7 @@ describe("evaluate", () => {
     expect(results[0]?.note).toContain("UNDER-ACCEPTED");
   });
 
-  it("PASSES an audit undercount within tolerance — the accepted NFR-4 property (AI-S3-06)", () => {
+  it("PASSES an audit undercount within tolerance — the accepted async-audit property", () => {
     // Redis accepted 100 (stock drained to 0); one async Mongo audit write was
     // lost, so the audit shows 99. Redis is authoritative — this is a PASS with
     // a note, not a red proof.
@@ -57,10 +57,10 @@ describe("evaluate", () => {
 
     expect(passed(results)).toBe(true);
     expect(results[2]?.pass).toBe(true);
-    expect(results[2]?.note).toContain("ACCEPTED");
+    expect(results[2]?.note).toContain("accepted");
   });
 
-  it("FAILS an audit overcount — Mongo holds an order Redis never accepted (a phantom, AI-S3-06)", () => {
+  it("FAILS an audit overcount — Mongo holds an order Redis never accepted (a phantom)", () => {
     const results = evaluate(
       observed({ orders: 101, distinctEmails: 101, orderUsers: 100, stockRemaining: 0 }),
       EXPECTED,
@@ -71,7 +71,7 @@ describe("evaluate", () => {
     expect(results[2]?.note).toContain("OVERCOUNT");
   });
 
-  it("FAILS an audit undercount that EXCEEDS the tolerance (AI-S3-06)", () => {
+  it("FAILS an audit undercount that EXCEEDS the tolerance", () => {
     const results = evaluate(
       observed({ orders: 90, distinctEmails: 90, orderUsers: 100, stockRemaining: 0 }),
       { ...EXPECTED, auditTolerance: 1 },
@@ -82,24 +82,24 @@ describe("evaluate", () => {
     expect(results[2]?.note).toContain("EXCEEDS");
   });
 
-  it("FAILS — loudly — when the harness stock disagrees with the API's seeded stock (AI-S3-05)", () => {
+  it("FAILS — loudly — when the harness stock disagrees with the API's seeded stock", () => {
     // The API booted with 50 units but the harness seeded/assumed 100 and the
     // sale sold 100. Old behavior: silent PASS (marking its own homework). Now:
-    // SM-1 catches the 2x oversell against the authoritative basis, AND the AD-4
-    // cross-check flags the disagreement.
+    // The oversell check catches the 2x oversell against the authoritative basis,
+    // AND the cross-check flags the disagreement.
     const results = evaluate(
       observed({ orders: 100, distinctEmails: 100, orderUsers: 100, stockRemaining: -50, apiStockQuantity: 50 }),
       { stockQuantity: 100, attempts: 5000 },
     );
 
     expect(passed(results)).toBe(false);
-    expect(results[0]?.pass).toBe(false); // SM-1 oversell vs the API's real 50
+    expect(results[0]?.pass).toBe(false); // oversell vs the API's real 50
     expect(results[0]?.note).toContain("OVERSOLD");
-    expect(results[4]?.pass).toBe(false); // AD-4 harness/API stock disagreement
+    expect(results[4]?.pass).toBe(false); // harness/API stock disagreement
     expect(results[4]?.note).toContain("authoritative");
   });
 
-  it("fails on a duplicate email in the audit trail (SM-2)", () => {
+  it("fails on a duplicate email in the audit trail", () => {
     const results = evaluate(observed({ distinctEmails: 99 }), EXPECTED);
 
     expect(passed(results)).toBe(false);
@@ -133,7 +133,7 @@ describe("evaluate", () => {
 });
 
 describe("pollUntilStable", () => {
-  it("returns the count once two consecutive samples agree (the AD-3 async drain)", async () => {
+  it("returns the count once two consecutive samples agree (the async drain)", async () => {
     const counts = [40, 88, 100, 100];
     let i = 0;
 
@@ -146,7 +146,7 @@ describe("pollUntilStable", () => {
     expect(i).toBe(4);
   });
 
-  it("never settles on a leading 0,0 plateau — the audit drain has not begun (AI-S3-14)", async () => {
+  it("never settles on a leading 0,0 plateau — the audit drain has not begun", async () => {
     const counts = [0, 0, 0, 40, 100, 100];
     let i = 0;
 

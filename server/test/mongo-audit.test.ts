@@ -1,7 +1,6 @@
-// Unit tests: the order recorder composition (AC 1, 2) — fake model ops,
-// zero I/O. Proves the accept-path write ordering (upsert User -> insert
-// Order -> insert OrderLine), the exact audit fields, and the duplicate-key
-// (E11000) benign no-op — the (saleId, email) defense-in-depth index.
+// Fake model ops, zero I/O. Proves the accept-path write ordering
+// (upsert User -> insert Order -> insert OrderLine), the exact audit
+// fields, and the duplicate-key (E11000) benign no-op.
 import { describe, expect, it, vi } from "vitest";
 import { createOrderRecorder, type AuditModelOps } from "../src/adapters/mongo/audit.ts";
 
@@ -15,7 +14,7 @@ function fakeOps() {
   };
 }
 
-describe("createOrderRecorder (AD-3 accept-path writes)", () => {
+describe("createOrderRecorder (accept-path writes)", () => {
   it("writes upsert User -> insert Order -> insert OrderLine, threading ids", async () => {
     const ops = fakeOps();
     await createOrderRecorder(refs, ops).recordOrder("buyer@example.com");
@@ -49,7 +48,7 @@ describe("createOrderRecorder (AD-3 accept-path writes)", () => {
     expect(ops.insertOrderLine).not.toHaveBeenCalled();
   });
 
-  it("a non-duplicate order-insert failure propagates (the service logs it — AC 2)", async () => {
+  it("a non-duplicate order-insert failure propagates", async () => {
     const boom = new Error("mongo down");
     const ops = fakeOps();
     ops.insertConfirmedOrder.mockRejectedValue(boom);

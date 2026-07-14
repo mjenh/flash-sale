@@ -1,11 +1,10 @@
-// Guard tests for the authoritative order.lua source (AC 1) — loaded through
-// the SAME loader production uses (ORDER_SCRIPT_SOURCE). Pins the keys,
-// commands, and mutation ordering so the .lua file and the test fake's JS
-// port cannot drift silently (Dev Notes decision 6).
+// Loaded through the SAME loader production uses (ORDER_SCRIPT_SOURCE). Pins
+// the keys, commands, and mutation ordering so the .lua file and the test
+// fake's JS port cannot drift silently.
 import { describe, expect, it } from "vitest";
 import { ORDER_SCRIPT_SOURCE } from "../src/adapters/redis/orders.ts";
 
-describe("order.lua (authoritative AD-1 source)", () => {
+describe("order.lua (authoritative source)", () => {
   const stripped = ORDER_SCRIPT_SOURCE.split("\n")
     .filter((line) => !line.trim().startsWith("--"))
     .join("\n");

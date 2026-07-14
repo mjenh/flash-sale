@@ -1,7 +1,6 @@
-// AD-4 boot seed + rebuild source. Idempotent upserts of the four seed
-// documents (Product, Sale, SaleProduct, Inventory) from env config, strictly
-// before listen(); plus the cold-rebuild read (the sale's confirmed Order
-// emails). Zero business rules (AD-7) — bootstrap owns the warm/cold gate.
+// Boot seed + rebuild source. Idempotent upserts of the four seed documents
+// (Product, Sale, SaleProduct, Inventory) from env config, strictly before
+// listen(); plus the cold-rebuild read (the sale's confirmed Order emails).
 //
 // Same split as audit.ts: thin one-query ops behind SeedModelOps, tested
 // composition in createDomainSeeder.
@@ -9,9 +8,8 @@ import { Inventory, Order, Product, Sale, SaleProduct } from "./models.ts";
 import type { AppConfig } from "../config.ts";
 import type { SaleRefs } from "./audit.ts";
 
-// Single-sale system (PRD): the sale keys on a constant slug and its window/
-// stock are $set from env each boot so the durable record mirrors current
-// config. Sample content per UX-DR-67 ("Keycap One").
+// Single-sale system: the sale keys on a constant slug and its window/stock
+// are $set from env each boot so the durable record mirrors current config.
 export const SALE_SLUG = "flash-sale";
 export const PRODUCT_SKU = "KEYCAP-ONE";
 export const PRODUCT_NAME = "Keycap One";
@@ -76,7 +74,7 @@ export const mongoSeedModelOps: SeedModelOps = {
 export interface DomainSeeder {
   /** Idempotent seed upserts — returns the refs the audit writer needs. */
   seed(config: AppConfig): Promise<SaleRefs>;
-  /** The AD-4 cold-rebuild source: the sale's confirmed Order emails. */
+  /** Cold-rebuild source: the sale's confirmed Order emails. */
   listConfirmedOrderEmails(saleId: string): Promise<string[]>;
 }
 

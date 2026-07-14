@@ -1,13 +1,11 @@
-// Unit tests for the sale-events broadcaster + window timers (Story 1.6
-// AC 2/3/4/5) — vi.useFakeTimers() drives setTimeout/setInterval AND
-// Date.now (the injected clock is backed by Date.now so coalescing
-// elapsed-math and timers advance together); fake sale-status service,
-// zero I/O. Pins the AD-9 mechanics exactly: leading-edge + trailing
-// coalescing (<= 1 emit / 250 ms), terminal supersession (immediate, final
-// frame), single serialized writer composing ONCE per emit via getStatus(),
-// the 25 s named heartbeat event (AI-S4-07), fail-closed-on-compose-failure (AD-5), and
-// future-boundaries-only timers with chunked re-arm below Node's setTimeout
-// ceiling.
+// vi.useFakeTimers() drives setTimeout/setInterval AND Date.now (the
+// injected clock is backed by Date.now so coalescing elapsed-math and timers
+// advance together); fake sale-status service, zero I/O. Pins the mechanics
+// exactly: leading-edge + trailing coalescing (<= 1 emit / 250 ms), terminal
+// supersession (immediate, final frame), single serialized writer composing
+// ONCE per emit via getStatus(), the 25 s named heartbeat event,
+// fail-closed-on-compose-failure, and future-boundaries-only timers with
+// chunked re-arm below Node's setTimeout ceiling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   COALESCE_MS,
@@ -74,13 +72,13 @@ function build(overrides: { getStatus?: () => Promise<SaleStatusBody> } = {}) {
   return { status, report, broadcaster };
 }
 
-describe("sale-events broadcaster — AC 3 snapshot + AC 4 coalescing/serialization", () => {
-  it("exports the AD-9 spine constants (250 ms coalesce, 25 s heartbeat)", () => {
+describe("sale-events broadcaster — snapshot + coalescing/serialization", () => {
+  it("exports the spine constants (250 ms coalesce, 25 s heartbeat)", () => {
     expect(COALESCE_MS).toBe(250);
     expect(HEARTBEAT_MS).toBe(25_000);
   });
 
-  it("snapshotFrame() is exactly `event: status` + the FR-1 body from a fresh getStatus() read", async () => {
+  it("snapshotFrame() is exactly `event: status` + the body from a fresh getStatus() read", async () => {
     const { status, broadcaster } = build();
     const frame = await broadcaster.snapshotFrame();
     expect(frame).toBe(frameFor(status.body()));
@@ -171,7 +169,7 @@ describe("sale-events broadcaster — AC 3 snapshot + AC 4 coalescing/serializat
     const unregister = broadcaster.register(sink);
 
     await vi.advanceTimersByTimeAsync(HEARTBEAT_MS);
-    expect(sink.written).toEqual(["event: heartbeat\ndata: {}\n\n"]); // named event, observable by the client watchdog (AI-S4-07)
+    expect(sink.written).toEqual(["event: heartbeat\ndata: {}\n\n"]); // named event, observable by the client watchdog
     await vi.advanceTimersByTimeAsync(HEARTBEAT_MS);
     expect(sink.written).toHaveLength(2);
 
@@ -181,7 +179,7 @@ describe("sale-events broadcaster — AC 3 snapshot + AC 4 coalescing/serializat
     expect(sink.written).toHaveLength(2); // interval stopped
   });
 
-  it("AI-S1-02 safety net: a sold_out observed on the heartbeat is broadcast once, even when the sale.sold_out publish was lost", async () => {
+  it("safety net: a sold_out observed on the heartbeat is broadcast once, even when the sale.sold_out publish was lost", async () => {
     const { status, broadcaster } = build();
     const sink = makeSink();
     broadcaster.register(sink);
@@ -201,7 +199,7 @@ describe("sale-events broadcaster — AC 3 snapshot + AC 4 coalescing/serializat
     expect(sink.written.filter((c) => c === soldOutFrame)).toHaveLength(1);
   });
 
-  it("AI-S1-02 safety net stays silent while the sale is still active", async () => {
+  it("safety net stays silent while the sale is still active", async () => {
     const { status, broadcaster } = build(); // default status: active
     const sink = makeSink();
     broadcaster.register(sink);
@@ -212,7 +210,7 @@ describe("sale-events broadcaster — AC 3 snapshot + AC 4 coalescing/serializat
     expect(status.getStatus).toHaveBeenCalled(); // the safety net did probe
   });
 
-  it("compose failure mid-stream: reportBroadcastFailure, every sink end()ed, subsequent events write nothing (AD-5)", async () => {
+  it("compose failure mid-stream: reportBroadcastFailure, every sink end()ed, subsequent events write nothing", async () => {
     const status = makeSaleStatus();
     const boom = new Error("redis gone mid-stream");
     status.getStatus.mockRejectedValueOnce(boom);
@@ -278,7 +276,7 @@ describe("sale-events broadcaster — AC 3 snapshot + AC 4 coalescing/serializat
   });
 });
 
-describe("armWindowTimers — AC 2 future boundaries only", () => {
+describe("armWindowTimers — future boundaries only", () => {
   function arm(opts: { startOffsetMs: number; endOffsetMs: number; publish?: () => Promise<void> }) {
     const publish = vi.fn(opts.publish ?? (async () => {}));
     const onPublishFailure = vi.fn();

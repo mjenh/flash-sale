@@ -1,13 +1,13 @@
-// Event identity. The date line is CONFIG-DERIVED, never hand-maintained: it
-// formats the sale window the server reports (`startTime` from the FR-1 body,
-// which arrives with Story 2.2's status fetch). Until the times are known
-// there is no date line — the page never fabricates a date.
+// Event identity. The date line is config-derived, never hand-maintained: it
+// formats the sale window the server reports (`startTime` from the status
+// body). Until the times are known there is no date line — the page never
+// fabricates a date.
 import "./Masthead.css";
 
 export const BRAND_LINE = "Keycap·One presents";
 
-/** "Fri Jul 10 · doors 12:00 PM · one day only" — viewer-local, from the
- *  server's ISO instant. Server-side UTC still governs all enforcement. */
+/** "Fri Jul 10 · doors 12:00 PM" — viewer-local, from the server's ISO
+ *  instant. Server-side UTC still governs all enforcement. */
 export function formatDateLine(startIso: string): string {
   const start = new Date(startIso);
   if (Number.isNaN(start.getTime())) {
@@ -17,7 +17,7 @@ export function formatDateLine(startIso: string): string {
     .toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })
     .replace(/,/g, "");
   const doors = start.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-  return `${day} · doors ${doors} · one day only`;
+  return `${day} · doors ${doors}`;
 }
 
 export interface MastheadProps {

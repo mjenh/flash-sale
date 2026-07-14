@@ -1,10 +1,10 @@
 // The Buy Now flow. One request in flight, ever — first click wins — and the
 // verdict replaces the beat. Post-verdict retries are allowed and un-scolded:
-// the API is idempotent (FR-3), so the worst a retry can do is tell you again
+// the API is idempotent, so the worst a retry can do is tell you again
 // that you already ordered.
 //
 // The empty-email check is the ONLY thing this hook refuses to send. There is
-// no format gate (SM-C1: never block a plausible attempt client-side).
+// no format gate — never block a plausible attempt client-side.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ALREADY, EMAIL_REQUIRED, checkOrder, placeOrder, type Verdict } from "../api/order.ts";
 
@@ -31,7 +31,7 @@ export interface OrderHandle {
 }
 
 export interface UseOrderOptions {
-  /** FR-5: status re-fetches after EVERY attempt — win, loss, or error alike. */
+  /** Status re-fetches after every attempt — win, loss, or error alike. */
   onAttemptSettled?: () => void;
 }
 
@@ -46,7 +46,7 @@ export function useOrder({ onAttemptSettled }: UseOrderOptions = {}): OrderHandl
   const inFlight = useRef(false);
   const checked = useRef(false);
   // Once the buyer submits, the load check is irrelevant — its late resolve must
-  // never overwrite the answer to the attempt they actually made (AD-8).
+  // never overwrite the answer to the attempt they actually made.
   const submitted = useRef(false);
   const checkAbort = useRef<AbortController | null>(null);
   const mounted = useRef(true);
@@ -116,7 +116,7 @@ export function useOrder({ onAttemptSettled }: UseOrderOptions = {}): OrderHandl
           return;
         }
         if (ordered) {
-          // Relief in a single page-load (UJ-2) — no interaction required.
+          // Relief in a single page-load — no interaction required.
           setVerdict({ kind: "already", message: ALREADY });
           setVerdictSource("check");
         }

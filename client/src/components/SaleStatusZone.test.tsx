@@ -32,7 +32,7 @@ function paint(status: SaleState, channel: Channel = "live", stock = 37) {
 }
 
 describe("the four states, verbatim", () => {
-  it("upcoming: the poster panel, the FR-5 string with viewer-local time, the warm frame — no numeral, no sticker", () => {
+  it("upcoming: the poster panel, the status string with viewer-local time, the warm frame — no numeral, no sticker", () => {
     paint("upcoming");
 
     expect(screen.getByTestId("status-chip")).toHaveTextContent(
@@ -157,7 +157,7 @@ describe("accessibility floor", () => {
     expect(screen.getByTestId("stock-announcer").textContent).toBe("3 left"); // the last few
   });
 
-  it("keeps the four states distinct WITHOUT COLOR — by string, composition, and sticker presence (SM-5)", () => {
+  it("keeps the four states distinct WITHOUT COLOR — by string, composition, and sticker presence", () => {
     const fingerprints = new Set<string>();
 
     for (const [status, stock] of [

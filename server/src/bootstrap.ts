@@ -1,11 +1,9 @@
-// Shared init used by index.ts AND (from Story 1.2 on) integration tests —
-// tests never re-implement boot. Order, strictly before listen():
-//   config (fail fast, AD-6) -> Redis connect (AD-5) -> Mongo connect ->
-//   Lua order-script registration (AD-1, Story 1.3) ->
-//   AD-4 seed upserts + warm/cold reconcile (Story 1.4) ->
-//   sale-events init (Story 1.6, AD-9): publisher + broadcaster + subscriber
-//   on a dedicated duplicated connection + future-boundary window timers ->
-//   app. Teardown unwinds in reverse (timers, broadcaster, subscriber, stores).
+// Shared init used by both the server entrypoint and integration tests.
+// Boot order, strictly before listen():
+//   config -> Redis connect -> Mongo connect -> Lua script registration ->
+//   seed upserts + warm/cold reconcile -> sale-events init (publisher +
+//   broadcaster + subscriber on a dedicated connection + window timers) ->
+//   app. Teardown unwinds in reverse.
 import { pino, type Logger } from "pino";
 import type { Express } from "express";
 import { loadConfig, type AppConfig } from "./adapters/config.ts";
@@ -29,17 +27,17 @@ import { createApp } from "./app.ts";
 export interface BootstrapOverrides {
   env?: Record<string, string | undefined>;
   logger?: Logger;
-  /** AD-6 injection seam — integration tests pin the window state. */
+  /** Injection seam — integration tests pin the window state. */
   clock?: Clock;
   createRedis?: (config: AppConfig, onError: (err: Error) => void) => RedisClient;
   connectRedis?: (client: RedisClient) => Promise<void>;
   disconnectRedis?: (client: RedisClient) => Promise<void>;
   connectMongoDb?: (uri: string) => Promise<unknown>;
   disconnectMongoDb?: () => Promise<void>;
-  /** Story 1.4 seams — tests run the REAL recorder/seeder over fake model ops. */
+  /** Test seams — tests run the real recorder/seeder over fake model ops. */
   mongoModelOps?: { audit: AuditModelOps; seed: SeedModelOps };
   payment?: PaymentProvider;
-  /** Story 1.6 seam — the dedicated sale:events subscriber connection (AD-9). */
+  /** Dedicated subscriber connection for sale:events pub/sub. */
   duplicateRedis?: (client: RedisClient) => RedisClient;
 }
 
@@ -58,14 +56,14 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
   const config = loadConfig(env);
   const logger = overrides.logger ?? pino();
 
-  // 2. Redis (bounded connect timeout; offline queue disabled — AD-5).
+  // 2. Redis (bounded connect timeout; offline queue disabled).
   const createRedis =
     overrides.createRedis ?? ((cfg, onError) => createRedisClient(cfg, onError));
   const redis = createRedis(config, (err) => logger.error({ err }, "redis error"));
   const connectRedis =
     overrides.connectRedis ??
     (async (client: RedisClient) => {
-      // node-redis retries forever by design; boot must fail fast instead (AD-5/AD-6).
+      // node-redis retries forever by design; boot must fail fast instead.
       const bootTimeoutMs = config.redisConnectTimeoutMs * 5;
       let timer: NodeJS.Timeout | undefined;
       try {
@@ -89,14 +87,14 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
   // 3. Mongo.
   await (overrides.connectMongoDb ?? connectMongo)(config.mongodbUri);
 
-  // AD-1 Lua order script registration (Story 1.3) — SCRIPT LOAD + sha cache,
-  // strictly before listen(); attempt() falls back to EVAL on NOSCRIPT.
+  // Lua order script registration — SCRIPT LOAD + sha cache, strictly before
+  // listen(); attempt() falls back to EVAL on NOSCRIPT.
   const orderStore = createOrderStore(redis, {
     commandTimeoutMs: config.redisCommandTimeoutMs,
   });
   await orderStore.register();
 
-  // AD-4 durable audit + restart safety (Story 1.4), strictly before listen():
+  // Durable audit + restart safety, strictly before listen():
   // idempotent seed upserts, then the warm/cold gate on stock:remaining.
   const mongoOps = overrides.mongoModelOps ?? { audit: mongoAuditModelOps, seed: mongoSeedModelOps };
   const seeder = createDomainSeeder(mongoOps.seed);
@@ -107,7 +105,7 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
   if (await reconciler.hasStockKey()) {
     // Warm start: surviving Redis state is authoritative — touch nothing.
     // A changed STOCK_QUANTITY against surviving state is thereby a no-op;
-    // a sale reset happens only via the explicit offline reset script (AD-4).
+    // a sale reset happens only via the explicit offline reset script.
   } else {
     // Cold start: rebuild Redis FROM MongoDB truth — never the reverse.
     const emails = await seeder.listConfirmedOrderEmails(saleRefs.saleId);
@@ -121,15 +119,15 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
     await reconciler.rebuild(emails, remaining);
     logger.info(
       { confirmedOrders: emails.length, remaining },
-      "cold start: rebuilt Redis order state from MongoDB (AD-4)",
+      "cold start: rebuilt Redis order state from MongoDB",
     );
   }
   const stockStore = createStockStore(redis, {
     commandTimeoutMs: config.redisCommandTimeoutMs,
   });
 
-  // Shared clock + window + status service (AD-6): the same instances feed
-  // HTTP, the order service, and the SSE broadcaster (AD-9's single composer).
+  // Shared clock + window + status service: the same instances feed
+  // HTTP, the order service, and the SSE broadcaster.
   const clock = overrides.clock ?? systemClock;
   const window = {
     startMs: config.saleStartMs,
@@ -139,10 +137,10 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
   };
   const saleStatus = createSaleStatusService({ clock, stock: stockStore, window });
 
-  // Sale-events realtime layer (Story 1.6, AD-9): PUBLISH rides the main
-  // client; SUBSCRIBE runs on a dedicated duplicated connection; boot arms
-  // window timers for FUTURE boundaries only. Subscriber failure here rejects
-  // bootstrap() — fail-fast strictly before listen() (AD-5).
+  // Sale-events realtime layer: PUBLISH rides the main client; SUBSCRIBE runs
+  // on a dedicated duplicated connection; boot arms window timers for FUTURE
+  // boundaries only. Subscriber failure here rejects bootstrap() — fail-fast
+  // strictly before listen().
   const eventPublisher = createEventPublisher(redis, {
     commandTimeoutMs: config.redisCommandTimeoutMs,
   });
@@ -150,7 +148,7 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
     saleStatus,
     clock,
     reportBroadcastFailure: (err) => {
-      logger.error({ err }, "sse broadcast failed; closing open streams (AD-5)");
+      logger.error({ err }, "sse broadcast failed; closing open streams");
     },
   });
   const duplicateRedis = overrides.duplicateRedis ?? ((client: RedisClient) => client.duplicate());
@@ -159,7 +157,7 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
       saleEvents.onDomainEvent(event);
     },
     onConnectionLost: (err) => {
-      logger.error({ err }, "sale:events subscriber connection lost; closing open streams (AD-5)");
+      logger.error({ err }, "sale:events subscriber connection lost; closing open streams");
       saleEvents.closeAll();
     },
     connectTimeoutMs: config.redisConnectTimeoutMs * 5,
@@ -170,7 +168,7 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
     endMs: config.saleEndMs,
     publish: (event) => eventPublisher.publish(event),
     onPublishFailure: (err) => {
-      logger.error({ err }, "window-boundary event publish failed (AD-9: logged, never thrown)");
+      logger.error({ err }, "window-boundary event publish failed (logged, never thrown)");
     },
   });
 

@@ -1,12 +1,10 @@
-// Unit tests for the order service (Story 1.3 AC 1-4 + Story 1.4 AC 1-2 +
-// Story 1.5 AC 1/2/4 + Story 1.6 AC 1/5) — injected clock + fake ports, zero
-// I/O. Proves the AD-2 precedence, the AD-6 [start, end) boundaries, the
-// Story-1.4 post-accept side effects (audit + payment fire-and-forget after
-// OK only, failures reported, outcome never altered or delayed — AD-3/AD-10),
-// the Story-1.5 hasOrdered read (pure delegation: no clock, no script, no
-// side effects), and the Story-1.6 publishes (order.accepted on every OK;
+// Injected clock + fake ports, zero I/O. Proves the precedence, the
+// [start, end) boundaries, the post-accept side effects (audit + payment
+// fire-and-forget after OK only, failures reported, outcome never altered or
+// delayed), the hasOrdered read (pure delegation: no clock, no script, no
+// side effects), and the publishes (order.accepted on every OK;
 // sale.sold_out exactly once, by the draining request; SOLD_OUT verdicts
-// never publish; publish failures never alter the outcome — AD-9).
+// never publish; publish failures never alter the outcome).
 import { describe, expect, it, vi } from "vitest";
 import { createOrderService, type OrderAttemptPort } from "../src/services/order.ts";
 
@@ -62,7 +60,7 @@ function build(
   };
 }
 
-describe("order service — AD-2 precedence on the injected clock", () => {
+describe("order service — precedence on the injected clock", () => {
   describe("outside the window the script never runs", () => {
     const instants: Array<[string, number]> = [
       ["before start", startMs - 1],
@@ -86,7 +84,7 @@ describe("order service — AD-2 precedence on the injected clock", () => {
     }
   });
 
-  describe("inside the window the AD-1 script decides", () => {
+  describe("inside the window the script decides", () => {
     it("exactly startMs (boundary — inside) runs the script, no SISMEMBER probe", async () => {
       const { orders, service } = build(startMs);
       expect(await service.attempt("a@x.com")).toEqual({ outcome: "created", remaining: 99 });
@@ -129,7 +127,7 @@ describe("order service — AD-2 precedence on the injected clock", () => {
   });
 });
 
-describe("order service — Story 1.4 post-accept side effects (AD-3/AD-10)", () => {
+describe("order service — post-accept side effects", () => {
   it("OK -> audit.recordOrder and payment.charge each fire once with the email", async () => {
     const { audit, payment, report, service } = build(startMs + 1000);
     await service.attempt("winner@x.com");
@@ -139,7 +137,7 @@ describe("order service — Story 1.4 post-accept side effects (AD-3/AD-10)", ()
     expect(report).not.toHaveBeenCalled();
   });
 
-  it("an audit rejection is reported, never thrown — outcome stays created (AC 2)", async () => {
+  it("an audit rejection is reported, never thrown — outcome stays created", async () => {
     const boom = new Error("mongo down");
     const { report, service } = build(startMs + 1000, {
       recordOrder: vi.fn(async () => {
@@ -163,7 +161,7 @@ describe("order service — Story 1.4 post-accept side effects (AD-3/AD-10)", ()
     expect(report).toHaveBeenCalledExactlyOnceWith("payment", boom);
   });
 
-  it("a declined payment is reported — outcome stays created (AD-10: cannot fail an order)", async () => {
+  it("a declined payment is reported — outcome stays created (cannot fail an order)", async () => {
     const { report, service } = build(startMs + 1000, {
       charge: vi.fn(async () => ({ approved: false, reference: "declined:x" })),
     });
@@ -173,7 +171,7 @@ describe("order service — Story 1.4 post-accept side effects (AD-3/AD-10)", ()
     expect(report.mock.calls[0]?.[0]).toBe("payment");
   });
 
-  it("a never-settling audit write does not delay the verdict (fire-and-forget, AD-8)", async () => {
+  it("a never-settling audit write does not delay the verdict (fire-and-forget)", async () => {
     const { service } = build(startMs + 1000, {
       recordOrder: vi.fn(() => new Promise<void>(() => {})),
     });
@@ -206,7 +204,7 @@ describe("order service — Story 1.4 post-accept side effects (AD-3/AD-10)", ()
   });
 });
 
-describe("order service — Story 1.6 publishes on accept (AD-9)", () => {
+describe("order service — publishes on accept", () => {
   it("OK with remaining > 0 -> exactly one publish('order.accepted'), zero sale.sold_out", async () => {
     const { events, report, service } = build(startMs + 1000);
     expect(await service.attempt("winner@x.com")).toEqual({ outcome: "created", remaining: 99 });
@@ -284,7 +282,7 @@ describe("order service — Story 1.6 publishes on accept (AD-9)", () => {
     ]);
   });
 
-  it("a never-settling publish does not delay the outcome (fire-and-forget, AD-8)", async () => {
+  it("a never-settling publish does not delay the outcome (fire-and-forget)", async () => {
     const { service } = build(startMs + 1000, {
       publish: vi.fn(() => new Promise<void>(() => {})),
     });
@@ -293,8 +291,8 @@ describe("order service — Story 1.6 publishes on accept (AD-9)", () => {
   });
 });
 
-describe("order service — Story 1.5 hasOrdered (FR-4 read)", () => {
-  /** hasOrdered must be clock-free (AD-2/AD-8) — a throwing clock proves it. */
+describe("order service — hasOrdered", () => {
+  /** hasOrdered must be clock-free — a throwing clock proves it. */
   function buildReadOnly(hasOrderedResult: () => Promise<boolean>) {
     const clock = vi.fn(() => {
       throw new Error("hasOrdered must never consult the clock");

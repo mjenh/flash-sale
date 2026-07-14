@@ -1,4 +1,4 @@
-// Unit tests: fail-fast env contract (AC 3; AD-6, NFR-7). Pure, no I/O.
+// Pure, no I/O.
 import { describe, expect, it } from "vitest";
 import { ConfigError, loadConfig } from "../src/adapters/config.ts";
 
@@ -27,7 +27,7 @@ describe("loadConfig", () => {
     expect(config.redisConnectTimeoutMs).toBeGreaterThan(0);
   });
 
-  it("carries a bounded per-command Redis timeout (AD-5)", () => {
+  it("carries a bounded per-command Redis timeout", () => {
     const config = loadConfig(valid);
     expect(config.redisCommandTimeoutMs).toBe(1000);
   });

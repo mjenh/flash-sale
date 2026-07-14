@@ -1,10 +1,6 @@
-// HTTP translation only (AD-7): validate the request (AD-2 puts validation
-// first — a 400 never touches Redis), call the order service, map the outcome
-// to the verbatim wire contract. Rejections (incl. RedisUnavailableError 503)
-// propagate via Express 5 async handling to the central error middleware —
-// no try/catch.
-//   POST /            (Story 1.3 — atomic order attempt)
-//   GET  /:email      (Story 1.5 — FR-4 order status check, Redis-only read)
+// Validate the request (a 400 never touches Redis), call the order service,
+// map the outcome to the wire contract. Rejections propagate via Express 5
+// async handling to the central error middleware — no try/catch.
 import { Router, type Request, type Response } from "express";
 import type { OrderService } from "../services/order.ts";
 
@@ -14,20 +10,18 @@ export interface OrderRouterDeps {
 
 const MAX_EMAIL_LENGTH = 256;
 
-/** The one source of the email hygiene rules (spine conventions): trim first;
- *  empty-after-trim or > 256 chars is invalid. Shared by the POST body and the
- *  GET path param (Express hands the param in already percent-decoded).
+/** The one source of the email hygiene rules: trim first; empty-after-trim
+ *  or > 256 chars is invalid. Shared by the POST body and the GET path param
+ *  (Express hands the param in already percent-decoded).
  *
- *  Fairness canonicalization (AI-S1-03): the system's one business rule is "one
- *  item per email," so the stored Redis set key must be canonical — otherwise
- *  `A@b.com`, `a@b.com`, and NFC/NFD variants are three distinct customers and
- *  the rule is defeated by pressing Shift. We NFC-normalize and case-fold so
- *  those collapse to a single key (used identically by the POST write and the
- *  GET read, so a check always matches what was stored). The length gate stays
- *  on the trimmed form to keep the 256-char boundary exact. Provider-specific
- *  aliasing (plus-tags, gmail dots) is DELIBERATELY not de-aliased — that is
- *  provider-specific and risky, and is an accepted bypass (documented as a
- *  non-goal in the README limitations). */
+ *  The system's one business rule is "one item per email," so the stored Redis
+ *  set key must be canonical — otherwise `A@b.com`, `a@b.com`, and NFC/NFD
+ *  variants are three distinct customers and the rule is defeated by pressing
+ *  Shift. We NFC-normalize and case-fold so those collapse to a single key
+ *  (used identically by the POST write and the GET read, so a check always
+ *  matches what was stored). The length gate stays on the trimmed form to keep
+ *  the 256-char boundary exact. Provider-specific aliasing (plus-tags, gmail
+ *  dots) is deliberately not de-aliased — that is provider-specific and risky. */
 function canonicalEmail(raw: unknown): string | undefined {
   if (typeof raw !== "string") {
     return undefined;
@@ -74,16 +68,15 @@ export function createOrderRouter({ orderService }: OrderRouterDeps): Router {
     }
   });
 
-  // FR-4: GET /api/order with no path param is the "path param is empty" case
-  // — honest 400, not a generic 404 (Express 5 non-strict routing sends both
+  // GET /api/order with no path param is the "path param is empty" case —
+  // honest 400, not a generic 404 (Express 5 non-strict routing sends both
   // `/api/order` and `/api/order/` here).
   router.get("/", (_req: Request, res: Response) => {
     res.status(400).json({ success: false, error: "Email is required." });
   });
 
-  // FR-4 (Story 1.5): convenience/idempotency read (AD-8) — answered from
-  // Redis membership only, never Mongo (AD-3), and never clock-gated. Both
-  // branches are 200 success bodies; validation precedes the Redis read.
+  // Convenience/idempotency read — answered from Redis membership only, never
+  // Mongo, and never clock-gated. Both branches are 200 success bodies.
   router.get("/:email", async (req: Request, res: Response) => {
     const email = canonicalEmail(req.params.email);
     if (email === undefined) {

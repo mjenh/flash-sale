@@ -1,7 +1,6 @@
-// Unit tests: the AD-4 domain seeder composition (AC 4) — fake model ops,
-// zero I/O. Proves the four idempotent upserts derive exactly from AppConfig,
-// thread the seeded ids into the join docs, and return the SaleRefs the audit
-// writer and cold rebuild consume.
+// Fake model ops, zero I/O. Proves the four idempotent upserts derive
+// exactly from AppConfig, thread the seeded ids into the join docs, and
+// return the SaleRefs the audit writer and cold rebuild consume.
 import { describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../src/adapters/config.ts";
 import {
@@ -29,7 +28,7 @@ function fakeOps(overrides: Partial<SeedModelOps> = {}) {
   };
 }
 
-describe("createDomainSeeder (AD-4 boot seed)", () => {
+describe("createDomainSeeder (boot seed)", () => {
   it("upserts Product, Sale, SaleProduct, Inventory from env config and returns the refs", async () => {
     const ops = fakeOps();
     const refs = await createDomainSeeder(ops).seed(config);

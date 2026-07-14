@@ -30,7 +30,7 @@ describe("placeOrder — the verbatim verdict for every wire outcome", () => {
     await expect(placeOrder("a@b.c")).resolves.toEqual({ kind: "success", message: "Order successful." });
   });
 
-  it("200 → already ordered (idempotent retry — AD-2 outranks window and stock)", async () => {
+  it("200 → already ordered (idempotent retry outranks window and stock)", async () => {
     vi.stubGlobal("fetch", replied(200, { success: true, email: "a@b.c", message: ALREADY }));
     await expect(placeOrder("a@b.c")).resolves.toEqual({
       kind: "already",
@@ -129,7 +129,7 @@ describe("checkOrder", () => {
     vi.stubGlobal("fetch", replied(200, { success: true, ordered: true, email: "a+b@x.io" }));
   });
 
-  it("reads the FR-4 flag and encodes the path segment", async () => {
+  it("reads the ordered flag and encodes the path segment", async () => {
     await expect(checkOrder("a+b@x.io")).resolves.toBe(true);
     const fetchSpy = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
     expect(fetchSpy.mock.calls[0][0]).toBe("/api/order/a%2Bb%40x.io");
@@ -140,6 +140,6 @@ describe("checkOrder", () => {
     await expect(checkOrder("a@b.c")).rejects.toThrow();
 
     vi.stubGlobal("fetch", replied(200, { success: true }));
-    await expect(checkOrder("a@b.c")).rejects.toThrow(/FR-4 shape/);
+    await expect(checkOrder("a@b.c")).rejects.toThrow(/expected shape/);
   });
 });

@@ -1,7 +1,7 @@
 // The shared bordered-panel primitive. Three zones need identical chrome —
-// the sale status panel (Story 2.2), the form panel, and the verdict panel
-// (Story 2.3) — so the borders, radius, shadow, and padding are declared once,
-// here, and never re-declared downstream.
+// the sale status panel, the form panel, and the verdict panel — so the
+// borders, radius, shadow, and padding are declared once, here, and never
+// re-declared downstream.
 //
 //   cream         — paper faces: status (active/sold_out), verdict
 //   yellow-lifted — the form panel
@@ -17,7 +17,7 @@ export interface PanelProps {
   variant: PanelVariant;
   children: ReactNode;
   className?: string;
-  /** Escape hatch for the status panel's overhanging LIVE sticker (Story 2.2). */
+  /** Escape hatch for the status panel's overhanging LIVE sticker. */
   id?: string;
 }
 

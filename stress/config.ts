@@ -19,9 +19,9 @@ export interface StressConfig {
   mongodbUri: string;
   /** Units on sale — the STOCK_QUANTITY the API booted with. */
   stockQuantity: number;
-  /** Unique emails the primary k6 scenario fires (SM-1/SM-2: 5,000). */
+  /** Unique emails the primary k6 scenario fires. */
   attempts: number;
-  /** k6 virtual users for the burst. See Story 3.1 decision 2: VUs != attempts. */
+  /** k6 virtual users for the burst. VUs != attempts. */
   vus: number;
   /** Enable the optional retry scenario (200 becomes an allowed status). */
   retry: boolean;

@@ -234,7 +234,7 @@ describe("useSaleStatus", () => {
     expect(result.current.channel).toBe("degraded");
   });
 
-  it("keeps a quiet-but-live stream LIVE when heartbeats arrive (AI-S4-07 watchdog)", async () => {
+  it("keeps a quiet-but-live stream LIVE when heartbeats arrive (watchdog)", async () => {
     vi.useFakeTimers();
     const { result } = renderHook(() => useSaleStatus());
 
@@ -256,7 +256,7 @@ describe("useSaleStatus", () => {
     expect(result.current.channel).toBe("live");
   });
 
-  it("demotes a truly silent live stream once the watchdog window elapses (AI-S4-07)", async () => {
+  it("demotes a truly silent live stream once the watchdog window elapses", async () => {
     vi.useFakeTimers();
     const { result } = renderHook(() => useSaleStatus());
 

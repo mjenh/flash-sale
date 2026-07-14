@@ -14,7 +14,7 @@ export interface SseStream {
   frames(): string[];
   /** Resolves once at least `count` frames have arrived. */
   waitForFrames(count: number, timeoutMs?: number): Promise<string[]>;
-  /** Resolves when the server ends the stream (AD-5 fail-closed proof). */
+  /** Resolves when the server ends the stream. */
   closed(): Promise<void>;
   close(): Promise<void>;
 }

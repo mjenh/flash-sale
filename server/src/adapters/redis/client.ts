@@ -1,5 +1,4 @@
-// Redis adapter: client factory with a bounded connect timeout and no offline
-// queueing (AD-5: fail closed — commands fail immediately while disconnected).
+// Fail closed: commands fail immediately while disconnected (no offline queueing).
 import { createClient, type RedisClientType } from "redis";
 
 export type RedisClient = RedisClientType;

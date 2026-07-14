@@ -1,11 +1,8 @@
-// Async Mongo audit writer (AD-3: Redis decides, MongoDB records). Invoked by
-// the order service ONLY after the AD-1 script returns OK; never read on any
-// request path; never rolled back on failure (the service logs and continues —
-// an accepted, documented audit undercount, NFR-4).
+// Async Mongo audit writer — Redis decides, MongoDB records. Invoked only
+// after the order script returns OK; never read on any request path; never
+// rolled back on failure (the service logs and continues).
 //
-// Structure mirrors the Redis adapters' narrow-command-surface pattern: the
-// one-query-per-op mongoose calls live behind AuditModelOps (the only code
-// untestable without a live Mongo — same status as adapters/redis/client.ts);
+// The one-query-per-op mongoose calls live behind AuditModelOps;
 // createOrderRecorder holds the ordering + duplicate-key semantics and is
 // fully unit-tested with fake ops.
 import { Order, OrderLine, User } from "./models.ts";

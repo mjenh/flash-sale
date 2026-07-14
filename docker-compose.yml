@@ -3,9 +3,9 @@ services:
     build: .
     # The app fail-fasts (exits non-zero) on any boot hiccup — a Redis blip after
     # healthchecks pass, a slow Mongo election — so without a restarter compose
-    # would leave the one-command stack permanently dead (AI-S1-08). `init: true`
-    # reaps zombies and forwards SIGTERM to PID 1 so the SIGTERM/SIGINT teardown
-    # handler actually runs on `docker compose stop`/`down` (AI-S1-06).
+    # would leave the one-command stack permanently dead. `init: true` reaps
+    # zombies and forwards SIGTERM to PID 1 so the SIGTERM/SIGINT teardown
+    # handler actually runs on `docker compose stop`/`down`.
     restart: unless-stopped
     init: true
     environment:
@@ -25,7 +25,7 @@ services:
         condition: service_healthy
     # The stress harness needs a truth signal for "the API is back up" after the
     # reset restart; `docker compose start api` returns before the boot sequence
-    # (AD-4 reconcile) has finished.
+    # reconcile has finished.
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/sale/status').then(r => process.exit(r.status === 200 ? 0 : 1), () => process.exit(1))"]
       interval: 5s
@@ -39,7 +39,7 @@ services:
     # Published for the documented dev loop (`npm run dev` against
     # redis://localhost:6379) and for the stress harness's reset/verify steps,
     # which run on the host and speak to the stores directly. Bound to loopback
-    # ONLY (AI-S3-11): a "6379:6379" publish reaches 0.0.0.0 and, on Linux,
+    # ONLY: a "6379:6379" publish reaches 0.0.0.0 and, on Linux,
     # punches through the host firewall — an unauthenticated Redis on a routable
     # interface is a textbook RCE vector. The harness only ever needs localhost.
     ports:
@@ -54,7 +54,7 @@ services:
 
   mongo:
     image: mongo:8
-    # Loopback only (AI-S3-11) — unauthenticated Mongo must not be routable.
+    # Loopback only — unauthenticated Mongo must not be routable.
     ports:
       - "127.0.0.1:27017:27017"
     volumes:

@@ -1,38 +1,30 @@
-// Order service — owns the AD-2 response precedence on the injected clock
-// (AD-6). Framework-free (AD-7): no express/redis/mongoose imports; the Redis
-// order adapter satisfies OrderAttemptPort and the Mongo audit recorder
-// satisfies OrderAuditPort. Precedence (validation is the route's job and
-// happens before this service is called):
+// Order service — framework-free: no express/redis/mongoose imports.
+// Response precedence (validation is the route's job):
 //   already-ordered (200) -> window (409 inactive) -> stock (409 sold out) -> created (201)
-// Inside the window the AD-1 script decides everything in one atomic unit;
-// outside it, ONE SISMEMBER distinguishes already from inactive — the script
-// never runs outside the window (AD-2).
+// Inside the window the Lua script decides everything in one atomic unit;
+// outside it, one SISMEMBER distinguishes already from inactive.
 //
-// Post-accept side effects (Story 1.4, AD-3/AD-10; Story 1.6, AD-9): after
-// OK — and ONLY after OK — the Mongo audit write, the payment charge, and the
-// type-only event publishes fire-and-forget. None is awaited; none can alter
-// the HTTP outcome; failures are reported via the injected callback
-// (bootstrap wires it to logger.error) and are NEVER rolled back — no
-// INCR/SREM compensation exists anywhere (AD-1). sale.sold_out publishes
-// exactly once: by the request whose script returns OK with remaining === 0
-// (this service is the sole consumer of AD-1's stock return for that signal);
-// SOLD_OUT verdicts never publish (AD-9).
+// Post-accept side effects: after OK — and ONLY after OK — the Mongo audit
+// write, the payment charge, and the event publishes fire-and-forget. None is
+// awaited; none can alter the HTTP outcome; failures are reported via the
+// injected callback and are never rolled back. sale.sold_out publishes exactly
+// once: by the request whose script returns OK with remaining === 0.
 import type { Clock } from "./clock.ts";
 import type { SaleWindow } from "./sale-status.ts";
 import type { PaymentProvider } from "./payment.ts";
 
-/** Port satisfied by adapters/redis/orders.ts (AD-1's named script operation). */
+/** Port satisfied by adapters/redis/orders.ts. */
 export interface OrderAttemptPort {
   attempt(email: string): Promise<{ verdict: "OK" | "ALREADY" | "SOLD_OUT"; remaining: number }>;
   hasOrdered(email: string): Promise<boolean>;
 }
 
-/** Port satisfied by adapters/mongo/audit.ts (AD-3's async durable record). */
+/** Port satisfied by adapters/mongo/audit.ts. */
 export interface OrderAuditPort {
   recordOrder(email: string): Promise<void>;
 }
 
-/** Port satisfied by adapters/redis/events.ts (AD-9's sale:events publisher).
+/** Port satisfied by adapters/redis/events.ts.
  *  Type-only events; the order path only ever emits these two. */
 export interface OrderEventsPort {
   publish(event: "order.accepted" | "sale.sold_out"): Promise<void>;
@@ -48,10 +40,9 @@ export type OrderOutcome =
 
 export interface OrderService {
   attempt(email: string): Promise<OrderOutcome>;
-  /** FR-4 (Story 1.5): does this email already hold a confirmed order?
-   *  Answered from Redis membership only — never Mongo (AD-3) — and never
-   *  clock-gated: membership is a standing fact, honest before, during, and
-   *  after the window (AD-2's order-holder truth; AD-8's convenience read). */
+  /** Does this email already hold a confirmed order? Answered from Redis
+   *  membership only — never Mongo — and never clock-gated: membership is a
+   *  standing fact, honest before, during, and after the window. */
   hasOrdered(email: string): Promise<boolean>;
 }
 
@@ -78,10 +69,10 @@ export function createOrderService({
   return {
     async attempt(email: string): Promise<OrderOutcome> {
       const now = clock();
-      const inWindow = now >= window.startMs && now < window.endMs; // [start, end), AD-6
+      const inWindow = now >= window.startMs && now < window.endMs; // [start, end)
 
       if (!inWindow) {
-        // AD-2: an order holder always wins — even before start or after end.
+        // An order holder always wins — even before start or after end.
         return (await orders.hasOrdered(email)) ? { outcome: "already" } : { outcome: "inactive" };
       }
 
@@ -89,8 +80,8 @@ export function createOrderService({
       switch (verdict) {
         case "OK":
           // Fire-and-forget: the 201 resolves within the request/response
-          // cycle (AD-8) without awaiting either promise. Failures are logged
-          // side effects, never rollbacks (NFR-4's accepted audit undercount).
+          // cycle without awaiting either promise. Failures are logged side
+          // effects, never rollbacks.
           void audit.recordOrder(email).catch((err: unknown) => {
             reportSideEffectFailure("audit", err);
           });
@@ -107,10 +98,9 @@ export function createOrderService({
             .catch((err: unknown) => {
               reportSideEffectFailure("payment", err);
             });
-          // Story 1.6 (AD-9): type-only consequence events. order.accepted
-          // on every accept; sale.sold_out exactly once — by THIS request,
-          // the one whose script drained stock to 0. Fire-and-forget:
-          // publish failures never alter the HTTP outcome.
+          // Type-only consequence events. order.accepted on every accept;
+          // sale.sold_out exactly once — by the request whose script drained
+          // stock to 0. Publish failures never alter the HTTP outcome.
           void events.publish("order.accepted").catch((err: unknown) => {
             reportSideEffectFailure("publish", err);
           });
@@ -128,8 +118,7 @@ export function createOrderService({
     },
 
     async hasOrdered(email: string): Promise<boolean> {
-      // Pure read (AD-8): no clock, no script, no side effects.
-      // RedisUnavailableError rejections propagate untouched (AD-5 -> 503).
+      // Pure read — RedisUnavailableError rejections propagate untouched to 503.
       return orders.hasOrdered(email);
     },
   };

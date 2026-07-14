@@ -1,13 +1,10 @@
 // Redis adapter for the `stock:remaining` key — reads for the sale-status
-// service. Writes to this key happen only via the AD-1 Lua script (serving),
-// the AD-4 boot rebuild in reconcile.ts (pre-listen()), or the offline reset
-// script; the Story-1.2 interim SETNX seed was retired by Story 1.4.
-// Zero business rules (AD-7).
+// service. Writes happen only via the Lua script (serving), the boot rebuild
+// in reconcile.ts (pre-listen()), or the offline reset script.
 //
-// Fail closed (AD-5, NFR-9): every command is bounded by config's
-// redisCommandTimeoutMs; a timeout OR any command rejection surfaces as
-// RedisUnavailableError, which the central error middleware maps to
-// 503 { success: false, error: "Service temporarily unavailable." }.
+// Fail closed: every command is bounded by redisCommandTimeoutMs; a timeout
+// or any command rejection surfaces as RedisUnavailableError, which the
+// central error middleware maps to 503.
 
 const STOCK_KEY = "stock:remaining";
 
@@ -38,7 +35,7 @@ export interface StockStore {
   getRemaining(): Promise<number>;
 }
 
-/** Bound a command by the AD-5 per-command timeout, wrapping timeout AND any
+/** Bound a command by the per-command timeout, wrapping timeout and any
  *  command rejection into RedisUnavailableError. Shared with reconcile.ts. */
 export async function bounded<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
@@ -67,7 +64,7 @@ export function createStockStore(
       const raw = await bounded(client.get(STOCK_KEY), commandTimeoutMs);
       if (raw === null) {
         // Key lost mid-run: never fabricate a number — 0 would lie "sold_out".
-        // Fail closed; the next boot's AD-4 cold rebuild restores truth.
+        // Fail closed; the next boot's cold rebuild restores truth.
         throw new RedisUnavailableError(new Error(`${STOCK_KEY} key is missing`));
       }
       // Strict integer only. `Number.parseInt("12x", 10)` returns 12 — trailing

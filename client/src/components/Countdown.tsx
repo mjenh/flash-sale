@@ -1,7 +1,7 @@
 // The countdown is theatre, and it is built so it cannot be anything else: it
-// takes no callback and returns no signal, so the client clock has NO flip
-// authority (AD-6). At 00:00 it pins and the page HOLDS until the server's
-// `active` event arrives.
+// takes no callback and returns no signal, so the client clock has no flip
+// authority. At 00:00 it pins and the page holds until the server's `active`
+// event arrives.
 //
 // It appears only inside the final hour; beyond that the verbatim status string
 // carries alone. Digits are aria-hidden — a per-second firehose helps nobody —

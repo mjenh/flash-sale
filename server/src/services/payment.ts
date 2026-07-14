@@ -1,5 +1,4 @@
-// AD-10: payment is a port behind acceptance, never in the decision path.
-// Sole v1 implementation: adapters/payment/noop.ts (instant-approve).
+// Payment is a port behind acceptance, never in the decision path.
 
 export interface PaymentResult {
   approved: boolean;

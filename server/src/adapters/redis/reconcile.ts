@@ -1,14 +1,14 @@
-// AD-4 restart-safety ops on the two Redis keys. The boot rebuild is one of
-// only three permitted writers (AD-1: the Lua script while serving, THIS
-// rebuild strictly pre-listen(), and the offline reset script).
+// Restart-safety ops on the two Redis keys. The boot rebuild is one of only
+// three permitted writers (the Lua script while serving, this rebuild strictly
+// pre-listen(), and the offline reset script).
 //
 // stock:remaining doubles as the warm/cold sentinel, so rebuild() writes it
-// LAST (DEL -> SADD -> SET): a crash mid-rebuild leaves the sentinel absent
+// last (DEL -> SADD -> SET): a crash mid-rebuild leaves the sentinel absent
 // and the next boot simply re-runs the cold path — idempotent.
 //
-// Fail closed (AD-5): every command is bounded; a timeout or rejection
-// surfaces as RedisUnavailableError, which rejects bootstrap() and exits the
-// process non-zero before listen() — the boot-time form of fail-closed.
+// Fail closed: every command is bounded; a timeout or rejection surfaces as
+// RedisUnavailableError, which rejects bootstrap() and exits the process
+// non-zero before listen().
 import { bounded } from "./stock.ts";
 
 const ORDERS_KEY = "orders:users";

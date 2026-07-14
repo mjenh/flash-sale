@@ -2,8 +2,7 @@
 // connection and a 10-second stall are all verdicts the buyer is owed, so the
 // caller's state machine has no error branch that can strand a spinner.
 //
-// The wire field is `email` (PRD Amendment B) — the spine's older `userId`
-// wording is superseded.
+// The wire field is `email` — the spine's older `userId` wording is superseded.
 
 export const ORDER_URL = "/api/order";
 export const TIMEOUT_MS = 10_000;
@@ -119,11 +118,11 @@ export async function placeOrder(email: string): Promise<Verdict> {
   }
 }
 
-/** GET /api/order/:email — the UJ-2 convenience read (AD-8: never how you
- *  learn the outcome of the attempt you just made). Rejects on failure; the
- *  caller swallows it silently. A hung load-check must not resolve late and pop
- *  a focus-stealing panel, so it carries its own timeout AND honors the caller's
- *  signal (aborted on submit / unmount) — mirroring placeOrder's abort pattern. */
+/** GET /api/order/:email — a convenience read, never how you learn the outcome
+ *  of the attempt you just made. Rejects on failure; the caller swallows it
+ *  silently. A hung load-check must not resolve late and pop a focus-stealing
+ *  panel, so it carries its own timeout AND honors the caller's signal
+ *  (aborted on submit / unmount). */
 export async function checkOrder(email: string, signal?: AbortSignal): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => {
@@ -151,7 +150,7 @@ export async function checkOrder(email: string, signal?: AbortSignal): Promise<b
       body === null ||
       typeof (body as { ordered?: unknown }).ordered !== "boolean"
     ) {
-      throw new Error("order check body was not the FR-4 shape");
+      throw new Error("order check body was not the expected shape");
     }
     return (body as { ordered: boolean }).ordered;
   } finally {

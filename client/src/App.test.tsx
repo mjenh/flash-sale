@@ -110,7 +110,7 @@ describe("the living status zone, in the page", () => {
     expect(screen.getByTestId("status-chip").textContent).toBe("Active — 37 units remaining");
   });
 
-  it("keeps the four states distinct without color, and enables Buy Now only in active (SM-5)", async () => {
+  it("keeps the four states distinct without color, and enables Buy Now only in active", async () => {
     const seen = new Set<string>();
 
     for (const [status, stock, reason] of [
@@ -144,7 +144,7 @@ describe("the living status zone, in the page", () => {
     expect(seen.size).toBe(4);
   });
 
-  it("tells the truth when it cannot reach the sale, and FAILS OPEN so a status outage can't block a live sale (AI-S2-13)", async () => {
+  it("tells the truth when it cannot reach the sale, and FAILS OPEN so a status outage can't block a live sale", async () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("down"))));
     vi.useFakeTimers();
 
@@ -160,14 +160,14 @@ describe("the living status zone, in the page", () => {
     expect(screen.queryByTestId("status-chip")).toBeNull();
 
     // But Buy Now is ENABLED: the status path being down must not block a sale
-    // the API would accept — the server's verdict decides the attempt (SM-C1).
+    // the API would accept — the server's verdict decides the attempt.
     // A live button needs no dead-button reason.
     expect(buyNow()).not.toBeDisabled();
     expect(screen.queryByTestId("buy-now-reason")).toBeNull();
   });
 });
 
-describe("UJ-1 — the winner", () => {
+describe("the winner", () => {
   it("beats, then answers: processing acknowledgment → 'Order successful.' framed 'It's yours!', with focus", async () => {
     let release: (value: Response) => void = () => {};
     fetchSpy = router({
@@ -205,7 +205,7 @@ describe("UJ-1 — the winner", () => {
     expect(screen.queryByTestId("processing-line")).toBeNull();
   });
 
-  it("re-fetches the sale status after the attempt (FR-5)", async () => {
+  it("re-fetches the sale status after the attempt", async () => {
     fetchSpy = router({ order: () => json(201, { message: "Order successful." }) });
     vi.stubGlobal("fetch", fetchSpy);
 
@@ -240,7 +240,7 @@ describe("UJ-1 — the winner", () => {
   });
 });
 
-describe("UJ-4 — the fair loser", () => {
+describe("the fair loser", () => {
   it("gets the sympathetic frame; the field KEEPS its value through the rejection", async () => {
     fetchSpy = router({ order: () => json(409, { success: false, error: "Item is sold out." }) });
     vi.stubGlobal("fetch", fetchSpy);
@@ -330,9 +330,9 @@ describe("the identifier field is an email input", () => {
   it("is a type=email field so the browser validates the address shape, with email help copy", async () => {
     await paint("active", 37);
 
-    // type=email is the validation mechanism (FR-2/FR-4 are email-native). The
-    // hook keeps no format gate of its own (SM-C1, pinned in useOrder.test.ts);
-    // the input's native constraint validation is what checks the shape.
+    // type=email is the validation mechanism. The hook keeps no format gate
+    // of its own (pinned in useOrder.test.ts); the input's native constraint
+    // validation is what checks the shape.
     expect(emailField()).toHaveAttribute("type", "email");
     expect(screen.getByText(/that's the whole form, promise/i)).toBeInTheDocument();
   });

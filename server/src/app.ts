@@ -1,7 +1,5 @@
-// Express assembly: helmet defaults -> pino-http (one line per request) ->
-// 8 kb JSON limit -> /api router -> optional client/dist static -> envelope 404 ->
-// ONE central error middleware. Express 5 propagates rejected async handlers
-// here on its own — no per-route try/catch anywhere (NFR-6).
+// Express 5 propagates rejected async handlers to the central error
+// middleware on its own — no per-route try/catch needed.
 import express, {
   type Express,
   type NextFunction,

@@ -1,5 +1,5 @@
 // Boot: bootstrap() -> listen. Fail fast with a non-zero exit on bad config
-// or unreachable stores, strictly before listen() (AD-6).
+// or unreachable stores, strictly before listen().
 import { bootstrap } from "./bootstrap.ts";
 
 bootstrap()
@@ -17,7 +17,7 @@ bootstrap()
     });
 
     // Node is container PID 1, so default signal dispositions don't apply —
-    // handle SIGTERM/SIGINT explicitly to run the ordered teardown (AD-5).
+    // handle SIGTERM/SIGINT explicitly to run the ordered teardown.
     let shuttingDown = false;
     const shutdown = (signal: NodeJS.Signals): void => {
       if (shuttingDown) {

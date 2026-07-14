@@ -28,7 +28,7 @@ describe("submit", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("has NO format gate — a plausible attempt is never blocked client-side (SM-C1)", async () => {
+  it("has NO format gate — a plausible attempt is never blocked client-side", async () => {
     const fetchSpy = replied(201, { message: "Order successful." });
     vi.stubGlobal("fetch", fetchSpy);
 
@@ -123,7 +123,7 @@ describe("submit", () => {
   });
 });
 
-describe("checkOnLoad — relief in a single page-load (UJ-2)", () => {
+describe("checkOnLoad — relief in a single page-load", () => {
   it("renders the reassurance verdict with no interaction when the email already holds an order", async () => {
     vi.stubGlobal("fetch", replied(200, { success: true, ordered: true, email: "a@b.c" }));
 

@@ -1,9 +1,6 @@
-// Unit tests: boot order + fail-fast with fake connectors — the same
-// bootstrap() integration tests use against compose-run stores (Story 1.2+).
-// Story 1.4: boot now runs the AD-4 seed upserts + warm/cold reconcile
-// strictly before returning (hence before any listen()).
-// Story 1.6: boot wires the sale:events realtime layer — the subscriber on a
-// dedicated duplicate()d connection (subscribed before returning) and
+// Boot runs seed upserts + warm/cold reconcile strictly before returning
+// (hence before any listen()). It also wires the sale:events realtime layer
+// on a dedicated duplicate()d connection (subscribed before returning) with
 // future-boundaries-only window timers; teardown closes the subscriber.
 import { describe, expect, it, vi } from "vitest";
 import request from "supertest";
@@ -39,9 +36,9 @@ function fakeSubscriber() {
 
 function fakeOverrides(env: Record<string, string | undefined>, initialKv?: Map<string, string>) {
   // In-memory command surface for the stock adapter (get), the order store's
-  // boot-time registration (scriptLoad), the AD-4 reconciler (exists/del/
-  // sAdd/set), the sale:events publisher (publish) + the duplicate()d
-  // subscriber connection (Story 1.6) + isOpen for teardown.
+  // boot-time registration (scriptLoad), the reconciler (exists/del/sAdd/set),
+  // the sale:events publisher (publish) + the duplicate()d subscriber
+  // connection + isOpen for teardown.
   const kv = initialKv ?? new Map<string, string>();
   const sets = new Map<string, Set<string>>();
   const subscriber = fakeSubscriber();
@@ -109,7 +106,7 @@ describe("bootstrap", () => {
     expect(res.body).toEqual({ success: false, error: "Not found." });
   });
 
-  it("registers the AD-1 order script (SCRIPT LOAD) during bootstrap — before any listen()", async () => {
+  it("registers the order script (SCRIPT LOAD) during bootstrap — before any listen()", async () => {
     const { fakeRedis, overrides } = fakeOverrides(validEnv);
     const scriptLoad = (fakeRedis as unknown as { scriptLoad: ReturnType<typeof vi.fn> }).scriptLoad;
     await bootstrap(overrides);
@@ -117,7 +114,7 @@ describe("bootstrap", () => {
     expect(String(scriptLoad.mock.calls[0]?.[0])).toContain("SISMEMBER");
   });
 
-  it("cold boot: seeds the four domain docs and rebuilds stock:remaining during bootstrap (AD-4)", async () => {
+  it("cold boot: seeds the four domain docs and rebuilds stock:remaining during bootstrap", async () => {
     const { kv, mongo, overrides } = fakeOverrides(validEnv);
     await bootstrap(overrides);
 
@@ -171,7 +168,7 @@ describe("bootstrap", () => {
     expect(overrides.disconnectRedis).toHaveBeenCalledWith(fakeRedis);
   });
 
-  it("subscribes the duplicated connection to exactly sale:events during bootstrap() — error listener before connect (Story 1.6)", async () => {
+  it("subscribes the duplicated connection to exactly sale:events during bootstrap() — error listener before connect", async () => {
     const { fakeRedis, subscriber, overrides } = fakeOverrides(validEnv);
     await bootstrap(overrides);
 
@@ -181,14 +178,14 @@ describe("bootstrap", () => {
     expect(subscriber.subscribe).toHaveBeenCalledTimes(1);
     expect(subscriber.subscribe.mock.calls[0]?.[0]).toBe("sale:events");
 
-    // The error listener (the AD-5 connection-lost trigger) is wired first.
+    // The error listener (connection-lost trigger) is wired first.
     const onOrder = subscriber.on.mock.invocationCallOrder[0];
     const connectOrder = subscriber.connect.mock.invocationCallOrder[0];
     expect(subscriber.on).toHaveBeenCalledWith("error", expect.any(Function));
     expect(onOrder).toBeLessThan(connectOrder as number);
   });
 
-  it("a subscriber connect failure rejects bootstrap() — fail-fast strictly before listen() (AD-5)", async () => {
+  it("a subscriber connect failure rejects bootstrap() — fail-fast strictly before listen()", async () => {
     const { subscriber, overrides } = fakeOverrides(validEnv);
     subscriber.connect = vi.fn(async () => {
       throw new Error("subscriber refused");
@@ -208,7 +205,7 @@ describe("bootstrap", () => {
     expect(closeOrder).toBeLessThan(mongoOrder as number);
   });
 
-  it("a boot pinned after endMs arms NO boundary timers — zero publishes ever (AC 2 negative space)", async () => {
+  it("a boot pinned after endMs arms NO boundary timers — zero publishes ever", async () => {
     const { fakeRedis, overrides } = fakeOverrides(validEnv);
     await bootstrap({ ...overrides, clock: () => Date.parse(validEnv.SALE_END_TIME) + 60_000 });
     await new Promise((resolve) => setTimeout(resolve, 20));

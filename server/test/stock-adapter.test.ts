@@ -1,6 +1,5 @@
-// Unit tests: stock:remaining adapter — bounded reads, fail-closed
-// RedisUnavailableError mapping. Fake client, no I/O. (The Story-1.2 interim
-// SETNX seed was retired by Story 1.4's AD-4 reconcile — see reconcile.test.ts.)
+// Bounded reads, fail-closed RedisUnavailableError mapping. Fake client,
+// no I/O.
 import { describe, expect, it, vi } from "vitest";
 import {
   createStockStore,
@@ -40,7 +39,7 @@ describe("createStockStore", () => {
     expect((err as { expose: boolean }).expose).toBe(true);
   });
 
-  it("treats a hung command as unreachable within the bounded timeout (AD-5)", async () => {
+  it("treats a hung command as unreachable within the bounded timeout", async () => {
     const client = fakeClient();
     client.get = vi.fn(() => new Promise<string | null>(() => {}));
     const stock = createStockStore(client, { commandTimeoutMs: 10 });

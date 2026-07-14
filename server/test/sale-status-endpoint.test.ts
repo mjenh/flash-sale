@@ -1,9 +1,7 @@
 // Endpoint tests through the REAL bootstrap() — tests never re-implement
 // boot. Redis is the shared in-memory fake and Mongo is the shared model-ops
 // fake; swap them for real clients against compose-run stores and this file
-// runs unchanged (compose validation deferred — Docker unavailable in this
-// environment). Cold/warm boot expectations flow through the Story-1.4 AD-4
-// reconcile (which replaced the Story-1.2 interim SETNX seed).
+// runs unchanged.
 import { describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { pino } from "pino";
@@ -37,7 +35,7 @@ function boot(opts: { nowMs: number; stock?: string }) {
 }
 
 describe("GET /api/sale/status (booted via bootstrap())", () => {
-  it("cold Redis: boot rebuilds stock:remaining to STOCK_QUANTITY and reports upcoming (FR-1 body)", async () => {
+  it("cold Redis: boot rebuilds stock:remaining to STOCK_QUANTITY and reports upcoming", async () => {
     const { fake, result } = boot({ nowMs: startMs - 60_000 });
     const { app } = await result;
     expect(fake.kv.get("stock:remaining")).toBe("100");
@@ -82,7 +80,7 @@ describe("GET /api/sale/status (booted via bootstrap())", () => {
     expect(res.body.stock).toBe(12);
   });
 
-  it("fails closed with the exact 503 envelope when Redis commands fail (AD-5, NFR-9)", async () => {
+  it("fails closed with the exact 503 envelope when Redis commands fail", async () => {
     const { fake, result } = boot({ nowMs: startMs + 1000, stock: "50" });
     const { app } = await result;
     fake.failing = true;

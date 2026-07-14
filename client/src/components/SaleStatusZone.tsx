@@ -2,8 +2,8 @@
 // server's sale-status service. Nothing else in the client derives a status
 // string (StatusChip.statusString is the sole composer).
 //
-// Two axes, never conflated: the SALE's state (upcoming/active/sold_out/ended)
-// and the CHANNEL's honesty (live/degraded/offline). SM-5: the four states are
+// Two axes, never conflated: the sale's state (upcoming/active/sold_out/ended)
+// and the channel's honesty (live/degraded/offline). The four states are
 // distinct by verbatim string, composition, and sticker presence — color is
 // never the only signal.
 import { useEffect, useRef, useState } from "react";

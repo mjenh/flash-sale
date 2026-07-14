@@ -128,7 +128,7 @@ describe("the pop-up's manners", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("distinguishes its variants without color: composition differs too (SM-5)", () => {
+  it("distinguishes its variants without color: composition differs too", () => {
     const fingerprints = new Set<string>();
 
     for (const verdict of [

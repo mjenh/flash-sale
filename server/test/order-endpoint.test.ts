@@ -1,10 +1,7 @@
-// POST /api/order endpoint tests through the REAL bootstrap() (AC 1-7) —
-// tests never re-implement boot. The Redis client is the shared in-memory
-// fake whose eval executes a faithful, atomic-per-call port of order.lua;
-// swap it for a real client against compose-run Redis and this file runs
-// unchanged (compose validation deferred — Docker unavailable here; the
-// cross-process race guarantee is Redis's single-threaded script execution,
-// proven end-to-end by Story 3.1's k6 harness).
+// Endpoint tests through the REAL bootstrap() — tests never re-implement
+// boot. The Redis client is the shared in-memory fake whose eval executes a
+// faithful, atomic-per-call port of order.lua; swap it for a real client
+// against compose-run Redis and this file runs unchanged.
 import { describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { pino } from "pino";
@@ -33,7 +30,6 @@ async function boot(opts: { nowMs: number; stock?: string; stockQuantity?: strin
     disconnectRedis: vi.fn(async () => {}),
     connectMongoDb: vi.fn(async () => {}),
     disconnectMongoDb: vi.fn(async () => {}),
-    // Story 1.4: boot runs the AD-4 seed + reconcile over the mongo model ops.
     mongoModelOps: createFakeMongo().ops,
   };
   const { app } = await bootstrap(overrides);
@@ -54,7 +50,7 @@ describe("POST /api/order (booted via bootstrap())", () => {
     expect(fake.sets.get("orders:users")?.has("buyer@example.com")).toBe(true);
   });
 
-  it("retry -> 200 idempotent body; the confirmed-order count and stock do not change (AC 2)", async () => {
+  it("retry -> 200 idempotent body; the confirmed-order count and stock do not change", async () => {
     const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "3" });
     await request(app).post("/api/order").send({ email: "buyer@example.com" });
 
@@ -69,7 +65,7 @@ describe("POST /api/order (booted via bootstrap())", () => {
     expect(orderSetSize(fake)).toBe(1);
   });
 
-  it("AI-S1-03: case + whitespace variants of an email are ONE customer; the stored key and echo are canonical", async () => {
+  it("case + whitespace variants of an email are ONE customer; the stored key and echo are canonical", async () => {
     const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "3" });
 
     const first = await request(app).post("/api/order").send({ email: "  Buyer@Example.COM " });
@@ -83,7 +79,7 @@ describe("POST /api/order (booted via bootstrap())", () => {
     expect(fake.kv.get("stock:remaining")).toBe("2"); // only one unit gone
     expect(orderSetSize(fake)).toBe(1);
 
-    // The FR-4 check collapses casing too, so it can't miss the held order.
+    // The order check collapses casing too, so it can't miss the held order.
     const check = await request(app).get("/api/order/Buyer@Example.com");
     expect(check.status).toBe(200);
     expect(check.body).toEqual({ success: true, ordered: true, email: "buyer@example.com" });
@@ -97,7 +93,7 @@ describe("POST /api/order (booted via bootstrap())", () => {
     expect(orderSetSize(fake)).toBe(0);
   });
 
-  it("sold out still yields 200 already for an order holder (AD-2: already outranks stock)", async () => {
+  it("sold out still yields 200 already for an order holder (already outranks stock)", async () => {
     const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "1" });
     await request(app).post("/api/order").send({ email: "winner@example.com" });
     expect(fake.kv.get("stock:remaining")).toBe("0");
@@ -122,7 +118,7 @@ describe("POST /api/order (booted via bootstrap())", () => {
     });
   }
 
-  it("200 already outside the window for an order holder, via SISMEMBER alone (AC 4)", async () => {
+  it("200 already outside the window for an order holder, via SISMEMBER alone", async () => {
     const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "5" });
     await request(app).post("/api/order").send({ email: "held@example.com" });
     const scriptCallsAfterPurchase = fake.calls.evalSha + fake.calls.eval;
@@ -140,7 +136,7 @@ describe("POST /api/order (booted via bootstrap())", () => {
     expect(fake.calls.evalSha + fake.calls.eval).toBe(scriptCallsAfterPurchase); // script did NOT run
   });
 
-  describe("400 validation precedes every other check (AC 5) — no Redis command runs", () => {
+  describe("400 validation precedes every other check — no Redis command runs", () => {
     const cases: Array<[string, object | string | undefined]> = [
       ["missing body", undefined],
       ["missing email", {}],
@@ -181,7 +177,7 @@ describe("POST /api/order (booted via bootstrap())", () => {
     expect(retry.status).toBe(200);
   });
 
-  it("fails closed with the exact 503 envelope when Redis commands fail (AC 7)", async () => {
+  it("fails closed with the exact 503 envelope when Redis commands fail", async () => {
     const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "5" });
     fake.failing = true;
     const res = await request(app).post("/api/order").send({ email: "who@example.com" });
@@ -197,7 +193,7 @@ describe("POST /api/order (booted via bootstrap())", () => {
     expect(res.body).toEqual({ success: false, error: "Service temporarily unavailable." });
   });
 
-  it("survives a script-cache flush mid-run: NOSCRIPT falls back to EVAL transparently (AC 1)", async () => {
+  it("survives a script-cache flush mid-run: NOSCRIPT falls back to EVAL transparently", async () => {
     const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "2" });
     fake.flushScripts();
     const res = await request(app).post("/api/order").send({ email: "resilient@example.com" });
@@ -206,7 +202,7 @@ describe("POST /api/order (booted via bootstrap())", () => {
     expect(fake.calls.eval).toBeGreaterThanOrEqual(1);
   });
 
-  describe("concurrent burst (AC 6 — NFR-1)", () => {
+  describe("concurrent burst", () => {
     it("20 unique emails vs stock 5 -> exactly 5x201 + 15x409 sold out; stock 0; set size 5", async () => {
       const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "5", stockQuantity: "5" });
       const emails = Array.from({ length: 20 }, (_, i) => `burst-${i}@example.com`);

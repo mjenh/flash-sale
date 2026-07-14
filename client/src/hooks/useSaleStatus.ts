@@ -1,6 +1,6 @@
-// The realtime channel. An OPEN STREAM IS THE SOLE WRITER of the status view
-// (AD-9 / frontend-behavior convention) — poll results apply only while it is
-// down. That rule is an explicit guard here, never an accident of timing.
+// The realtime channel. An open stream is the sole writer of the status view —
+// poll results apply only while it is down. That rule is an explicit guard
+// here, never an accident of timing.
 //
 // `channel` is a separate axis from the sale's `status`: it is how honest the
 // page may be about liveness, not what the sale is doing.
@@ -23,13 +23,13 @@ export type Channel = "connecting" | "live" | "degraded" | "offline";
 /** Middle of the spine's 2–10 s fallback band. */
 export const POLL_MS = 5_000;
 
-/** The server heartbeats every 25 s as a NAMED `heartbeat` event (AI-S4-07),
- *  which the browser DOES surface — so a quiet-but-live stream keeps marking
- *  activity even when no `status` frame is due (e.g. the whole `upcoming` phase).
- *  If an OPEN stream produces no observable activity for longer than this, the
- *  connection is treated as silently dead — a black-holed TCP socket (sleep/wake,
- *  captive portal, NAT reap) that never fires `error`. The demotion self-heals:
- *  the reconnect below re-snapshots. */
+/** The server heartbeats every 25 s as a named `heartbeat` event, which the
+ *  browser surfaces — so a quiet-but-live stream keeps marking activity even
+ *  when no `status` frame is due (e.g. the whole `upcoming` phase). If an open
+ *  stream produces no observable activity for longer than this, the connection
+ *  is treated as silently dead — a black-holed TCP socket (sleep/wake, captive
+ *  portal, NAT reap) that never fires `error`. The demotion self-heals: the
+ *  reconnect below re-snapshots. */
 export const WATCHDOG_SILENCE_MS = 40_000;
 
 /** If neither channel has produced a first paint by this deadline, arm the
@@ -42,7 +42,7 @@ const RECONNECT_MAX_MS = 30_000;
 export interface SaleStatusHandle {
   body: SaleStatusBody | null;
   channel: Channel;
-  /** One-shot re-sync. Story 2.3 calls it after every order attempt (FR-5). */
+  /** One-shot re-sync, called after every order attempt. */
   refetch: () => void;
 }
 
@@ -94,7 +94,7 @@ export function useSaleStatus(): SaleStatusHandle {
       })
       .catch(() => {
         // Silent: a re-sync failure is not a verdict, and the status zone
-        // keeps whatever truth it has (AD-5 is not a page takeover).
+        // keeps whatever truth it has.
       });
   }, []);
 
@@ -171,8 +171,8 @@ export function useSaleStatus(): SaleStatusHandle {
         }
       });
 
-      // The 25 s keep-alive is a NAMED `heartbeat` event (AI-S4-07). It carries
-      // no status — its only job is to mark the stream observably alive so the
+      // The 25 s keep-alive is a named `heartbeat` event. It carries no
+      // status — its only job is to mark the stream observably alive so the
       // watchdog does not demote a healthy but quiet connection.
       source.addEventListener("heartbeat", markActivity);
 
@@ -243,10 +243,9 @@ export function useSaleStatus(): SaleStatusHandle {
       }, POLL_MS);
     }
 
-    /** Reconnect the stream on an exponential backoff with equal jitter. AD-5's
-     *  `closeAll()` ends every client's stream at the same instant; a fixed
-     *  interval would have them all reconnect in lockstep. Jitter spreads them.
-     *  A handshake still CONNECTING is never killed — it is given another beat. */
+    /** Reconnect the stream on an exponential backoff with equal jitter. A
+     *  server-side close ends every client's stream at the same instant; a fixed
+     *  interval would have them all reconnect in lockstep. Jitter spreads them. */
     function reconnectDelay() {
       const capped = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** reconnectAttemptsRef.current);
       return capped / 2 + Math.random() * (capped / 2);

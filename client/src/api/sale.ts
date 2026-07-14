@@ -1,5 +1,4 @@
-// The wire contract, in one place. Native fetch + EventSource only — no axios,
-// no socket library (AD-7: the client speaks HTTP to /api/*).
+// The wire contract, in one place. Native fetch + EventSource only.
 //
 // Defensive narrowing is not paranoia: a garbled or lying body must never
 // become a painted state. If we cannot prove what the sale is doing, we say so
@@ -11,7 +10,7 @@ export const SALE_EVENTS_URL = "/api/sale/events";
 
 export type SaleState = "upcoming" | "active" | "sold_out" | "ended";
 
-/** FR-1 body — identical on GET /api/sale/status and inside every SSE `status` frame. */
+/** Shape shared by GET /api/sale/status and every SSE status frame. */
 export interface SaleStatusBody {
   success: true;
   status: SaleState;
@@ -22,7 +21,7 @@ export interface SaleStatusBody {
 
 const STATES: readonly string[] = ["upcoming", "active", "sold_out", "ended"];
 
-/** Narrow an unknown payload to the FR-1 body, or return null. */
+/** Narrow an unknown payload to a valid SaleStatusBody, or return null. */
 export function parseSaleStatus(raw: unknown): SaleStatusBody | null {
   if (typeof raw !== "object" || raw === null) {
     return null;
@@ -63,7 +62,7 @@ export async function fetchSaleStatus(signal?: AbortSignal): Promise<SaleStatusB
   }
   const body = parseSaleStatus(await res.json());
   if (body === null) {
-    throw new Error("sale status body was not the FR-1 shape");
+    throw new Error("sale status body was not the expected shape");
   }
   return body;
 }

@@ -1,9 +1,9 @@
-// SSE endpoint tests through the REAL bootstrap() (Story 1.6, all ACs) —
-// tests never re-implement boot. Redis is the shared in-memory fake (now
-// carrying the sale:events pub/sub bus) and Mongo is the shared model-ops
-// fake. Streaming reads use the raw node:http helper (supertest buffers until
-// the response ends — unusable for an open stream); supertest is still used
-// where the request completes (the fail-closed 503).
+// SSE endpoint tests through the REAL bootstrap() — tests never re-implement
+// boot. Redis is the shared in-memory fake (now carrying the sale:events
+// pub/sub bus) and Mongo is the shared model-ops fake. Streaming reads use
+// the raw node:http helper (supertest buffers until the response ends —
+// unusable for an open stream); supertest is still used where the request
+// completes (the fail-closed 503).
 //
 // Coalescing under real timers stays deliberately coarse (strictly fewer
 // frames than accepts + the final frame carries the fresh truth); the exact
@@ -73,8 +73,8 @@ async function boot(opts: {
 /** Drain the microtask/immediate queue so fire-and-forget publishes settle. */
 const drain = () => new Promise((resolve) => setImmediate(resolve));
 
-describe("GET /api/sale/events — stream contract (AC 3)", () => {
-  it("responds 200 text/event-stream with an immediate snapshot status frame carrying the exact FR-1 body", async () => {
+describe("GET /api/sale/events — stream contract", () => {
+  it("responds 200 text/event-stream with an immediate snapshot status frame carrying the exact body", async () => {
     const { app } = await boot({ nowMs: IN_WINDOW, stock: "37" });
     const stream = await openSse(app);
 
@@ -107,7 +107,7 @@ describe("GET /api/sale/events — stream contract (AC 3)", () => {
   });
 });
 
-describe("live update path (AC 1 + 4)", () => {
+describe("live update path", () => {
   it("an accepted order publishes order.accepted and the stream receives the decremented truth", async () => {
     const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "3" });
     const stream = await openSse(app);
@@ -116,7 +116,7 @@ describe("live update path (AC 1 + 4)", () => {
     const res = await request(app).post("/api/order").send({ email: "buyer@example.com" });
     expect(res.status).toBe(201);
     await drain();
-    expect(fake.published).toEqual(["order.accepted"]); // no sale.sold_out (AC 1)
+    expect(fake.published).toEqual(["order.accepted"]);
 
     const frames = await stream.waitForFrames(2);
     expect(frameData(frames[1] as string)).toEqual({
@@ -157,7 +157,7 @@ describe("live update path (AC 1 + 4)", () => {
     });
   });
 
-  it("a rejected attempt (SOLD_OUT verdict at stock 0) publishes NOTHING (AC 1 negative space)", async () => {
+  it("a rejected attempt (SOLD_OUT verdict at stock 0) publishes NOTHING", async () => {
     const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "0" });
     const res = await request(app).post("/api/order").send({ email: "late@example.com" });
     expect(res.status).toBe(409);
@@ -166,7 +166,7 @@ describe("live update path (AC 1 + 4)", () => {
     expect(fake.calls.publish).toBe(0);
   });
 
-  it("coalesces a burst: 5 accepted orders produce strictly fewer frames, and the LAST frame is the final truth (AC 4, coarse)", async () => {
+  it("coalesces a burst: 5 accepted orders produce strictly fewer frames, and the LAST frame is the final truth", async () => {
     const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "5" });
     const stream = await openSse(app);
     await stream.waitForFrames(1);
@@ -194,7 +194,7 @@ describe("live update path (AC 1 + 4)", () => {
   });
 });
 
-describe("fail closed (AC 5)", () => {
+describe("fail closed", () => {
   it("new stream requests return the exact 503 envelope while Redis is down", async () => {
     const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "37" });
     fake.failing = true;
@@ -250,7 +250,7 @@ describe("fail closed (AC 5)", () => {
   });
 });
 
-describe("window-boundary timers through boot (AC 2)", () => {
+describe("window-boundary timers through boot", () => {
   it("boot before start publishes sale.started/sale.ended at the boundaries and streams the transitions", async () => {
     // Real short-delay timers: boundaries ~250/750 ms after boot (generous
     // gaps against event-loop jitter). The clock override is real time, so

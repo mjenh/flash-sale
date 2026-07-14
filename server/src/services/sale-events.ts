@@ -1,43 +1,38 @@
-// Sale-events broadcaster — owns the AD-9 realtime rules: coalescing
-// (<= 1 broadcast per 250 ms; terminal transitions immediate, superseding any
+// Sale-events broadcaster — owns the realtime rules: coalescing (<= 1
+// broadcast per 250 ms; terminal transitions immediate, superseding any
 // pending coalesced emit, always the final frame), a single serialized writer
-// composing every frame ONCE via the sale-status service (the SOLE owner of
-// the status state machine — a fresh Redis read at emit time, never
-// decision-time state), snapshot-on-connect (healing missed events — no
-// replay), the 25 s heartbeat (a NAMED `heartbeat` event, not a bare comment,
-// so the client's silence watchdog can observe it — AI-S4-07), and the
-// mid-stream form of fail-closed (AD-5: if truth cannot be read, streams close
-// rather than serve staleness).
+// composing every frame once via the sale-status service (a fresh Redis read
+// at emit time, never decision-time state), snapshot-on-connect (healing
+// missed events — no replay), the 25 s heartbeat (a NAMED `heartbeat` event
+// so the client's silence watchdog can observe it), and mid-stream
+// fail-closed (if truth cannot be read, streams close rather than serve
+// staleness).
 //
-// Also owns the AD-9 window-boundary timers: boot arms sale.started /
-// sale.ended for FUTURE boundaries only (AD-6: the injected clock decides);
-// elapsed boundaries arm nothing — snapshot-on-connect heals.
-//
-// Framework-free (AD-7): no express/redis/mongoose imports — sinks are a
-// structural { write; end } surface the SSE route satisfies with `res`, and
-// the publisher arrives as an injected function.
+// Also owns the window-boundary timers: boot arms sale.started / sale.ended
+// for FUTURE boundaries only; elapsed boundaries arm nothing —
+// snapshot-on-connect heals.
 import type { Clock } from "./clock.ts";
 import type { SaleStatus, SaleStatusService } from "./sale-status.ts";
 
-/** Type-only domain events on the `sale:events` channel (AD-9). */
+/** Type-only domain events on the `sale:events` channel. */
 export type SaleEventType = "order.accepted" | "sale.sold_out" | "sale.started" | "sale.ended";
 
 /** Terminal transitions: emit immediately, supersede pending, final frame. */
 const TERMINAL_EVENTS: ReadonlySet<string> = new Set(["sale.sold_out", "sale.ended"]);
 
-/** AD-9 spine constants — not deployment tunables (no config keys). */
+/** Not deployment tunables — no config keys. */
 export const COALESCE_MS = 250;
 export const HEARTBEAT_MS = 25_000;
 
 /** Node's setTimeout ceiling; longer boundary delays re-arm in chunks. */
 export const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
-// A NAMED event (not a bare `:` comment): EventSource does not surface comments
-// to JS, so a comment heartbeat is invisible to the client's silence watchdog
-// (AI-S4-07). A named event needs a data line to dispatch, hence `data: {}`.
+// A NAMED event (not a bare `:` comment): EventSource does not surface
+// comments to JS, so a comment heartbeat is invisible to the client's silence
+// watchdog. A named event needs a data line to dispatch, hence `data: {}`.
 const HEARTBEAT_FRAME = "event: heartbeat\ndata: {}\n\n";
 
-/** One `status` event carrying the FR-1 body — the only frame type ever sent. */
+/** One `status` event — the only frame type ever sent. */
 function formatStatusFrame(body: unknown): string {
   return `event: status\ndata: ${JSON.stringify(body)}\n\n`;
 }
@@ -51,15 +46,15 @@ export interface SseSink {
 export interface SaleEventsBroadcaster {
   /** Snapshot-on-connect frame (fresh Redis read via the sale-status
    *  service). A RedisUnavailableError rejection propagates untouched —
-   *  the route lets it reach the central middleware BEFORE headers are
-   *  sent, so new streams 503 while Redis is down (AD-5). */
+   *  the route lets it reach the central middleware before headers are
+   *  sent, so new streams 503 while Redis is down. */
   snapshotFrame(): Promise<string>;
   /** Adds a connection; returns an idempotent unregister function. The
    *  shared heartbeat interval runs lazily while >= 1 sink is registered. */
   register(sink: SseSink): () => void;
   /** The coalescing gate — fed by the Redis pub/sub subscriber. */
   onDomainEvent(event: string): void;
-  /** AD-5 mid-stream fail-closed: end every stream, stop timers. */
+  /** Mid-stream fail-closed: end every stream, stop timers. */
   closeAll(): void;
   /** Teardown alias used by bootstrap. */
   stop(): void;
@@ -71,7 +66,7 @@ export interface SaleEventsBroadcasterDeps {
   /** Compose failures are reported here (bootstrap wires logger.error),
    *  then every stream is closed — never thrown into a request path. */
   reportBroadcastFailure: (err: unknown) => void;
-  /** Test-only overrides; production uses the AD-9 spine constants. */
+  /** Test-only overrides for the coalescing and heartbeat intervals. */
   coalesceMs?: number;
   heartbeatMs?: number;
 }
@@ -88,11 +83,11 @@ export function createSaleEventsBroadcaster({
   let pending: NodeJS.Timeout | undefined;
   let lastEmitAt = Number.NEGATIVE_INFINITY;
   /** Set once a terminal frame (sold_out/ended) has gone out — by the domain
-   *  event OR the AI-S1-02 safety net below — so the safety net fires at most
-   *  once and stops polling thereafter. */
+   *  event or the safety net below — so the safety net fires at most once and
+   *  stops polling thereafter. */
   let sawTerminal = false;
-  /** The single serialized writer (AD-9): every emit appends here, so frames
-   *  always land in order and a terminal emit is provably the final frame. */
+  /** Single serialized writer: every emit appends here, so frames always land
+   *  in order and a terminal emit is provably the final frame. */
   let chain: Promise<void> = Promise.resolve();
 
   const stopHeartbeat = (): void => {
@@ -118,15 +113,14 @@ export function createSaleEventsBroadcaster({
     }
   };
 
-  /** AI-S1-02 safety net. An order can commit its Lua script (SADD+DECR to 0)
-   *  and still be answered 503 on a Redis command timeout, skipping the OK
-   *  branch — so the ONE sale.sold_out publish is lost and live streams stay
-   *  stranded on "active" indefinitely (a healthy stream never reconnects, so
+  /** Safety net: an order can commit its Lua script (SADD+DECR to 0) and
+   *  still be answered 503 on a Redis command timeout, skipping the OK branch
+   *  — so the one sale.sold_out publish is lost and live streams stay stranded
+   *  on "active" indefinitely (a healthy stream never reconnects, so
    *  snapshot-on-connect can't heal it). Piggybacked on the heartbeat: if a
    *  fresh read shows the sale is sold out and no terminal frame has gone out,
-   *  broadcast one, exactly once. A read failure is not a signal (the normal
-   *  AD-5 fail-closed paths own Redis-down); observing `ended` also stops the
-   *  poll (that boundary is a reliable timer, and snapshot heals reconnects). */
+   *  broadcast one, exactly once. A read failure is not a signal; observing
+   *  `ended` also stops the poll (that boundary is a reliable timer). */
   const ensureTerminalIfSoldOut = async (): Promise<void> => {
     if (sawTerminal || sinks.size === 0) {
       return;
@@ -183,9 +177,9 @@ export function createSaleEventsBroadcaster({
     sinks.clear();
   };
 
-  /** Compose ONCE via the sale-status service, write the identical frame to
+  /** Compose once via the sale-status service, write the identical frame to
    *  every connection. On compose failure: report, then close every stream
-   *  (fail closed mid-stream, AD-5). */
+   *  (fail closed mid-stream). */
   const emit = (): void => {
     lastEmitAt = clock();
     chain = chain
@@ -260,13 +254,13 @@ export interface ArmWindowTimersDeps {
   startMs: number;
   endMs: number;
   publish: (event: "sale.started" | "sale.ended") => Promise<void>;
-  /** Publish failures are logged consequences, never thrown (AD-9). */
+  /** Publish failures are logged consequences, never thrown. */
   onPublishFailure: (err: unknown) => void;
 }
 
-/** Arm sale.started / sale.ended timers for FUTURE boundaries only (AD-9).
- *  Timers re-check the injected clock on fire (drift-tolerant) and re-arm in
- *  chunks below Node's setTimeout ceiling; all timers are unref()'d. */
+/** Arm sale.started / sale.ended timers for FUTURE boundaries only. Timers
+ *  re-check the injected clock on fire (drift-tolerant) and re-arm in chunks
+ *  below Node's setTimeout ceiling; all timers are unref()'d. */
 export function armWindowTimers({
   clock,
   startMs,

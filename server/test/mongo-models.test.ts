@@ -1,8 +1,7 @@
-// Schema guard for the v1 domain model (AC 3) — zero I/O: pure mongoose
-// schema inspection, no connection. Pins the spine's Mongo conventions:
-// eight collections with exact names, timestamps everywhere, the four unique
-// indexes (orders on (saleId, email) per PRD Amendment B), the single v1
-// order status, OrderLine defaults, and Reservation dormancy.
+// Zero I/O: pure mongoose schema inspection, no connection. Pins the
+// spine's Mongo conventions: eight collections with exact names, timestamps
+// everywhere, the four unique indexes (orders on (saleId, email)), the
+// single v1 order status, OrderLine defaults, and Reservation dormancy.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Model, Schema } from "mongoose";
@@ -37,7 +36,7 @@ function hasUniqueIndex(schema: Schema, fields: Record<string, number>): boolean
     );
 }
 
-describe("mongo domain models (AC 3)", () => {
+describe("mongo domain models", () => {
   it("registers all eight models with the exact spine collection names", () => {
     for (const [model, name] of allModels) {
       expect(model.collection.collectionName).toBe(name);
@@ -62,7 +61,7 @@ describe("mongo domain models (AC 3)", () => {
     expect(hasUniqueIndex(SaleProduct.schema, { saleId: 1, productId: 1 })).toBe(true);
   });
 
-  it("unique compound index: orders (saleId, email) — defense-in-depth, Amendment B naming", () => {
+  it("unique compound index: orders (saleId, email) — defense-in-depth", () => {
     expect(hasUniqueIndex(Order.schema, { saleId: 1, email: 1 })).toBe(true);
   });
 

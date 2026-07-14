@@ -1,6 +1,6 @@
-// The machine-truth container. Every verbatim FR-5 status string lives here,
-// in mono, never paraphrased — and NOTHING ELSE does. The cold-load line
-// ("Can't reach the sale — retrying…") is not a verbatim API string, so it
+// The machine-truth container. Every verbatim status string lives here, in
+// mono, never paraphrased — and nothing else does. The cold-load line
+// ("Can't reach the sale — retrying...") is not a verbatim API string, so it
 // never enters a chip.
 import type { SaleStatusBody } from "../api/sale.ts";
 import "./StatusChip.css";
@@ -10,7 +10,7 @@ export function localTime(iso: string): string {
   return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
-/** The ONLY place the four FR-5 strings are composed. */
+/** The sole composer of the four status strings. */
 export function statusString(body: SaleStatusBody): string {
   switch (body.status) {
     case "upcoming":

@@ -68,8 +68,8 @@ export class FakeEventSource {
     }
   }
 
-  /** Fire a named `heartbeat` event — the server's 25 s keep-alive (AI-S4-07),
-   *  now an observable event so the client watchdog can see a quiet live stream. */
+  /** Fire a named `heartbeat` event — the server's 25 s keep-alive, now an
+   *  observable event so the client watchdog can see a quiet live stream. */
   heartbeat() {
     for (const listener of this.listeners.get("heartbeat") ?? []) {
       listener({ data: "{}" } as MessageEvent<string>);

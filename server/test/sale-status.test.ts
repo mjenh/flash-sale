@@ -1,6 +1,6 @@
-// Unit tests: sale-status state machine (AC 1, 2, 5). Injected clock + fake
-// StockReader — zero I/O. Boundary instants are load-bearing: now === start is
-// INSIDE the [start, end) window; now === end is OUTSIDE (ended).
+// Injected clock + fake StockReader, zero I/O. Boundary instants are
+// load-bearing: now === start is INSIDE the [start, end) window;
+// now === end is OUTSIDE (ended).
 import { describe, expect, it } from "vitest";
 import { createSaleStatusService, type StockReader } from "../src/services/sale-status.ts";
 
@@ -26,7 +26,7 @@ function service(nowMs: number, stockValue: number | Error) {
 }
 
 describe("createSaleStatusService", () => {
-  it("reports upcoming before the window, with stock and ISO times in the body (FR-1)", async () => {
+  it("reports upcoming before the window, with stock and ISO times in the body", async () => {
     const body = await service(startMs - 1, 100).getStatus();
     expect(body).toEqual({
       success: true,

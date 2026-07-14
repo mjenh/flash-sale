@@ -1,16 +1,14 @@
-// Redis adapter for the AD-1 atomic order decision. The decision logic itself
-// lives in ./order.lua (the single authoritative source, read once at module
-// init); this file only registers and invokes it — zero business rules (AD-7).
+// Redis adapter for the atomic order decision. The decision logic lives in
+// ./order.lua (the single authoritative source, read once at module init);
+// this file only registers and invokes it.
 //
-// AD-1 mechanics: register() runs SCRIPT LOAD at boot (bootstrap's Story-1.3
-// slot, strictly before listen()) and caches the sha; attempt() invokes the
-// named operation via EVALSHA and falls back automatically to EVAL (re-caching
+// register() runs SCRIPT LOAD at boot (strictly before listen()) and caches
+// the sha; attempt() invokes via EVALSHA and falls back to EVAL (re-caching
 // the sha) if Redis replies NOSCRIPT (e.g. after a script-cache flush).
 //
-// Fail closed (AD-5, NFR-9): every command is bounded by config's
-// redisCommandTimeoutMs; a timeout, any command rejection (including the
-// script's own error_reply for a missing stock key), or an unparseable reply
-// surfaces as RedisUnavailableError -> 503 at the central error middleware.
+// Fail closed: every command is bounded by redisCommandTimeoutMs; a timeout,
+// any command rejection, or an unparseable reply surfaces as
+// RedisUnavailableError -> 503 at the central error middleware.
 import { readFileSync } from "node:fs";
 import { RedisUnavailableError } from "./stock.ts";
 
@@ -24,7 +22,7 @@ export type OrderVerdict = "OK" | "ALREADY" | "SOLD_OUT";
 
 export interface OrderDecision {
   verdict: OrderVerdict;
-  /** Stock after this call (post-DECR on OK — Story 1.6's sold-out signal). */
+  /** Stock after this call (post-DECR on OK — used for the sold-out signal). */
   remaining: number;
 }
 
@@ -43,9 +41,9 @@ export interface OrderStoreOptions {
 export interface OrderStore {
   /** SCRIPT LOAD + sha cache. Called once in bootstrap, before listen(). */
   register(): Promise<void>;
-  /** Runs the AD-1 script — the only runtime writer of the two keys. */
+  /** Runs the Lua script — the only runtime writer of the two keys. */
   attempt(email: string): Promise<OrderDecision>;
-  /** One SISMEMBER — the AD-2 outside-window already-vs-inactive probe. */
+  /** One SISMEMBER — the outside-window already-vs-inactive probe. */
   hasOrdered(email: string): Promise<boolean>;
 }
 
@@ -77,7 +75,7 @@ function parseDecision(reply: unknown): OrderDecision {
   }
   const [verdict, rawRemaining] = reply as [unknown, unknown];
   if (verdict !== "OK" && verdict !== "ALREADY" && verdict !== "SOLD_OUT") {
-    // Never guess a verdict — fail closed (AD-5).
+    // Never guess a verdict — fail closed.
     throw new RedisUnavailableError(new Error(`unexpected order verdict: ${String(verdict)}`));
   }
   const remaining = Number(rawRemaining);

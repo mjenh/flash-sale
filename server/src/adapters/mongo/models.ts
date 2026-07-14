@@ -1,17 +1,14 @@
-// Mongoose domain models — the full v1 schema, persisted now with behavior
-// trigger-gated (ARCHITECTURE-SPINE "Domain model"): Product/Sale/SaleProduct/
-// Inventory are boot-seeded; Inventory is never ticked per order; Reservation
-// is defined-but-dormant (never written by any code path). MongoDB is the
-// durable audit record, never the concurrency mechanism (AD-3).
+// Mongoose domain models. Product/Sale/SaleProduct/Inventory are boot-seeded;
+// Inventory is never ticked per order; Reservation is defined but dormant.
+// MongoDB is the durable audit record, never the concurrency mechanism.
 //
-// Collection names are explicit (third arg) and match the spine exactly.
-// Unique indexes: users.identifier, products.sku, saleproducts (saleId,
-// productId), orders (saleId, email) — email per PRD Amendment B.
-// Mongoose `timestamps: true` throughout.
+// Collection names are explicit (third arg). Unique indexes:
+// users.identifier, products.sku, saleproducts (saleId, productId),
+// orders (saleId, email). Mongoose `timestamps: true` throughout.
 import mongoose, { Schema, type Types } from "mongoose";
 
 export interface UserDoc {
-  /** Trusted identifier — the email (PRD Amendment B). */
+  /** Trusted identifier — the email address. */
   identifier: string;
 }
 
@@ -79,7 +76,7 @@ export const SaleProduct = mongoose.model<SaleProductDoc>(
 
 export interface InventoryDoc {
   productId: Types.ObjectId;
-  /** Seeded from STOCK_QUANTITY at boot; NEVER ticked per order (trigger-gated). */
+  /** Seeded from STOCK_QUANTITY at boot; never ticked per order. */
   initialQuantity: number;
 }
 
@@ -95,7 +92,7 @@ export const Inventory = mongoose.model<InventoryDoc>("Inventory", inventorySche
 
 export interface OrderDoc {
   saleId: Types.ObjectId;
-  /** The wire identifier (Amendment B) — also the AD-4 rebuild source. */
+  /** The wire identifier — also the cold-rebuild source. */
   email: string;
   userId: Types.ObjectId;
   /** 'confirmed' is the only v1 value (lifecycle states are target-scale). */
@@ -111,8 +108,8 @@ const orderSchema = new Schema<OrderDoc>(
   },
   { timestamps: true },
 );
-// Defense-in-depth (AD-3): Redis is the decision layer; this index only
-// guards the audit trail against anomalous duplicate recording.
+// Defense-in-depth: Redis is the decision layer; this index only guards the
+// audit trail against anomalous duplicate recording.
 orderSchema.index({ saleId: 1, email: 1 }, { unique: true });
 
 export const Order = mongoose.model<OrderDoc>("Order", orderSchema, "orders");
@@ -121,7 +118,7 @@ export interface OrderLineDoc {
   orderId: Types.ObjectId;
   productId: Types.ObjectId;
   quantity: number;
-  /** Price snapshot — 0 while payment is out of scope (AD-10). */
+  /** Price snapshot — 0 while payment is out of scope. */
   unitPrice: number;
 }
 
@@ -145,8 +142,8 @@ export interface ReservationDoc {
   expiresAt: Date;
 }
 
-// Dormant by design (spine "Domain model"): schema ships in v1, no code path
-// ever writes it. Activates only at the reserve->confirm payment trigger.
+// Dormant by design: schema defined but no code path writes to it. Activates
+// only when the reserve->confirm payment flow is implemented.
 const reservationSchema = new Schema<ReservationDoc>(
   {
     saleId: { type: Schema.Types.ObjectId, ref: "Sale", required: true },

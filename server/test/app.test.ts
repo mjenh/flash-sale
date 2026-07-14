@@ -1,5 +1,5 @@
-// Unit tests: app assembly + central error middleware (AC 4). Supertest with an
-// injected router — no per-route try/catch anywhere; Express 5 async propagation.
+// Supertest with an injected router — no per-route try/catch anywhere;
+// Express 5 async propagation.
 import { describe, expect, it } from "vitest";
 import { Writable } from "node:stream";
 import request from "supertest";
@@ -64,7 +64,7 @@ describe("createApp", () => {
     expect(res.body).toEqual({ success: false, error: "Internal server error." });
   });
 
-  it("keeps the exposed 503 fail-closed message (AD-5/NFR-9) while plain 5xx still collapse", async () => {
+  it("keeps the exposed 503 fail-closed message while plain 5xx still collapse", async () => {
     const { app } = buildTestApp();
     const res = await request(app).get("/api/redis-down");
     expect(res.status).toBe(503);

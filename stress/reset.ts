@@ -1,14 +1,14 @@
 // The reset contract (ARCHITECTURE-SPINE "Reset contract"), made mechanical.
 //
-// Runs ONLY while the API is stopped: while the API serves, the AD-1 Lua script
+// Runs ONLY while the API is stopped: while the API serves, the Lua script
 // is the sole writer of `stock:remaining` and `orders:users`, and a concurrent
 // SET here could hand a buyer a 201 against stock that no longer exists.
 // The guard below treats ANY answer from the API — including a 503 — as
 // "still serving", and also treats a probe that TIMES OUT (a wedged-but-alive
 // API) as still serving. Only a genuine connection refusal (ECONNREFUSED) is
-// the green light (AI-S3-03).
+// the green light.
 //
-// Wipes, in crash-safe order (the sentinel is written LAST, AI-S3-07):
+// Wipes, in crash-safe order (the sentinel is written LAST):
 //   DEL orders:users, deleteMany({}) on orders, orderlines, users,
 //   then SET stock:remaining = STOCK_QUANTITY.
 // stock:remaining IS the warm/cold sentinel (server/src/adapters/redis/
@@ -25,7 +25,7 @@ import { loadStressConfig, type StressConfig } from "./config.ts";
 export class ApiStillServingError extends Error {
   override name = "ApiStillServingError";
   constructor(detail: string) {
-    super(`The API is still serving (${detail}). Stop it before resetting — while it serves, the Lua script is the sole writer of the sale state (AD-1).`);
+    super(`The API is still serving (${detail}). Stop it before resetting — while it serves, the Lua script is the sole writer of the sale state.`);
   }
 }
 
@@ -60,7 +60,7 @@ export async function resetAll(ports: ResetPorts, stockQuantity: number): Promis
     throw new ApiStillServingError(serving);
   }
 
-  // Wipe FIRST, write the sentinel LAST (AI-S3-07). stock:remaining is the
+  // Wipe FIRST, write the sentinel LAST. stock:remaining is the
   // warm/cold sentinel — a crash between the wipe and this final SET must never
   // leave a present sentinel beside a stale orders:users set.
   await ports.deleteOrderUsers();
@@ -82,7 +82,7 @@ export function isConnectionRefused(err: unknown): boolean {
 
 /** GET /api/sale/status with a short timeout. Any HTTP answer means serving —
  *  and so does a TIMEOUT (a wedged-but-alive API). Only a genuine ECONNREFUSED
- *  is the green light (AI-S3-03). */
+ *  is the green light. */
 export async function probeApiUrl(apiUrl: string, timeoutMs = 2000): Promise<string | null> {
   try {
     const res = await fetch(`${apiUrl}/api/sale/status`, {

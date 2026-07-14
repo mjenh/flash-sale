@@ -6,7 +6,7 @@
 // Why fakes and not mongodb-memory-server: the MongoDB binary CDN
 // (fastdl.mongodb.org) is blocked in this environment, and it would be a new
 // dependency outside the architecture stack. Compose-run Mongo validation is
-// deferred to the Story 3.1 harness, same as Redis.
+// deferred to the compose-run harness, same as Redis.
 //
 // Fidelity notes: insertConfirmedOrder enforces the (saleId, email) unique
 // index by rejecting with `code: 11000` (the real Mongo duplicate-key shape);
@@ -45,7 +45,7 @@ export interface FakeMongo {
   inventories: Map<string, number>; // productId -> initialQuantity
   orders: FakeOrderDoc[];
   orderLines: FakeOrderLineDoc[];
-  /** When true, every AUDIT write rejects (AC 2 — the accept path only). */
+  /** When true, every AUDIT write rejects (the accept path only). */
   failingAudit: boolean;
   audit: AuditModelOps;
   seed: SeedModelOps;

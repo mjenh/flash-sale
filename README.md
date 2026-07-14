@@ -161,7 +161,7 @@ stores. Redis (`SCARD orders:users` + `stock:remaining`) is the authoritative
 fairness record: every fairness count is an exact equality against the API's own
 seeded stock (the harness never asserts against a quantity it chose). The async
 Mongo audit is reconciled with a tolerance — an accepted under-count (a Redis
-accept whose durable write was lost, NFR-4) passes with a note, while an
+accept whose durable write was lost) passes with a note, while an
 over-count (a phantom order Mongo holds but Redis never accepted) hard-fails. It
 then re-checks that a past-window sale rejects every attempt.
 Buyer count (`ATTEMPTS`, default 5,000), virtual users (`VUS`, default 500), and

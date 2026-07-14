@@ -24,7 +24,7 @@ afterEach(() => {
 });
 
 describe("fetchSaleStatus", () => {
-  it("resolves the exact FR-1 body", async () => {
+  it("resolves the exact response body", async () => {
     const fetchSpy = respond(BODY);
     vi.stubGlobal("fetch", fetchSpy);
 
@@ -47,7 +47,7 @@ describe("fetchSaleStatus", () => {
 
   it("rejects a body it cannot prove", async () => {
     vi.stubGlobal("fetch", respond({ ...BODY, status: "on_fire" }));
-    await expect(fetchSaleStatus()).rejects.toThrow(/FR-1 shape/);
+    await expect(fetchSaleStatus()).rejects.toThrow(/expected shape/);
   });
 });
 

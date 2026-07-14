@@ -1,13 +1,12 @@
-// Sale-status service — the SOLE owner of the status state machine (AD-9:
-// Story 1.6's SSE broadcaster composes every frame through getStatus()).
-// Framework-free (AD-7): no express/redis/mongoose imports; the clock is
-// injected (AD-6) and stock arrives through the StockReader port, which the
-// Redis stock adapter satisfies. Window semantics: [start, end).
+// Sale-status service — the sole owner of the status state machine. The SSE
+// broadcaster composes every frame through getStatus(). Framework-free: the
+// clock is injected and stock arrives through the StockReader port.
+// Window semantics: [start, end).
 import type { Clock } from "./clock.ts";
 
 export type SaleStatus = "upcoming" | "active" | "ended" | "sold_out";
 
-/** FR-1 body — composed here, once, for HTTP and (Story 1.6) SSE alike. */
+/** Composed here once for both HTTP and SSE responses. */
 export interface SaleStatusBody {
   success: true;
   status: SaleStatus;
@@ -16,7 +15,7 @@ export interface SaleStatusBody {
   endTime: string;
 }
 
-/** Port satisfied by adapters/redis/stock.ts (AD-3: runtime reads hit Redis only). */
+/** Port satisfied by adapters/redis/stock.ts. */
 export interface StockReader {
   getRemaining(): Promise<number>;
 }
@@ -41,8 +40,8 @@ export interface SaleStatusDeps {
 export function createSaleStatusService({ clock, stock, window }: SaleStatusDeps): SaleStatusService {
   return {
     async getStatus(): Promise<SaleStatusBody> {
-      // FR-1 always carries stock — read it in every state. Redis down
-      // therefore fails closed even before/after the window (AD-5).
+      // Always read stock in every state — a Redis failure therefore fails
+      // closed even before/after the window.
       const remaining = await stock.getRemaining();
       const now = clock();
 

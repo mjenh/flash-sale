@@ -4,14 +4,14 @@
 // bootstrap(); swap it for a real client against compose-run Redis and the
 // endpoint test files run unchanged.
 //
-// Story 1.6 pub/sub bus: publish() delivers synchronously to listeners
-// subscribed through duplicate()d subscriber clients (all duplicates share
-// one bus). Test seams: deliver() injects an event at the subscription
-// without a publish (drives the broadcaster while `failing` blocks the bus),
+// Pub/sub bus: publish() delivers synchronously to listeners subscribed
+// through duplicate()d subscriber clients (all duplicates share one bus).
+// Test seams: deliver() injects an event at the subscription without a
+// publish (drives the broadcaster while `failing` blocks the bus),
 // emitSubscriberError() fires the subscriber connection's error listeners
-// (the AD-5 connection-lost trigger), and failingPublish fails ONLY
-// publishes (proves publish failures never alter HTTP outcomes while reads
-// stay healthy).
+// (connection-lost trigger), and failingPublish fails ONLY publishes
+// (proves publish failures never alter HTTP outcomes while reads stay
+// healthy).
 //
 // evalSha/eval execute a faithful, line-for-line JS port of order.lua — the
 // .lua file remains the single authoritative implementation (its keys and
@@ -25,22 +25,22 @@ import type { RedisClient } from "../../src/adapters/redis/client.ts";
 export interface FakeRedis {
   kv: Map<string, string>;
   sets: Map<string, Set<string>>;
-  /** When true, every command rejects (AD-5 fail-closed path). */
+  /** When true, every command rejects (fail-closed path). */
   failing: boolean;
-  /** When true, ONLY publish rejects — reads stay healthy (Story 1.6 AC 5:
-   *  publish failures never alter HTTP outcomes). */
+  /** When true, ONLY publish rejects — reads stay healthy (publish failures
+   *  never alter HTTP outcomes). */
   failingPublish: boolean;
   /** Messages successfully published to any channel, in order. */
   published: string[];
   /** Inject an event at the subscription as if it had been published —
    *  drives the broadcaster without touching the publisher. */
   deliver(channel: string, message: string): void;
-  /** Fire the subscriber connection's registered error listeners (AD-5). */
+  /** Fire the subscriber connection's registered error listeners. */
   emitSubscriberError(err: Error): void;
   /** Simulates SCRIPT FLUSH: EVALSHA answers NOSCRIPT until re-loaded. */
   flushScripts(): void;
   /** Simulates a full Redis wipe (FLUSHALL + restart without AOF) — the
-   *  AD-4 cold-restart precondition. */
+   *  cold-restart precondition. */
   flush(): void;
   /** Command spies for negative-space assertions (warm boots write nothing). */
   calls: {
@@ -260,7 +260,7 @@ export function orderSetSize(fake: FakeRedis): number {
   return (fake.sets.get("orders:users") ?? new Set()).size;
 }
 
-/** Membership helper for AD-4 rebuild assertions. */
+/** Membership helper for rebuild assertions. */
 export function orderSetMembers(fake: FakeRedis): string[] {
   return [...(fake.sets.get("orders:users") ?? new Set<string>())].sort();
 }

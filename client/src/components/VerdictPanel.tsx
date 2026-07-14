@@ -37,7 +37,7 @@ function frameFor(kind: VerdictKind, saleState: SaleState | null): string | null
   }
 }
 
-/** Accent + composition, never color alone (SM-5). */
+/** Accent and composition, never color alone. */
 function accentFor(kind: VerdictKind): "success" | "reject" | "error" {
   switch (kind) {
     case "success":

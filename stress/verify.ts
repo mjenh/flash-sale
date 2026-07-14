@@ -1,58 +1,57 @@
-// The judge (SM-1, SM-2, SM-C1, NFR-11/12/16/18).
+// The judge.
 //
 // k6's thresholds prove the SHAPE of the responses (no 5xx, nothing outside
 // {201, 409}). The exact-count claims are asserted here, against the stores.
 //
-// The AUTHORITY is Redis, which the Lua script writes atomically (AD-1/AD-3):
+// The authority is Redis, which the Lua script writes atomically:
 //
-//   SCARD orders:users == min(API stockQuantity, attempts)   (SM-1 / NFR-11/16)
-//   distinct emails    == confirmed (Mongo) orders           (SM-2 / NFR-12)
-//   stock:remaining    == API stockQuantity - SCARD          (NFR-18)
+//   SCARD orders:users == min(API stockQuantity, attempts)
+//   distinct emails    == confirmed (Mongo) orders
+//   stock:remaining    == API stockQuantity - SCARD
 //
 // The stock BASIS is the API's own seeded `sales.stockQuantity`, cross-checked
-// against the harness config (AI-S3-05) — the verifier never marks its own
-// homework by asserting against a number the harness chose.
+// against the harness config — the verifier never marks its own homework by
+// asserting against a number the harness chose.
 //
-// The fairness equalities keep the no-`<=` discipline that makes SM-C1 real:
-// 99 accepts out of 5,000 against stock 100 fails as loudly as 101. The ONE
-// place a tolerance is allowed is the Mongo audit reconciliation (AI-S3-06):
-// the async audit is ACCEPTED to undercount (NFR-4), so an undercount within a
-// stated tolerance passes with a note, while an OVERCOUNT — Mongo holding an
-// order Redis never accepted — is always a hard fail.
+// The fairness equalities keep a no-`<=` discipline: 99 accepts out of 5,000
+// against stock 100 fails as loudly as 101. The ONE place a tolerance is
+// allowed is the Mongo audit reconciliation: the async audit is accepted to
+// undercount, so an undercount within a stated tolerance passes with a note,
+// while an OVERCOUNT — Mongo holding an order Redis never accepted — is always
+// a hard fail.
 //
-// The Mongo write is async by design (AD-3), so the count is polled until it is
-// stable across two 1 s samples on a NON-ZERO plateau (AI-S3-14: a 0 == 0
-// before the drain begins is not a settled count). A fixed sleep would fail a
-// correct system.
+// The Mongo write is async by design, so the count is polled until it is stable
+// across two 1 s samples on a NON-ZERO plateau (a 0 == 0 before the drain
+// begins is not a settled count). A fixed sleep would fail a correct system.
 import { createClient } from "redis";
 import mongoose from "mongoose";
 import { loadStressConfig, SALE_SLUG, type StressConfig } from "./config.ts";
 import { ORDERS_KEY, STOCK_KEY } from "./reset.ts";
 
 export interface Observed {
-  /** Confirmed Order documents for the sale — the async Mongo AUDIT (AD-3),
-   *  which is accepted to undercount (NFR-4). Never the fairness authority. */
+  /** Confirmed Order documents for the sale — the async Mongo audit,
+   *  which is accepted to undercount. Never the fairness authority. */
   orders: number;
   /** Distinct `email` values among those Mongo orders. */
   distinctEmails: number;
-  /** SCARD orders:users — the AUTHORITATIVE record of who was accepted (AD-3:
-   *  Redis membership is the fairness truth; Mongo is the downstream audit). */
+  /** SCARD orders:users — the authoritative record of who was accepted.
+   *  Redis membership is the fairness truth; Mongo is the downstream audit. */
   orderUsers: number;
   /** GET stock:remaining — null when the key is missing (never coerce to 0). */
   stockRemaining: number | null;
   /** The API's own seeded `sales.stockQuantity` — the single source of truth
-   *  for how many units the sale ran with (AI-S3-05). The harness must NOT mark
+   *  for how many units the sale ran with. The harness must NOT mark
    *  its own homework by asserting against a number it chose. */
   apiStockQuantity: number;
 }
 
 export interface Expected {
   /** The harness-configured STOCK_QUANTITY — used ONLY to cross-check against
-   *  the API's seeded value (AI-S3-05), never as the assertion basis. */
+   *  the API's seeded value, never as the assertion basis. */
   stockQuantity: number;
   attempts: number;
   /** Max accepted Mongo audit undercount vs Redis before it becomes a failure
-   *  (AI-S3-06). Defaults to max(1, 1% of target). */
+   *  Defaults to max(1, 1% of target). */
   auditTolerance?: number;
 }
 
@@ -67,11 +66,11 @@ export interface CheckResult {
 /** The whole assertion engine, pure — every branch is unit-tested without I/O.
  *
  *  The fairness invariants key off Redis (SCARD orders:users + stock:remaining),
- *  which is the authority the Lua script writes atomically (AD-1/AD-3). The
- *  Mongo audit is reconciled with a tolerance (AI-S3-06): an undercount is an
- *  accepted, documented property (NFR-4) and passes with a note; an OVERCOUNT
- *  (Mongo holds an order Redis never accepted — a phantom) is always a hard
- *  fail. The stock basis is the API's own seeded quantity (AI-S3-05). */
+ *  which is the authority the Lua script writes atomically. The Mongo audit is
+ *  reconciled with a tolerance: an undercount is an accepted, documented
+ *  property and passes with a note; an OVERCOUNT (Mongo holds an order Redis
+ *  never accepted — a phantom) is always a hard fail. The stock basis is the
+ *  API's own seeded quantity. */
 export function evaluate(observed: Observed, expected: Expected): CheckResult[] {
   const { orders, distinctEmails, orderUsers, stockRemaining, apiStockQuantity } = observed;
 
@@ -88,18 +87,18 @@ export function evaluate(observed: Observed, expected: Expected): CheckResult[] 
 
   return [
     {
-      name: "SM-1  accepted orders (SCARD) == min(API stockQuantity, attempts)",
+      name: "accepted orders (SCARD) == min(API stockQuantity, attempts)",
       pass: accepted === target,
       expected: String(target),
       actual: String(accepted),
       note: oversell
-        ? "OVERSOLD — the one inviolable invariant is broken (NFR-1)"
+        ? "OVERSOLD — the one inviolable invariant is broken"
         : underAccept
-          ? "UNDER-ACCEPTED — an inflated rejection rate is also a bug (SM-C1/NFR-16)"
+          ? "UNDER-ACCEPTED — an inflated rejection rate is also a bug"
           : undefined,
     },
     {
-      name: "SM-2  distinct emails == confirmed (Mongo) orders",
+      name: "distinct emails == confirmed (Mongo) orders",
       pass: distinctEmails === orders,
       expected: String(orders),
       actual: String(distinctEmails),
@@ -116,7 +115,7 @@ export function evaluate(observed: Observed, expected: Expected): CheckResult[] 
           : auditUnder === 0
             ? undefined
             : auditUnder <= tolerance
-              ? `audit undercount of ${auditUnder} within tolerance — an ACCEPTED AD-3/NFR-4 property (a Redis accept whose async Mongo write was lost); Redis remains the authoritative fairness record`
+              ? `audit undercount of ${auditUnder} within tolerance — an accepted property (a Redis accept whose async Mongo write was lost); Redis remains the authoritative fairness record`
               : `audit undercount of ${auditUnder} EXCEEDS tolerance ${tolerance} — too many accepted orders never reached the audit`,
     },
     {
@@ -130,14 +129,14 @@ export function evaluate(observed: Observed, expected: Expected): CheckResult[] 
           : undefined,
     },
     {
-      name: "AD-4  harness STOCK_QUANTITY == API seeded sales.stockQuantity",
+      name: "harness STOCK_QUANTITY == API seeded sales.stockQuantity",
       pass: expected.stockQuantity === apiStockQuantity,
       expected: String(apiStockQuantity),
       actual: String(expected.stockQuantity),
       note:
         expected.stockQuantity === apiStockQuantity
           ? undefined
-          : "the harness expected a different stock than the API booted with — the API's seeded value is authoritative; a disagreement means the run's stock was not what the verifier assumed (AI-S3-05)",
+          : "the harness expected a different stock than the API booted with — the API's seeded value is authoritative; a disagreement means the run's stock was not what the verifier assumed",
     },
   ];
 }
@@ -159,11 +158,11 @@ export interface SamplePorts {
   countOrders(): Promise<number>;
 }
 
-/** AD-3 drain: poll until two consecutive 1 s samples agree on a NON-ZERO,
+/** Async drain: poll until two consecutive 1 s samples agree on a NON-ZERO,
  *  settled count. Bounded — a count that never settles is a failure with that
  *  exact message, not a hang.
  *
- *  The non-zero + minimum-sample floor (AI-S3-14) exists because a naive
+ *  The non-zero + minimum-sample floor exists because a naive
  *  "two consecutive samples agree" settles on the 0 == 0 that precedes the very
  *  first audit write — a plateau that never started — and reports a false
  *  UNDER-ACCEPTED against a database the drain has not yet reached. A correct
@@ -191,7 +190,7 @@ export interface PollOptions {
   intervalMs?: number;
   maxSamples?: number;
   /** Minimum samples before a plateau may settle — guards against settling on a
-   *  pre-drain 0 == 0 (AI-S3-14). */
+   *  pre-drain 0 == 0. */
   minSamples?: number;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -200,7 +199,7 @@ function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Strict integer parse for `stock:remaining` (AI-S3-17). `Number.parseInt`
+/** Strict integer parse for `stock:remaining`. `Number.parseInt`
  *  truncates trailing garbage — `"100abc" -> 100` — which could accidentally
  *  equal the expected value and pass a corrupt run. A non-integer yields `NaN`,
  *  which fails the equality check loudly instead of reading as a clean value. */
@@ -226,7 +225,7 @@ export async function observe(config: StressConfig): Promise<Observed> {
         `no sale document with slug "${SALE_SLUG}" — the API never booted against ${config.mongodbUri}`,
       );
     }
-    // AI-S3-05: the API's own seeded quantity is the authoritative stock basis —
+    // The API's own seeded quantity is the authoritative stock basis —
     // read it, never assume the harness's configured value matches it.
     const apiStockQuantity = (sale as { stockQuantity?: unknown }).stockQuantity;
     if (typeof apiStockQuantity !== "number" || !Number.isInteger(apiStockQuantity)) {

@@ -1,11 +1,7 @@
-// Story 1.4 integration tests through the REAL bootstrap() (AC 1-5) — durable
-// audit + restart safety. Redis is the shared in-memory fake; Mongo model ops
-// are the shared in-memory fake, but the REAL createOrderRecorder /
-// createDomainSeeder / createReconciler compositions run over them. Swap the
-// fakes for real clients against compose-run stores and this file runs
-// unchanged (compose validation deferred — Docker unavailable here and the
-// MongoDB binary CDN is blocked; end-to-end store validation is Story 3.1's
-// harness).
+// Integration tests through the REAL bootstrap() — durable audit + restart
+// safety. Redis is the shared in-memory fake; Mongo model ops are the shared
+// in-memory fake, but the REAL createOrderRecorder / createDomainSeeder /
+// createReconciler compositions run over them.
 import { Writable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import request from "supertest";
@@ -70,7 +66,7 @@ async function boot(opts: {
   return { fake, mongo, app };
 }
 
-describe("AD-4 boot seed (AC 4)", () => {
+describe("boot seed", () => {
   it("cold boot seeds Product, Sale, SaleProduct, Inventory from env and is idempotent across boots", async () => {
     const mongo = createFakeMongo();
     const first = await boot({ nowMs: IN_WINDOW, mongo, stockQuantity: "5" });
@@ -92,7 +88,7 @@ describe("AD-4 boot seed (AC 4)", () => {
   });
 });
 
-describe("async Mongo audit + payment after OK (AC 1)", () => {
+describe("async Mongo audit + payment after OK", () => {
   it("a 201 accept audits upsert User + Order('confirmed') + one OrderLine (qty 1, unitPrice 0) and charges payment once", async () => {
     const charge = vi.fn(async (email: string) => ({ approved: true, reference: `noop:${email}` }));
     const { mongo } = await boot({ nowMs: IN_WINDOW, stock: "5", payment: { charge } }).then(
@@ -158,7 +154,7 @@ describe("async Mongo audit + payment after OK (AC 1)", () => {
     expect(charge).not.toHaveBeenCalled();
   });
 
-  it("a rejecting payment provider never alters the 201 (AD-10)", async () => {
+  it("a rejecting payment provider never alters the 201", async () => {
     const charge = vi.fn(async () => {
       throw new Error("gateway exploded");
     });
@@ -170,7 +166,7 @@ describe("async Mongo audit + payment after OK (AC 1)", () => {
   });
 });
 
-describe("Mongo write failure: logged, never rolled back, response unchanged (AC 2)", () => {
+describe("Mongo write failure: logged, never rolled back, response unchanged", () => {
   it("failing audit -> exact 201 body, Redis decrement kept, one error log line", async () => {
     const { lines, logger } = captureLogger();
     const { app, fake, mongo } = await boot({ nowMs: IN_WINDOW, stock: "5", logger });
@@ -185,10 +181,10 @@ describe("Mongo write failure: logged, never rolled back, response unchanged (AC
     });
     await drain();
 
-    // No rollback: the buyer keeps their unit (AD-1: no compensation logic).
+    // No rollback: the buyer keeps their unit.
     expect(fake.kv.get("stock:remaining")).toBe("4");
     expect(fake.sets.get("orders:users")?.has("unlucky@example.com")).toBe(true);
-    // The accepted, documented audit undercount (NFR-4).
+    // The accepted, documented audit undercount.
     expect(mongo.orders).toHaveLength(0);
     // The error is logged.
     const errorLine = lines.find((l) => l.includes("post-accept side effect failed"));
@@ -197,7 +193,7 @@ describe("Mongo write failure: logged, never rolled back, response unchanged (AC
   });
 });
 
-describe("restart safety (AC 4 + 5)", () => {
+describe("restart safety", () => {
   it("warm restart touches nothing — surviving state wins and STOCK_QUANTITY changes are no-ops", async () => {
     const first = await boot({ nowMs: IN_WINDOW, stock: "5", stockQuantity: "5" });
     await request(first.app).post("/api/order").send({ email: "w-1@x.com" });
@@ -223,7 +219,7 @@ describe("restart safety (AC 4 + 5)", () => {
     await drain();
     expect(first.mongo.orders).toHaveLength(3);
 
-    // Redis is wiped (the AD-4 cold-restart precondition), API restarts.
+    // Redis is wiped (the cold-restart precondition), API restarts.
     first.fake.flush();
     const second = await boot({
       nowMs: IN_WINDOW,

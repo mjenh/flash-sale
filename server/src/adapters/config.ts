@@ -1,4 +1,4 @@
-// Env parse + fail-fast validation — the single config surface (AD-6, NFR-7).
+// Env parse + fail-fast validation.
 // SALE_START_TIME / SALE_END_TIME are parsed to UTC epoch ms exactly once, here.
 
 export class ConfigError extends Error {
@@ -13,12 +13,12 @@ export interface AppConfig {
   /** Sale window [start, end) in UTC epoch ms — the only internal time representation. */
   saleStartMs: number;
   saleEndMs: number;
-  /** ISO 8601 UTC forms for wire responses (FR-1). */
+  /** ISO 8601 UTC forms for wire responses. */
   saleStartIso: string;
   saleEndIso: string;
-  /** Bounded Redis connect timeout (AD-5: fail closed, never hang). */
+  /** Bounded Redis connect timeout — fail closed, never hang. */
   redisConnectTimeoutMs: number;
-  /** Bounded per-command Redis timeout (AD-5: a timeout is treated as unreachable). */
+  /** Bounded per-command Redis timeout — a timeout is treated as unreachable. */
   redisCommandTimeoutMs: number;
 }
 
@@ -30,7 +30,7 @@ function requiredIsoMs(env: Env, key: string): number {
     throw new ConfigError(`${key} is required (ISO 8601 datetime, e.g. 2026-07-10T09:00:00Z)`);
   }
   // Require an explicit UTC offset — an offset-less value is parsed as
-  // host-local time, contradicting the "normalized to UTC" contract (AD-6).
+  // host-local time, contradicting the normalized-to-UTC contract.
   if (!/(Z|[+-]\d{2}:?\d{2})$/i.test(raw.trim())) {
     throw new ConfigError(
       `${key} must include an explicit timezone offset (Z or ±HH:MM), got: "${raw}"`,

@@ -1,12 +1,10 @@
-// Redis adapter for the AD-9 realtime layer: the `sale:events` pub/sub
-// channel is the ONLY Redis surface this story adds — publishes never touch
-// stock:remaining / orders:users (AD-1's permitted writers are unchanged).
-// Zero business rules (AD-7): this file doesn't know which events are
+// Redis adapter for the `sale:events` pub/sub channel. Publishes never touch
+// stock:remaining or orders:users. This file doesn't know which events are
 // terminal or when to publish — it moves strings.
 //
-// PUBLISH rides the MAIN client (an ordinary command, bounded per AD-5);
-// only SUBSCRIBE lives on a dedicated duplicated connection, because Redis's
-// subscriber mode blocks normal commands on that connection.
+// PUBLISH rides the main client (an ordinary bounded command); only SUBSCRIBE
+// lives on a dedicated duplicated connection, because Redis's subscriber mode
+// blocks normal commands on that connection.
 import { bounded, RedisUnavailableError } from "./stock.ts";
 import type { SaleEventType } from "../../services/sale-events.ts";
 
@@ -22,8 +20,8 @@ export interface EventPublisherOptions {
 }
 
 /** Satisfies the order service's OrderEventsPort and the window timers'
- *  publish dependency. Type-only payloads: the event string IS the message
- *  (AD-9 — consumers compose truth from a fresh read, never from payloads). */
+ *  publish dependency. Type-only payloads: the event string is the message —
+ *  consumers compose truth from a fresh read, never from payloads. */
 export interface EventPublisher {
   publish(event: SaleEventType): Promise<void>;
 }
@@ -34,9 +32,9 @@ export function createEventPublisher(
 ): EventPublisher {
   return {
     async publish(event: SaleEventType): Promise<void> {
-      // bounded() wraps timeout AND rejection into RedisUnavailableError;
+      // bounded() wraps timeout and rejection into RedisUnavailableError;
       // callers fire-and-forget with their own report hook — a publish
-      // failure never alters an HTTP outcome (AD-9).
+      // failure never alters an HTTP outcome.
       await bounded(client.publish(SALE_EVENTS_CHANNEL, event), commandTimeoutMs);
     },
   };
@@ -56,7 +54,7 @@ export interface SubscriberCommands {
 
 export interface SaleEventsSubscriptionOptions {
   onEvent: (event: string) => void;
-  /** The AD-5 mid-stream trigger — bootstrap closes every open SSE stream. */
+  /** Mid-stream trigger — bootstrap closes every open SSE stream on connection loss. */
   onConnectionLost: (err: Error) => void;
   connectTimeoutMs: number;
 }
@@ -65,10 +63,10 @@ export interface SaleEventsSubscription {
   close(): Promise<void>;
 }
 
-/** Wires the dedicated duplicated connection (AD-9): error listener FIRST
- *  (an unhandled 'error' would crash the process — and it is the
- *  connection-lost signal), then a fail-fast bounded connect (a rejection
- *  fails bootstrap() strictly before listen()), then SUBSCRIBE sale:events. */
+/** Wires the dedicated duplicated connection: error listener first (an
+ *  unhandled 'error' would crash the process — and it is the connection-lost
+ *  signal), then a fail-fast bounded connect (a rejection fails bootstrap()
+ *  strictly before listen()), then SUBSCRIBE sale:events. */
 export async function createSaleEventsSubscription(
   subscriber: SubscriberCommands,
   { onEvent, onConnectionLost, connectTimeoutMs }: SaleEventsSubscriptionOptions,
@@ -97,7 +95,7 @@ export async function createSaleEventsSubscription(
   }
 
   // A subscribe failure after a successful connect must not leak the duplicated
-  // connection: destroy it and surface a wrapped RedisUnavailableError (AD-5).
+  // connection: destroy it and surface a wrapped RedisUnavailableError.
   try {
     await subscriber.subscribe(SALE_EVENTS_CHANNEL, (message: string) => {
       onEvent(message);

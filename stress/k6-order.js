@@ -1,4 +1,4 @@
-// The burst (NFR-18, SM-1, SM-2). Plain JavaScript on purpose: k6 runs this in
+// The burst. Plain JavaScript on purpose: k6 runs this in
 // its own runtime (goja), not Node — no TypeScript, no npm imports, no server
 // code. It is the one deliberate .js file in the repo.
 //
@@ -37,7 +37,7 @@ http.setResponseCallback(http.expectedStatuses(200, 201, 409));
 export const options = {
   scenarios: {
     // A genuine concurrent burst: ATTEMPTS unique emails shared across VUS
-    // virtual users. VUs != attempts (Story 3.1, decision 2) — 5,000 unique
+    // virtual users. VUs != attempts — 5,000 unique
     // BUYERS is the claim; 5,000 simultaneous OS threads is not.
     primary: {
       executor: "shared-iterations",
@@ -48,12 +48,11 @@ export const options = {
     },
     ...(RETRY
       ? {
-          // FR-3: a repeated attempt from an order holder is answered 200,
-          // never a duplicate order. Runs in its OWN email namespace (see
-          // retry()), so it can never perturb primary's strict {201, 409}
-          // outcome — the old shared range + fixed startTime raced primary and
-          // could draw the 201 first, forcing primary into a 200 and failing a
-          // correct system (AI-S3-10).
+          // A repeated attempt from an order holder is answered 200, never a
+          // duplicate order. Runs in its OWN email namespace (see retry()), so
+          // it can never perturb primary's strict {201, 409} outcome — the old
+          // shared range + fixed startTime raced primary and could draw the 201
+          // first, forcing primary into a 200 and failing a correct system.
           retry: {
             executor: "shared-iterations",
             vus: 10,
@@ -68,7 +67,7 @@ export const options = {
     // Zero 5xx, ever. Fail closed is a promise about correctness, not an excuse.
     // Untagged on purpose: a 5xx is tagged expected_response:false and would be
     // EXCLUDED from an {expected_response:true} sub-metric, making that
-    // threshold vacuous (AI-S3-02).
+    // threshold vacuous.
     http_req_failed: ["rate==0"],
     unexpected_status: ["rate==0"],
   },
@@ -104,7 +103,7 @@ export function primary() {
 export function retry() {
   // A DEDICATED address space (never primary's range), so this scenario can
   // never race primary into an unexpected 200 and fail a correct run
-  // (AI-S3-10). Each iteration proves FR-3 end to end against its own holder.
+  // Each iteration proves the idempotent-retry contract end to end against its own holder.
   const email = `retry-${RUN_TAG}-${exec.scenario.iterationInTest}@example.com`;
   // Prime: the holder either wins a unit (201) or the sale is sold out (409).
   score(post(email), [201, 409]);
