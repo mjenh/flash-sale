@@ -25,6 +25,16 @@ function fakeOps(overrides: Partial<SeedModelOps> = {}) {
     upsertSaleProduct: vi.fn(async () => {}),
     upsertInventory: vi.fn(async () => {}),
     listConfirmedOrderEmails: vi.fn(async () => ["a@x.com", "b@x.com"]),
+    listAllSales: vi.fn(async () => [
+      {
+        _id: "sale-1",
+        slug: SALE_SLUG,
+        name: SALE_NAME,
+        startTime: new Date(config.saleStartMs),
+        endTime: new Date(config.saleEndMs),
+        stockQuantity: 7,
+      },
+    ]),
     ...overrides,
   };
 }
@@ -70,5 +80,21 @@ describe("createDomainSeeder (boot seed)", () => {
     });
     await expect(createDomainSeeder(ops).seed(config)).rejects.toBe(boom);
     expect(ops.upsertSaleProduct).not.toHaveBeenCalled();
+  });
+
+  it("listAllSales passes through to the model op (Story 4.5)", async () => {
+    const ops = fakeOps();
+    const sales = await createDomainSeeder(ops).listAllSales();
+    expect(ops.listAllSales).toHaveBeenCalledTimes(1);
+    expect(sales).toEqual([
+      {
+        _id: "sale-1",
+        slug: SALE_SLUG,
+        name: SALE_NAME,
+        startTime: new Date(config.saleStartMs),
+        endTime: new Date(config.saleEndMs),
+        stockQuantity: 7,
+      },
+    ]);
   });
 });

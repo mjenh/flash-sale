@@ -15,6 +15,19 @@ export const SALE_NAME = "Flash Sale";
 export const PRODUCT_SKU = "KEYCAP-ONE";
 export const PRODUCT_NAME = "Keycap One";
 
+/** Story 4.5: the shape of a Sale document needed by boot-time active-sale
+ *  resolution — structurally identical to `SaleSummary`
+ *  (middleware/sale-resolver.ts), duplicated here rather than imported so
+ *  this adapter layer doesn't depend on the HTTP middleware layer. */
+export interface SeedSaleDoc {
+  _id: string;
+  slug: string;
+  name: string;
+  startTime: Date;
+  endTime: Date;
+  stockQuantity: number;
+}
+
 /** Narrow model surface — one mongoose query per op. */
 export interface SeedModelOps {
   upsertProduct(sku: string, name: string): Promise<string>;
@@ -25,6 +38,13 @@ export interface SeedModelOps {
   upsertSaleProduct(saleId: string, productId: string): Promise<void>;
   upsertInventory(productId: string, initialQuantity: number): Promise<void>;
   listConfirmedOrderEmails(saleId: string): Promise<string[]>;
+  /** Story 4.5: ALL Sale documents (not just the boot-seeded singleton) —
+   *  drives bootstrap.ts's multi-sale-safe active-sale identification and
+   *  its v1.1-NFR-5 overlap fail-fast. Today exactly one Sale document ever
+   *  exists (the constant-slug singleton this file seeds), but this query
+   *  is written generically so a future second Sale document is handled
+   *  correctly without changes here. */
+  listAllSales(): Promise<SeedSaleDoc[]>;
 }
 
 export const mongoSeedModelOps: SeedModelOps = {
@@ -70,6 +90,18 @@ export const mongoSeedModelOps: SeedModelOps = {
     const emails = await Order.distinct("email", { saleId, status: "confirmed" });
     return emails.map(String);
   },
+
+  async listAllSales(): Promise<SeedSaleDoc[]> {
+    const sales = await Sale.find({}).lean();
+    return sales.map((s) => ({
+      _id: String(s._id),
+      slug: s.slug,
+      name: s.name,
+      startTime: s.startTime,
+      endTime: s.endTime,
+      stockQuantity: s.stockQuantity,
+    }));
+  },
 };
 
 export interface DomainSeeder {
@@ -77,6 +109,8 @@ export interface DomainSeeder {
   seed(config: AppConfig): Promise<SaleRefs>;
   /** Cold-rebuild source: the sale's confirmed Order emails. */
   listConfirmedOrderEmails(saleId: string): Promise<string[]>;
+  /** Story 4.5: all Sale documents, for boot-time active-sale resolution. */
+  listAllSales(): Promise<SeedSaleDoc[]>;
 }
 
 export function createDomainSeeder(ops: SeedModelOps = mongoSeedModelOps): DomainSeeder {
@@ -96,6 +130,10 @@ export function createDomainSeeder(ops: SeedModelOps = mongoSeedModelOps): Domai
 
     listConfirmedOrderEmails(saleId: string): Promise<string[]> {
       return ops.listConfirmedOrderEmails(saleId);
+    },
+
+    listAllSales(): Promise<SeedSaleDoc[]> {
+      return ops.listAllSales();
     },
   };
 }

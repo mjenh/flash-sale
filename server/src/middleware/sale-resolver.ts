@@ -53,6 +53,37 @@ export function windowFromSale(sale: SaleSummary): SaleWindow {
   };
 }
 
+/** Story 4.5: pure window-containment check — is `sale` live at `nowMs`?
+ *  [startTime, endTime), matching the AD-nowhere-else-duplicated definition
+ *  of "currently active" used both by the priority selection below and by
+ *  bootstrap.ts's boot-time overlap validation (v1.1-NFR-5). */
+export function isSaleActiveAt(sale: SaleSummary, nowMs: number): boolean {
+  return sale.startTime.getTime() <= nowMs && nowMs < sale.endTime.getTime();
+}
+
+/** Story 4.5: priority-based active-sale selection over a candidate list —
+ *  within window > nearest upcoming > most recently ended — extracted so
+ *  boot-time reconciliation (bootstrap.ts) and any future Mongoose-backed
+ *  `SaleLookupOps.findActiveSale()` implementation share one definition of
+ *  "the active sale" instead of reimplementing this priority twice. Returns
+ *  null for an empty list. */
+export function selectActiveSale(sales: SaleSummary[], nowMs: number): SaleSummary | null {
+  const active = sales.find((s) => isSaleActiveAt(s, nowMs));
+  if (active !== undefined) {
+    return active;
+  }
+  const upcoming = sales
+    .filter((s) => s.startTime.getTime() > nowMs)
+    .sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
+  if (upcoming.length > 0) {
+    return upcoming[0] as SaleSummary;
+  }
+  const ended = sales
+    .filter((s) => s.endTime.getTime() <= nowMs)
+    .sort((a, b) => b.endTime.getTime() - a.endTime.getTime());
+  return (ended[0] as SaleSummary | undefined) ?? null;
+}
+
 export interface SaleResolverDeps {
   ops: SaleLookupOps;
   clock: Clock;

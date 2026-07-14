@@ -5,6 +5,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createSaleResolver,
+  isSaleActiveAt,
+  selectActiveSale,
   windowFromSale,
   type SaleLookupOps,
   type SaleSummary,
@@ -42,23 +44,11 @@ function createFakeOps(
     },
     async findActiveSale(nowMs: number): Promise<SaleSummary | null> {
       calls.findActiveSale += 1;
-      // within window > nearest upcoming > most recently ended
-      const active = sales.find(
-        (s) => s.startTime.getTime() <= nowMs && nowMs < s.endTime.getTime(),
-      );
-      if (active !== undefined) {
-        return active;
-      }
-      const upcoming = sales
-        .filter((s) => s.startTime.getTime() > nowMs)
-        .sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
-      if (upcoming.length > 0) {
-        return upcoming[0] as SaleSummary;
-      }
-      const ended = sales
-        .filter((s) => s.endTime.getTime() <= nowMs)
-        .sort((a, b) => b.endTime.getTime() - a.endTime.getTime());
-      return (ended[0] as SaleSummary | undefined) ?? null;
+      // within window > nearest upcoming > most recently ended — Story 4.5
+      // extracted this priority into selectActiveSale() (reused here rather
+      // than reimplemented, so this fake stays in lockstep with the shared
+      // helper bootstrap.ts's boot-time reconciliation also calls).
+      return selectActiveSale(sales, nowMs);
     },
   };
 }
@@ -293,6 +283,55 @@ describe("windowFromSale() (Story 4.4)", () => {
     expect(window.endMs).toBe(endMs);
     expect(window.startIso).toBe("2026-07-10T04:00:00.000Z");
     expect(window.endIso).toBe("2026-07-10T05:00:00.000Z");
+  });
+});
+
+describe("isSaleActiveAt() (Story 4.5)", () => {
+  it("is true at the exact start instant and false at the exact end instant ([start, end) semantics)", () => {
+    expect(isSaleActiveAt(FLASH_SALE, startMs)).toBe(true);
+    expect(isSaleActiveAt(FLASH_SALE, endMs)).toBe(false);
+    expect(isSaleActiveAt(FLASH_SALE, startMs - 1)).toBe(false);
+    expect(isSaleActiveAt(FLASH_SALE, endMs - 1)).toBe(true);
+  });
+});
+
+describe("selectActiveSale() (Story 4.5)", () => {
+  it("returns the sale within its window when exactly one is active", () => {
+    expect(selectActiveSale([FLASH_SALE, SUMMER_SALE], startMs + 1000)).toEqual(FLASH_SALE);
+  });
+
+  it("falls back to the nearest upcoming sale when none is within window", () => {
+    expect(selectActiveSale([FLASH_SALE, SUMMER_SALE], startMs - 60_000)).toEqual(FLASH_SALE);
+  });
+
+  it("falls back to the most recently ended sale when none is active or upcoming", () => {
+    expect(selectActiveSale([FLASH_SALE, SUMMER_SALE], SUMMER_SALE.endTime.getTime() + 60_000)).toEqual(
+      SUMMER_SALE,
+    );
+  });
+
+  it("returns null for an empty list", () => {
+    expect(selectActiveSale([], startMs)).toBeNull();
+  });
+
+  it("boot-time overlap detection: two sales both within window at the same instant are BOTH found by a plain filter over isSaleActiveAt (the shared primitive bootstrap.ts's fail-fast check uses)", () => {
+    const OVERLAP_A: SaleSummary = {
+      _id: "sale-a",
+      slug: "sale-a",
+      startTime: new Date("2026-07-10T04:00:00Z"),
+      endTime: new Date("2026-07-10T05:00:00Z"),
+      stockQuantity: 10,
+    };
+    const OVERLAP_B: SaleSummary = {
+      _id: "sale-b",
+      slug: "sale-b",
+      startTime: new Date("2026-07-10T04:15:00Z"),
+      endTime: new Date("2026-07-10T05:15:00Z"),
+      stockQuantity: 20,
+    };
+    const nowMs = Date.parse("2026-07-10T04:30:00Z");
+    const active = [OVERLAP_A, OVERLAP_B].filter((s) => isSaleActiveAt(s, nowMs));
+    expect(active).toHaveLength(2);
   });
 });
 

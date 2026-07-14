@@ -17,7 +17,6 @@ import { createOrderRecorder, mongoAuditModelOps, type AuditModelOps } from "./a
 import {
   createDomainSeeder,
   mongoSeedModelOps,
-  SALE_NAME,
   SALE_SLUG,
   type SeedModelOps,
 } from "./adapters/mongo/seed.ts";
@@ -30,6 +29,8 @@ import type { PaymentProvider } from "./services/payment.ts";
 import { systemClock, type Clock } from "./services/clock.ts";
 import {
   createSaleResolver,
+  isSaleActiveAt,
+  selectActiveSale,
   windowFromSale,
   type SaleLookupOps,
   type SaleSummary,
@@ -119,41 +120,68 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
   };
   const seeder = createDomainSeeder(mongoOps.seed);
   const saleRefs = await seeder.seed(config);
-  // Redis keys/channel are namespaced by saleId (Story 4.2) — the resolved
-  // Sale's Mongo ObjectId string, i.e. req.sale._id per the sale-resolver
-  // middleware. The v1.0 flat keys (stock:remaining, orders:users,
-  // sale:events) are no longer written or read by the live request path;
-  // Story 4.6 owns migrating any surviving flat-key data from a pre-4.2
-  // deployment.
-  const saleId = saleRefs.saleId;
 
   // Shared clock: the same instance feeds HTTP, the order service, and the
   // SSE broadcaster/timers.
   const clock = overrides.clock ?? systemClock;
+
+  // Story 4.5: boot-time active-sale identification, made multi-sale-safe.
+  // Exactly one Sale document exists today (the constant-slug singleton
+  // `seeder.seed()` just upserted above), but this query and the selection
+  // below are written generically over ALL Sale documents so a future
+  // second Sale document — however it comes to exist; no admin API creates
+  // one yet — is handled correctly with zero changes here.
+  //
+  // Fail fast (v1.1-NFR-5): at most one sale may have a [startTime, endTime)
+  // window covering now() at any given moment. `isSaleActiveAt` is the same
+  // window-containment primitive `selectActiveSale`'s "within window" tier
+  // uses below and that sale-resolver.ts's discovery-endpoint ops would use
+  // for a real multi-sale `findActiveSale()` implementation — one shared
+  // definition of "currently live", not reimplemented per caller.
+  const nowMsAtBoot = clock();
+  const allSales = await seeder.listAllSales();
+  const currentlyActiveSales = allSales.filter((sale) => isSaleActiveAt(sale, nowMsAtBoot));
+  if (currentlyActiveSales.length > 1) {
+    throw new ConfigError("Multiple active sales detected. Only one sale may be active at a time.");
+  }
+  // The sale reconciliation targets: within window > nearest upcoming >
+  // most recently ended — the same forgiving priority as
+  // sale-resolver.ts's findActive(), so boot reconciliation and the
+  // discovery endpoint never disagree about "the" active sale. Reconciling
+  // an upcoming (not-yet-open) or just-ended sale is intentional: a deploy
+  // that lands before the window opens (or shortly after it closes) must
+  // still provision that sale's Redis keys, matching v1.0's unconditional
+  // boot-time reconcile of the single seeded sale.
+  const activeSale = selectActiveSale(allSales, nowMsAtBoot);
+  if (activeSale === null) {
+    // Unreachable: seeder.seed() above always upserts exactly one Sale
+    // document before this point runs.
+    throw new ConfigError("No sale found to reconcile at boot.");
+  }
+  // Redis keys/channel are namespaced by saleId (Story 4.2) — the resolved
+  // active Sale's Mongo ObjectId string, i.e. req.sale._id per the
+  // sale-resolver middleware. The v1.0 flat keys (stock:remaining,
+  // orders:users, sale:events) are no longer written or read by the live
+  // request path; Story 4.6 owns migrating any surviving flat-key data from
+  // a pre-4.2 deployment.
+  const saleId = activeSale._id;
 
   // Sale resolution middleware — slug -> Sale doc with in-memory cache.
   // Boot validation: the slug "active" is reserved for the discovery endpoint.
   if ((SALE_SLUG as string) === "active") {
     throw new ConfigError('The slug "active" is reserved for the discovery endpoint and cannot be used as a sale slug.');
   }
-  // Single-sale ops derived from boot-seeded data. A later story will
-  // replace this with a Mongoose-backed implementation for true multi-sale
-  // slug lookup (Story 4.3 added the Mongo-backed product/inventory join
-  // below, but sale identity itself is still this boot-seeded singleton).
-  const seededSale: SaleSummary = {
-    _id: saleRefs.saleId,
-    slug: SALE_SLUG,
-    name: SALE_NAME,
-    startTime: new Date(config.saleStartMs),
-    endTime: new Date(config.saleEndMs),
-    stockQuantity: config.stockQuantity,
-  };
+  // Single-sale ops derived from the boot-resolved active sale. A later
+  // story will replace this with a Mongoose-backed implementation for true
+  // multi-sale slug lookup (Story 4.3 added the Mongo-backed
+  // product/inventory join below, but sale identity itself is still this
+  // boot-resolved singleton).
   const defaultSaleLookupOps: SaleLookupOps = {
     async findBySlug(slug: string): Promise<SaleSummary | null> {
-      return slug === seededSale.slug ? seededSale : null;
+      return slug === activeSale.slug ? activeSale : null;
     },
     async findActiveSale(): Promise<SaleSummary | null> {
-      return seededSale;
+      return activeSale;
     },
   };
   // Constructed early (right after seeding) because Story 4.4's SSE
@@ -173,12 +201,12 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
     // a sale reset happens only via the explicit offline reset script.
   } else {
     // Cold start: rebuild Redis FROM MongoDB truth — never the reverse.
-    const emails = await seeder.listConfirmedOrderEmails(saleRefs.saleId);
-    const remaining = Math.max(0, config.stockQuantity - emails.length);
-    if (config.stockQuantity - emails.length < 0) {
+    const emails = await seeder.listConfirmedOrderEmails(saleId);
+    const remaining = Math.max(0, activeSale.stockQuantity - emails.length);
+    if (activeSale.stockQuantity - emails.length < 0) {
       logger.warn(
-        { stockQuantity: config.stockQuantity, confirmedOrders: emails.length },
-        "cold rebuild: confirmed orders exceed STOCK_QUANTITY; clamping stock:remaining to 0",
+        { stockQuantity: activeSale.stockQuantity, confirmedOrders: emails.length },
+        "cold rebuild: confirmed orders exceed sale.stockQuantity; clamping stock:remaining to 0",
       );
     }
     await reconciler.rebuild(emails, remaining, saleId);

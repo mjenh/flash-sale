@@ -16,6 +16,7 @@ import { bootstrap, type BootstrapOverrides } from "../src/bootstrap.ts";
 import { ConfigError } from "../src/adapters/config.ts";
 import { SALE_SLUG } from "../src/adapters/mongo/seed.ts";
 import { stockKeyFor } from "../src/adapters/redis/stock.ts";
+import { ordersKeyFor } from "../src/adapters/redis/orders.ts";
 import { saleEventsChannel } from "../src/adapters/redis/events.ts";
 import type { RedisClient } from "../src/adapters/redis/client.ts";
 import { createFakeMongo, reserveSaleId } from "./helpers/fake-mongo.ts";
@@ -225,5 +226,71 @@ describe("bootstrap", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     const publish = (fakeRedis as unknown as { publish: ReturnType<typeof vi.fn> }).publish;
     expect(publish).not.toHaveBeenCalled();
+  });
+
+  // Story 4.5: boot-time active-sale identification is multi-sale-safe.
+  describe("multi-sale boot reconciliation (Story 4.5)", () => {
+    it("AC4: fails fast with a ConfigError when two Sale documents have overlapping active windows", async () => {
+      // A distinct, non-overlapping window for the env-configured singleton
+      // sale so it is provably NOT one of the two "currently active" sales
+      // under test — only sale-a/sale-b overlap at nowMs.
+      const { mongo, overrides } = await fakeOverrides({
+        SALE_START_TIME: "2030-01-01T00:00:00Z",
+        SALE_END_TIME: "2030-01-02T00:00:00Z",
+      });
+      const nowMs = Date.parse("2026-07-10T04:30:00Z");
+      await mongo.seed.upsertSale("sale-a", {
+        name: "Sale A",
+        startTime: new Date("2026-07-10T04:00:00Z"),
+        endTime: new Date("2026-07-10T05:00:00Z"),
+        stockQuantity: 10,
+      });
+      await mongo.seed.upsertSale("sale-b", {
+        name: "Sale B",
+        startTime: new Date("2026-07-10T04:15:00Z"),
+        endTime: new Date("2026-07-10T05:15:00Z"),
+        stockQuantity: 20,
+      });
+
+      const err = await bootstrap({ ...overrides, clock: () => nowMs }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ConfigError);
+      expect((err as Error).message).toBe(
+        "Multiple active sales detected. Only one sale may be active at a time.",
+      );
+    });
+
+    it("AC3: cold rebuild targets only the currently-active sale's keys — an unrelated, already-ended Sale document is neither read nor written", async () => {
+      const { kv, sets, mongo, saleId, overrides } = await fakeOverrides(validEnv);
+      const oldSaleId = await mongo.seed.upsertSale("old-sale", {
+        name: "Old Sale",
+        startTime: new Date("2020-01-01T00:00:00Z"),
+        endTime: new Date("2020-01-02T00:00:00Z"),
+        stockQuantity: 10,
+      });
+
+      await bootstrap({ ...overrides, clock: () => Date.parse(validEnv.SALE_START_TIME) + 1000 });
+
+      // The active sale (flash-sale) was cold-rebuilt as usual.
+      expect(kv.get(stockKeyFor(saleId))).toBe("100");
+      // The inactive/unrelated sale's keys were never touched.
+      expect(kv.has(stockKeyFor(oldSaleId))).toBe(false);
+      expect(sets.has(ordersKeyFor(oldSaleId))).toBe(false);
+    });
+
+    it("AC3: multiple Sale documents but only one currently active — boot succeeds and does not throw", async () => {
+      const { mongo, overrides } = await fakeOverrides(validEnv);
+      // An upcoming sale, far enough out that it neither overlaps the active
+      // window nor is selected as "nearest upcoming" ahead of the active one.
+      await mongo.seed.upsertSale("future-sale", {
+        name: "Future Sale",
+        startTime: new Date("2030-01-01T00:00:00Z"),
+        endTime: new Date("2030-01-02T00:00:00Z"),
+        stockQuantity: 10,
+      });
+
+      await expect(
+        bootstrap({ ...overrides, clock: () => Date.parse(validEnv.SALE_START_TIME) + 1000 }),
+      ).resolves.toBeDefined();
+    });
   });
 });

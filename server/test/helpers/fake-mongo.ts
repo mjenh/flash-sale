@@ -39,6 +39,18 @@ export interface FakeSaleDoc {
   stockQuantity: number;
 }
 
+/** Story 4.5: mirrors seed.ts's `SeedSaleDoc` — one entry per Sale document,
+ *  including its slug (the fake.sales Map is keyed by slug, so the key
+ *  becomes the field here). */
+export interface FakeSaleWindowDoc {
+  _id: string;
+  slug: string;
+  name: string;
+  startTime: Date;
+  endTime: Date;
+  stockQuantity: number;
+}
+
 export interface FakeMongo {
   users: Map<string, string>; // identifier -> userId
   products: Map<string, { id: string; name: string }>; // sku -> doc
@@ -155,6 +167,17 @@ export function createFakeMongo(): FakeMongo {
           fake.orders.filter((o) => o.saleId === saleId && o.status === "confirmed").map((o) => o.email),
         ),
       ];
+    },
+
+    async listAllSales(): Promise<FakeSaleWindowDoc[]> {
+      return [...fake.sales.entries()].map(([slug, doc]) => ({
+        _id: doc.id,
+        slug,
+        name: doc.name,
+        startTime: doc.startTime,
+        endTime: doc.endTime,
+        stockQuantity: doc.stockQuantity,
+      }));
     },
   };
 
