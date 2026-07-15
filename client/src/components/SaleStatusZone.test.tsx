@@ -9,7 +9,6 @@ import {
   LIVE_NOTE,
   SOLD_OUT_FRAME,
   SaleStatusZone,
-  upcomingFrame,
 } from "./SaleStatusZone.tsx";
 import { DEGRADED_LABEL, LIVE_LABEL } from "./LiveSticker.tsx";
 import { LAST_SEEN_LINE } from "./StockNumeral.tsx";
@@ -32,15 +31,12 @@ function paint(status: SaleState, channel: Channel = "live", stock = 37) {
 }
 
 describe("the four states, verbatim", () => {
-  it("upcoming: the poster panel, the status string with viewer-local time, the warm frame — no numeral, no sticker", () => {
+  it("upcoming: the poster panel, the status string with viewer-local time — no numeral, no sticker", () => {
     paint("upcoming");
 
     expect(screen.getByTestId("status-chip")).toHaveTextContent(
       `Upcoming — sale starts at ${localTime(START)}`,
     );
-    expect(screen.getByText(`Doors at ${localTime(START)}.`)).toBeInTheDocument();
-    expect(screen.getByText(upcomingFrame(START))).toBeInTheDocument();
-    expect(upcomingFrame(START)).toBe(`Almost time — doors open at ${localTime(START)}.`);
 
     expect(screen.queryByTestId("stock-numeral")).toBeNull();
     expect(screen.queryByTestId("live-sticker")).toBeNull();

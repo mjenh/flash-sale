@@ -32,6 +32,8 @@ import { useOrder } from "../hooks/useOrder.ts";
 import { useEmailField } from "../hooks/useEmailField.ts";
 import { fetchSaleDetails, type SaleDetails, type SaleStatusBody } from "../api/sale.ts";
 import { NotFoundPage } from "./NotFoundPage.tsx";
+import { KeyboardIllustration } from "../components/KeyboardIllustration.tsx";
+import "../components/KeyboardIllustration.css";
 
 /** Dynamic — returns the disabled reason for the Buy Now button during the upcoming window. */
 export function upcomingButtonReason(startTime: string): string {
@@ -163,12 +165,15 @@ export function SalePage({ slug }: SalePageProps) {
 
         <main className="poster">
           <div className="poster__hero">
-            <h1 className="t-display hero__headline">
-              {saleDetails?.name ?? "Flash Sale"}
-            </h1>
-            <p className="t-body hero__sub">
-              One limited-run mechanical keyboard.
-            </p>
+            <div className="poster__hero-top">
+              <h1 className="t-display hero__headline">
+                {saleDetails?.name ?? "Flash Sale"}
+              </h1>
+              <p className="t-body hero__sub">
+                One limited-run mechanical keyboard.
+              </p>
+              <KeyboardIllustration />
+            </div>
 
             <SaleStatusZone body={body} channel={channel} />
           </div>
@@ -176,7 +181,8 @@ export function SalePage({ slug }: SalePageProps) {
           <div className="poster__action">
             <ProductTile originalPrice={originalPrice} flashSalePrice={flashSalePrice} />
 
-            <Panel variant="yellow-lifted" className="form-panel">
+            <div className="poster__action-forms">
+              <Panel variant="yellow-lifted" className="form-panel">
               <form
                 onSubmit={(event) => {
                   event.preventDefault();
@@ -270,16 +276,17 @@ export function SalePage({ slug }: SalePageProps) {
               <RulesChips />
             </Panel>
 
-            {verdict === null ? null : (
-              <VerdictPanel
-                verdict={verdict}
-                saleState={body?.status ?? null}
-                startTime={body?.startTime}
-                onClose={clearVerdict}
-                focusOnMount={verdictSource === "submit"}
-                purchasePrice={verdict.kind === "success" ? flashSalePrice : undefined}
-              />
-            )}
+              {verdict === null ? null : (
+                <VerdictPanel
+                  verdict={verdict}
+                  saleState={body?.status ?? null}
+                  startTime={body?.startTime}
+                  onClose={clearVerdict}
+                  focusOnMount={verdictSource === "submit"}
+                  purchasePrice={verdict.kind === "success" ? flashSalePrice : undefined}
+                />
+              )}
+            </div>
           </div>
         </main>
       </div>
