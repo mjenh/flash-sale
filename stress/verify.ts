@@ -216,8 +216,14 @@ function parseStockValue(raw: string): number {
 }
 
 export async function observe(config: StressConfig): Promise<Observed> {
-  const redis = createClient({ url: config.redisUrl, disableOfflineQueue: true });
-  redis.on("error", () => {});
+  const redis = createClient({
+    url: config.redisUrl,
+    disableOfflineQueue: true,
+    socket: { reconnectStrategy: false },
+  });
+  redis.on("error", (err: Error) => {
+    console.error(`[redis] connection error: ${err.message}`);
+  });
   await redis.connect();
   await mongoose.connect(config.mongodbUri, { serverSelectionTimeoutMS: 5000 });
 
@@ -246,9 +252,10 @@ export async function observe(config: StressConfig): Promise<Observed> {
     const saleId = String(sale._id);
     const filter = { saleId: sale._id, status: "confirmed" };
 
-    const orders = await pollUntilStable({
-      countOrders: () => db.collection("orders").countDocuments(filter),
-    });
+    const orders = await pollUntilStable(
+      { countOrders: () => db.collection("orders").countDocuments(filter) },
+      { intervalMs: config.verifyIntervalMs, maxSamples: config.verifyMaxSamples },
+    );
     const distinctEmails = (await db.collection("orders").distinct("email", filter)).length;
     const orderUsers = await redis.sCard(ordersKeyFor(saleId));
     const rawStock = await redis.get(stockKeyFor(saleId));

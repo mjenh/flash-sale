@@ -25,6 +25,10 @@ export interface StressConfig {
   vus: number;
   /** Enable the optional retry scenario (200 becomes an allowed status). */
   retry: boolean;
+  /** Max polling samples before pollUntilStable gives up. Env: VERIFY_MAX_SAMPLES */
+  verifyMaxSamples: number;
+  /** Interval between polling samples in ms. Env: VERIFY_INTERVAL_MS */
+  verifyIntervalMs: number;
 }
 
 type Env = Record<string, string | undefined>;
@@ -63,5 +67,7 @@ export function loadStressConfig(env: Env = process.env): StressConfig {
     attempts,
     vus,
     retry: env.RETRY === "1" || env.RETRY === "true",
+    verifyMaxSamples: positiveInt(env, "VERIFY_MAX_SAMPLES", 30),
+    verifyIntervalMs: positiveInt(env, "VERIFY_INTERVAL_MS", 1000),
   };
 }

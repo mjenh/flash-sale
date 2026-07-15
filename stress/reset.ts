@@ -128,8 +128,14 @@ async function probeApiUrl(apiUrl: string, timeoutMs = 2000): Promise<string | n
 }
 
 export async function runReset(config: StressConfig = loadStressConfig()): Promise<ResetResult> {
-  const redis = createClient({ url: config.redisUrl, disableOfflineQueue: true });
-  redis.on("error", () => {});
+  const redis = createClient({
+    url: config.redisUrl,
+    disableOfflineQueue: true,
+    socket: { reconnectStrategy: false },
+  });
+  redis.on("error", (err: Error) => {
+    console.error(`[redis] connection error: ${err.message}`);
+  });
   await redis.connect();
   await mongoose.connect(config.mongodbUri, { serverSelectionTimeoutMS: 5000 });
 

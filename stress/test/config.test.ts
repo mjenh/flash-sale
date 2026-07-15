@@ -13,6 +13,8 @@ describe("loadStressConfig", () => {
       attempts: 5000,
       vus: 500,
       retry: false,
+      verifyMaxSamples: 30,
+      verifyIntervalMs: 1000,
     });
   });
 
