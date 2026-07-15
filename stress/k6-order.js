@@ -4,7 +4,7 @@
 //
 // What k6 proves: the SHAPE of the responses.
 //   - zero 5xx (a 500 or a 503 under load means the system buckled)
-//   - zero statuses outside {201, 409} (200 additionally allowed with RETRY=1)
+//   - zero statuses outside {202, 409} (200 additionally allowed with RETRY=1)
 // What k6 does NOT prove: the exact counts. That is verify.ts's job, against
 // the databases — k6's counters below are corroboration, never proof.
 import http from "k6/http";
@@ -25,10 +25,10 @@ const rejected = new Counter("order_rejected_409");
 const already = new Counter("order_already_200");
 const unexpectedStatus = new Rate("unexpected_status");
 const fivexx = new Counter("order_5xx");
-// Counts 201s from the spam scenario. Must stay ≤ 1: all 20 VUs share one
-// email address, so at most one can win a unit. The threshold spam_wins_201
+// Counts 202s from the spam scenario. Must stay ≤ 1: all 20 VUs share one
+// email address, so at most one can win a unit. The threshold spam_wins_202
 // enforces this; the verifier's SCARD check is the independent safety net.
-const spamWins = new Counter("spam_wins_201");
+const spamWins = new Counter("spam_wins_202");
 
 // The single email shared by all spam VUs. One address, 20 simultaneous
 // goroutines — a genuine SISMEMBER race if the Lua script were ever de-atomized.
@@ -62,8 +62,8 @@ export const options = {
       ? {
           // A repeated attempt from an order holder is answered 200, never a
           // duplicate order. Runs in its OWN email namespace (see retry()), so
-          // it can never perturb primary's strict {201, 409} outcome — the old
-          // shared range + fixed startTime raced primary and could draw the 201
+          // it can never perturb primary's strict {202, 409} outcome — the old
+          // shared range + fixed startTime raced primary and could draw the 202
           // first, forcing primary into a 200 and failing a correct system.
           retry: {
             executor: "shared-iterations",
@@ -72,23 +72,23 @@ export const options = {
             maxDuration: "1m",
             exec: "retry",
           },
-          // True concurrent fan-out from a SINGLE email address. All 20 VUs
-          // share SPAM_EMAIL and race the order endpoint simultaneously. If the
-          // Lua SISMEMBER→SADD were ever de-atomized into two round-trips, a
-          // second SADD could slip through and the SCARD would register an
-          // oversell — caught immediately by both the spam_wins_201 threshold
-          // and the verifier. The Lua script's Redis single-threaded execution
-          // makes this physically impossible today; this scenario guards against
-          // future regressions.
-          spam: {
-            executor: "shared-iterations",
-            vus: 20,
-            iterations: 20,
-            maxDuration: "30s",
-            exec: "spam",
-          },
         }
       : {}),
+    // True concurrent fan-out from a SINGLE email address. All 20 VUs share
+    // SPAM_EMAIL and race the order endpoint simultaneously. Always runs as a
+    // deduplication correctness probe — NOT gated on RETRY — because the
+    // SISMEMBER→SADD atomicity invariant must be verified on every stress run,
+    // not only when idempotent-retry UX coverage is also desired. If the Lua
+    // script were ever de-atomized into two round-trips, a second SADD could
+    // slip through and the SCARD would register an oversell — caught immediately
+    // by both the spam_wins_202 threshold and the verifier.
+    spam: {
+      executor: "shared-iterations",
+      vus: 20,
+      iterations: 20,
+      maxDuration: "30s",
+      exec: "spam",
+    },
   },
   thresholds: {
     // Zero 5xx, ever. Fail closed is a promise about correctness, not an excuse.
@@ -103,10 +103,10 @@ export const options = {
     // that correctness checks cannot detect (a stalled system that eventually
     // returns the right status code would otherwise pass silently).
     "http_req_duration{name:'POST /api/order'}": ["p(95)<500", "p(99)<2000"],
-    // The spam fan-out must produce AT MOST one 201 for the shared email.
+    // The spam fan-out must produce AT MOST one 202 for the shared email.
     // 0 wins is also valid — the sale may have sold out before spam ran.
     // The verifier's SCARD check independently catches any oversell.
-    spam_wins_201: ["count<=1"],
+    spam_wins_202: ["count<=1"],
   },
 };
 
@@ -151,11 +151,11 @@ export function retry() {
 
 export function spam() {
   // All 20 VUs fire SPAM_EMAIL at the same instant — a genuine SISMEMBER race.
-  // Exactly one VU may receive 201; the rest must get 200 (ALREADY) or 409
-  // (sold out). A second 201 for the same address is physically impossible
+  // Exactly one VU may receive 202; the rest must get 200 (ALREADY) or 409
+  // (sold out). A second 202 for the same address is physically impossible
   // under the Lua script's atomic SISMEMBER→SADD, but if atomicity were ever
   // broken this fan-out would catch it: spamWins would exceed 1, breaching the
-  // spam_wins_201 threshold, and the verifier's SCARD would register OVERSOLD.
+  // spam_wins_202 threshold, and the verifier's SCARD would register OVERSOLD.
   const res = post(SPAM_EMAIL);
   if (res.status === 202) spamWins.add(1);
   score(res, [202, 200, 409]);

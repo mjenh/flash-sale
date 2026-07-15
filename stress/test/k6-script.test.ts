@@ -6,8 +6,9 @@
 //
 // What IS checked: the file parses, and the traps that would silently produce a
 // WRONG result are absent — duplicate emails from `${__VU}-${__ITER}` (which
-// would draw 200s and fail the run for the wrong reason) and a one-sided
-// threshold that lets a 5xx through.
+// would draw 200s and fail the run for the wrong reason), a one-sided threshold
+// that lets a 5xx through, and the spam scenario being gated on RETRY (which
+// would silently skip the deduplication race on every default stress run).
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -49,5 +50,20 @@ describe("k6-order.js", () => {
     expect(source).toContain("/api/order");
     expect(source).toContain("JSON.stringify({ email })");
     expect(source).not.toContain("userId");
+  });
+
+  it("spam scenario runs unconditionally — not gated on RETRY", () => {
+    // The spam scenario is a deduplication correctness probe (SISMEMBER race)
+    // that must run on every stress invocation. The retry scenario is opt-in
+    // UX coverage and may remain gated. Structural check: `spam:` must not
+    // appear inside the RETRY ternary block.
+    const retryBlock = source.match(/\.\.\.\(RETRY\s*\?([\s\S]*?):\s*\{\}\)/);
+    expect(retryBlock).not.toBeNull(); // RETRY ternary still exists for retry scenario
+    expect(retryBlock?.[1]).not.toContain("spam:");
+    // The spam executor must always be present in the source.
+    expect(source).toContain('exec: "spam"');
+    // The spam_wins_202 threshold (202 = write-behind accept status) must be
+    // unconditional — always enforced, never vacuous.
+    expect(source).toContain('spam_wins_202: ["count<=1"]');
   });
 });
