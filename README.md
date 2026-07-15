@@ -49,7 +49,7 @@ flowchart LR
 
     Browser -- "SPA + /api" --> Nginx
     Nginx --> Routes
-    Browser == "SSE /api/sales/:slug/events" ==> Broadcaster
+    Browser == "SSE GET /api/sales/:slug/events" ==> Broadcaster
     Routes --> Services
     Services -- "EVALSHA order.lua (atomic)" --> Decision
     Services -. "XADD (enqueue on OK)" .-> Queue
@@ -105,14 +105,14 @@ and product data, then brings up the full stack. Open <http://localhost> (nginx
 on port 80 — SPA + API).
 
 > The write-behind worker runs as a separate container (`--profile worker`).
-> Use `WORKER_COLOCATED=true` to fold it into the API process instead.
+> Set `WORKER_COLOCATED=true` to fold it into the API process instead.
 
 Sale timing, stock, and product config live in MongoDB. Edit the JSON files in
 `db/data/` to change them (see [Configuration](#configuration)).
 
 ## Configuration
 
-### Sale and product config (MongoDB — Story 6-1)
+### Sale and product config (MongoDB)
 
 Sale timing, stock, and product data are stored in MongoDB, not env vars. Edit
 the JSON files in `db/data/` then provision (or re-provision) with:
@@ -146,7 +146,10 @@ Accepted CLI flags: `--mongoUri` (overrides `$MONGODB_URI`) and `--dataDir`
 
 ### Infrastructure environment variables
 
-Parsed and validated once at boot by `server/src/adapters/config.ts`; an invalid value fails fast before `listen()`. Sale timing, stock quantity, and product pricing are **not** env vars — they live in MongoDB and are set by `db/scripts/seed-db.ts`.
+Parsed and validated once at boot by `server/src/adapters/config.ts`; an invalid
+value fails fast before `listen()`. Sale timing, stock quantity, and product
+pricing are **not** env vars — they live in MongoDB and are set by
+`db/scripts/seed-db.ts`.
 
 **API server (`AppConfig`)**
 
@@ -161,7 +164,11 @@ Parsed and validated once at boot by `server/src/adapters/config.ts`; an invalid
 | `MONGO_SELECTION_TIMEOUT_MS` | `5000` | MongoDB server-selection timeout in ms. Atlas replica-set elections can exceed 5 s. |
 | `HTTP_BODY_LIMIT` | `8kb` | Express JSON body size limit. Increase if a gateway pre-aggregates chunks. |
 | `SALE_RESOLVER_CACHE_TTL_MS` | `60000` | Slug→sale in-memory cache TTL in ms (max 60 000). Lower in dev for faster iteration. |
-| `WORKER_COLOCATED` | `false` | `true`: run the write-behind worker inside the API process. `false` / unset: run the worker separately (`src/worker/index.ts` or the `worker` Compose service). |
+
+> `WORKER_COLOCATED` is read directly by the process entrypoint (`src/index.ts`),
+> not by the config validator. Set it to `true` to run the write-behind worker
+> inside the API process; leave it unset (or `false`) to run the worker as a
+> separate process or container.
 
 **Write-behind worker (`WorkerConfig`)**
 
@@ -172,7 +179,7 @@ Parsed and validated once at boot by `server/src/adapters/config.ts`; an invalid
 | `REDIS_CONNECT_TIMEOUT_MS` | `2000` | Same semantics as the API. |
 | `REDIS_COMMAND_TIMEOUT_MS` | `1000` | Same semantics as the API. |
 | `REDIS_RECONNECT_MAX_MS` | `2000` | Same semantics as the API. |
-| `WORKER_CONSUMER_ID` | `worker-<hostname>` | Unique XREADGROUP consumer name per replica. Each pod must use a distinct value so PEL re-delivery is scoped per-instance. Defaults to `worker-` + the OS hostname. |
+| `WORKER_CONSUMER_ID` | `worker-<hostname>` | Unique XREADGROUP consumer name per replica. Each pod must use a distinct value so PEL re-delivery is scoped per-instance. |
 | `WORKER_GROUP` | `workers` | Consumer group name shared by all workers draining the same stream. Override only when running independent consumer groups. |
 
 ## Development
@@ -219,28 +226,45 @@ npm run stress        # or: make stress
 ```
 
 Prerequisite: Docker. k6 runs from your `PATH` if present, otherwise from the
-`grafana/k6` image. The harness stops the API, resets the stores, restarts the
-API, drives the concurrent burst with k6, then verifies the results against the
-stores. Redis (`SCARD orders:{saleId}:users` + `stock:{saleId}:remaining`) is the
-authoritative fairness record: every fairness count is an exact equality against
-the API's own seeded stock (the harness never asserts against a quantity it chose).
-The async Mongo audit is reconciled with a tolerance — an accepted under-count (a
-Redis accept whose durable write was lost) passes with a note, while an
-over-count (a phantom order Mongo holds but Redis never accepted) hard-fails. It
-then re-checks that a past-window sale rejects every attempt.
+`grafana/k6:2.1.0` image. The harness stops the API, resets the stores,
+restarts the API, drives the concurrent burst with k6, then verifies the results
+against the stores. Redis (`SCARD orders:{saleId}:users` + `stock:{saleId}:remaining`)
+is the authoritative fairness record: every fairness count is an exact equality
+against the API's own seeded stock. The async Mongo audit is reconciled with a
+tolerance — an accepted under-count passes with a note, while an over-count
+hard-fails. It then re-checks that a past-window sale rejects every attempt.
 Buyer count (`ATTEMPTS`, default 5,000), virtual users (`VUS`, default 500), and
-stock (`STOCK_QUANTITY`, default 100) are all overridable, so the same proof runs
-at any scale. The combined exit code is the pass/fail signal. See §9 of
+stock (`STOCK_QUANTITY`, default 100) are all overridable. The combined exit code
+is the pass/fail signal. See §9 of
 [`docs/architecture.md`](docs/architecture.md) for the full protocol.
+
+### Expected outcome
+
+A passing run prints a phase-by-phase summary and exits 0:
+
+```
+PASS  stop API
+PASS  reset
+PASS  start API
+PASS  k6 thresholds
+PASS  verifier
+PASS  window phase
+
+PASS — the fairness claim holds.
+```
+
+k6 enforces zero 5xx responses and zero statuses outside `{202, 409}` (plus
+`200` for repeat attempts when `RETRY=1`). The verifier then confirms
+`SCARD orders:{saleId}:users == STOCK_QUANTITY` and
+`stock:{saleId}:remaining == 0`. Under-acceptance is treated as loudly as
+oversell; the window phase confirms all attempts are rejected `409` once the
+sale window is closed.
 
 ### Stress configuration
 
-The stress harness uses its own `.env.stress` file so the harness always agrees
-with the API container on `STOCK_QUANTITY` and the sale window. Explicit
-environment variables still override — `STOCK_QUANTITY=200 npm run stress` works
-as expected. The sale window and stock used by the API come from MongoDB (seeded
-by `db/scripts/seed-db.ts`); `.env.stress` carries the same values so the verifier
-can assert against the same quantities.
+The stress harness uses `.env.stress` so the harness always agrees with the API
+container on `STOCK_QUANTITY` and the sale window. Explicit environment variables
+still override — `STOCK_QUANTITY=200 npm run stress` works as expected.
 
 ## Project layout
 
@@ -299,7 +323,7 @@ Makefile                install / seed / dev / build / deploy / stress / clean /
 The system models a single flash sale with one product. Seven Mongo collections
 ship; Redis holds the runtime truth.
 
-**MongoDB (durable audit) — three categories:**
+**MongoDB (durable audit) — two categories:**
 
 | Category | Collections | Role |
 | --- | --- | --- |
@@ -394,9 +418,9 @@ true horizontal scale, per-node sub-inventories with a coordinator become
 necessary.
 
 **Runtime sale administration.** An admin endpoint to adjust the sale window or
-stock without restarting the API. Sale config now lives in MongoDB (Story 6-1),
-so the data layer is ready; the missing piece is a write endpoint + live
-reconfiguration of the in-process timer and Redis keys.
+stock without restarting the API. Sale config now lives in MongoDB, so the data
+layer is ready; the missing piece is a write endpoint + live reconfiguration of
+the in-process timer and Redis keys.
 
 **Service decomposition.** If the system grows beyond a single product and sale,
 the monolith splits along its existing layer boundaries: an order service, an
