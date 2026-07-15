@@ -164,7 +164,7 @@ export function SalePage({ slug }: SalePageProps) {
         <main className="poster">
           <div className="poster__hero">
             <h1 className="t-display hero__headline">
-              The <span className="hero__hollow">{body?.startTime ? localTime(body.startTime) : "Live"}</span> Drop
+              {saleDetails?.name ?? "Flash Sale"}
             </h1>
             <p className="t-body hero__sub">
               One limited-run mechanical keyboard.

@@ -111,9 +111,7 @@ export function SaleStatusZone({ body, channel }: SaleStatusZoneProps) {
   if (body.status === "upcoming") {
     return (
       <Panel variant="poster" className="stripes status-zone">
-        <p className="t-headline status-zone__headline">Doors at {localTime(body.startTime)}.</p>
         <StatusChip body={body} />
-        <p className="t-body status-zone__frame">{upcomingFrame(body.startTime)}</p>
         <Countdown startTime={body.startTime} />
         {announcements}
       </Panel>
