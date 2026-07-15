@@ -6,10 +6,9 @@
 // The empty-email check is the ONLY thing this hook refuses to send. There is
 // no format gate — never block a plausible attempt client-side.
 //
-// Story 5.1: the hook now takes a `slug` (alongside the existing
-// `onAttemptSettled` option) and threads it into every `placeOrder`/
-// `checkOrder` call so the wire hits `/api/sales/${slug}/order[...]` instead
-// of the v1.0 `/api/order[...]` paths.
+// The hook takes a `slug` (alongside the existing `onAttemptSettled` option)
+// and threads it into every `placeOrder`/`checkOrder` call so the wire hits
+// `/api/sales/${slug}/order[...]` instead of the v1.0 `/api/order[...]` paths.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ALREADY, EMAIL_REQUIRED, checkOrder, placeOrder, type Verdict } from "../api/order.ts";
 

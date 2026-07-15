@@ -45,10 +45,10 @@ function createFakeOps(
     },
     async findActiveSale(nowMs: number): Promise<SaleSummary | null> {
       calls.findActiveSale += 1;
-      // within window > nearest upcoming > most recently ended — Story 4.5
-      // extracted this priority into selectActiveSale() (reused here rather
-      // than reimplemented, so this fake stays in lockstep with the shared
-      // helper bootstrap.ts's boot-time reconciliation also calls).
+      // within window > nearest upcoming > most recently ended — this priority
+      // is delegated to selectActiveSale() (reused rather than reimplemented,
+      // so this fake stays in lockstep with the shared helper bootstrap.ts's
+      // boot-time reconciliation also calls).
       return selectActiveSale(sales, nowMs);
     },
   };
@@ -175,76 +175,6 @@ describe("forSlug() middleware", () => {
   });
 });
 
-describe("forActiveSale() middleware", () => {
-  it("resolves the active sale (within window) and attaches req.sale", async () => {
-    const ops = createFakeOps([FLASH_SALE, SUMMER_SALE]);
-    const resolver = createSaleResolver({ ops, clock: () => startMs + 1000 });
-    const middleware = resolver.forActiveSale();
-
-    const req = fakeReq();
-    const next = vi.fn();
-    await middleware(req, fakeRes(), next);
-
-    expect(next).toHaveBeenCalledTimes(1);
-    expect(req.sale).toEqual(FLASH_SALE);
-  });
-
-  it("falls back to nearest upcoming when no sale is within window", async () => {
-    const ops = createFakeOps([FLASH_SALE, SUMMER_SALE]);
-    // Before both sales.
-    const resolver = createSaleResolver({
-      ops,
-      clock: () => FLASH_SALE.startTime.getTime() - 60_000,
-    });
-    const middleware = resolver.forActiveSale();
-
-    const req = fakeReq();
-    await middleware(req, fakeRes(), vi.fn());
-
-    expect(req.sale).toEqual(FLASH_SALE);
-  });
-
-  it("falls back to most recently ended when no active or upcoming", async () => {
-    const ops = createFakeOps([FLASH_SALE, SUMMER_SALE]);
-    // After both sales.
-    const resolver = createSaleResolver({
-      ops,
-      clock: () => SUMMER_SALE.endTime.getTime() + 60_000,
-    });
-    const middleware = resolver.forActiveSale();
-
-    const req = fakeReq();
-    await middleware(req, fakeRes(), vi.fn());
-
-    expect(req.sale).toEqual(SUMMER_SALE); // most recently ended
-  });
-
-  it("always calls next() even when no sale is found", async () => {
-    const ops = createFakeOps([]);
-    const resolver = createSaleResolver({ ops, clock: () => startMs });
-    const middleware = resolver.forActiveSale();
-
-    const req = fakeReq();
-    const next = vi.fn();
-    await middleware(req, fakeRes(), next);
-
-    expect(next).toHaveBeenCalledTimes(1);
-    expect(req.sale).toBeUndefined();
-  });
-
-  it("caches the active sale lookup", async () => {
-    const ops = createFakeOps([FLASH_SALE]);
-    const resolver = createSaleResolver({ ops, clock: () => startMs + 1000, cacheTtlMs: 10_000 });
-    const middleware = resolver.forActiveSale();
-
-    await middleware(fakeReq(), fakeRes(), vi.fn());
-    expect(ops.calls.findActiveSale).toBe(1);
-
-    await middleware(fakeReq(), fakeRes(), vi.fn());
-    expect(ops.calls.findActiveSale).toBe(1); // cached
-  });
-});
-
 describe("findActive()", () => {
   it("returns the active sale for the discovery endpoint", async () => {
     const ops = createFakeOps([FLASH_SALE]);
@@ -263,7 +193,7 @@ describe("findActive()", () => {
   });
 });
 
-describe("windowFromSale() (Story 4.4)", () => {
+describe("windowFromSale()", () => {
   it("converts a SaleSummary's Date fields into a SaleWindow of epoch ms + ISO strings", () => {
     expect(windowFromSale(FLASH_SALE)).toEqual({
       startMs: FLASH_SALE.startTime.getTime(),
@@ -287,7 +217,7 @@ describe("windowFromSale() (Story 4.4)", () => {
   });
 });
 
-describe("isSaleActiveAt() (Story 4.5)", () => {
+describe("isSaleActiveAt()", () => {
   it("is true at the exact start instant and false at the exact end instant ([start, end) semantics)", () => {
     expect(isSaleActiveAt(FLASH_SALE, startMs)).toBe(true);
     expect(isSaleActiveAt(FLASH_SALE, endMs)).toBe(false);
@@ -296,7 +226,7 @@ describe("isSaleActiveAt() (Story 4.5)", () => {
   });
 });
 
-describe("selectActiveSale() (Story 4.5)", () => {
+describe("selectActiveSale()", () => {
   it("returns the sale within its window when exactly one is active", () => {
     expect(selectActiveSale([FLASH_SALE, SUMMER_SALE], startMs + 1000)).toEqual(FLASH_SALE);
   });

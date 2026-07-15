@@ -2,7 +2,7 @@
 // map the outcome to the wire contract. Rejections propagate via Express 5
 // async handling to the central error middleware — no try/catch.
 //
-// Story 4.4: both handlers read req.sale (attached by the sale-resolver
+// Both handlers read req.sale (attached by forSlug() in the sale-resolver
 // middleware) and pass its saleId/window through to the order service on
 // every call, instead of a bootstrap-frozen saleId baked into the deps.
 import { Router, type Request, type Response } from "express";
@@ -65,8 +65,9 @@ export function createOrderRouter({ orderService }: OrderRouterDeps): Router {
   router.post("/", async (req: Request, res: Response) => {
     const sale = req.sale;
     if (sale === undefined) {
-      // Unreachable in practice — forSlug() 404s first, and forActiveSale()
-      // always finds the single boot-seeded sale. Defensive narrowing only.
+      // Defensive narrowing — forSlug() 404s before this handler runs when
+      // the slug names no sale, but TypeScript cannot see through the
+      // middleware chain.
       res.status(404).json({ success: false, error: "Sale not found." });
       return;
     }
@@ -105,7 +106,9 @@ export function createOrderRouter({ orderService }: OrderRouterDeps): Router {
   router.get("/:email", async (req: Request, res: Response) => {
     const sale = req.sale;
     if (sale === undefined) {
-      // Unreachable in practice — see the POST handler's comment above.
+      // Defensive narrowing — forSlug() 404s before this handler runs when
+      // the slug names no sale, but TypeScript cannot see through the
+      // middleware chain.
       res.status(404).json({ success: false, error: "Sale not found." });
       return;
     }

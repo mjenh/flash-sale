@@ -21,7 +21,7 @@
 // collection IS read (never written) below, to resolve {saleId} for the
 // namespaced keys — the sale document itself survives every reset.
 //
-// Story 4.6: keys are namespaced by saleId (v1.0's flat `stock:remaining` /
+// Keys are namespaced by saleId (v1.0's flat `stock:remaining` /
 // `orders:users` are no longer referenced anywhere in this harness). The
 // harness is an independent observer of the deployed stack (see config.ts's
 // file header) and deliberately does not import the server workspace's
@@ -42,9 +42,9 @@ export class ApiStillServingError extends Error {
 /** The wiped collections, in order. Seed collections are absent by design. */
 export const WIPED_COLLECTIONS = ["orders", "orderlines", "users"] as const;
 
-/** v1.1 namespaced key names (Story 4.6) — the harness's own copy of the
- *  same naming convention server/src/adapters/redis/stock.ts's stockKeyFor
- *  and orders.ts's ordersKeyFor use. */
+/** v1.1 namespaced key names — the harness's own copy of the same naming
+ *  convention server/src/adapters/redis/stock.ts's stockKeyFor and
+ *  orders.ts's ordersKeyFor use. */
 export function stockKeyFor(saleId: string): string {
   return `stock:${saleId}:remaining`;
 }

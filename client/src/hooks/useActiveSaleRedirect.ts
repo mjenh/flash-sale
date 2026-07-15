@@ -1,9 +1,8 @@
-// AC1's `/` root route: discover "the active sale" and redirect to
-// `/sale/${slug}`. Calls `GET /api/sales/active` (live since Story 4.1,
-// confirmed correct by Story 5.3 — see routes/sales.ts) and treats ANY
-// failure (network error, 404 "no sales configured", a malformed body) the
-// same way: give up gracefully and report `"unavailable"` rather than
-// leaving the caller on a spinner forever.
+// The `/` root route handler: discovers "the active sale" and redirects to
+// `/sale/${slug}`. Calls `GET /api/sales/active` and treats ANY failure
+// (network error, 404 "no sales configured", a malformed body) the same
+// way: give up gracefully and report `"unavailable"` rather than leaving
+// the caller on a spinner forever.
 //
 // Deliberately isolated in its own hook (rather than inlined in a page
 // component) so a future richer fallback (a dedicated loader route, etc.)

@@ -24,7 +24,7 @@ describe("evaluate", () => {
     expect(results).toHaveLength(5);
   });
 
-  it("Story 4.6: report labels name the namespaced key scheme, never the retired v1.0 flat keys", () => {
+  it("report labels name the namespaced key scheme, never the retired v1.0 flat keys", () => {
     const results = evaluate(observed(), EXPECTED);
     const labels = results.map((r) => r.name).join(" | ");
 

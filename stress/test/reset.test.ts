@@ -1,8 +1,8 @@
 // The reset contract, proven with fakes: the guard fires BEFORE any write, the
 // write sequence is exact, and the seed collections are never touched.
 //
-// Story 4.6: keys are namespaced by saleId — the fake ports below log the
-// exact namespaced key names, not the retired v1.0 flat keys.
+// Keys are namespaced by saleId — the fake ports below log the exact
+// namespaced key names, not the retired v1.0 flat keys.
 import { describe, expect, it } from "vitest";
 import {
   ApiStillServingError,

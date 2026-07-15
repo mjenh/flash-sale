@@ -30,15 +30,12 @@ export function createSalesRouter({
 }: SalesRouterDeps): Router {
   const router = Router();
 
-  // Discovery endpoint — must come before :slug to avoid shadowing. Scaffolded
-  // in Story 4.1 on top of saleResolver.findActive(); Story 5.3 confirmed this
-  // implementation already satisfies its AC1 (within-window > nearest-upcoming
-  // > most-recently-ended priority, 404 "No sales configured." when none
-  // exist) and added the missing HTTP-level 404 test — no code change needed
-  // here. `findActive()`'s current single-sale-derived ops (bootstrap.ts) are
-  // behaviorally exact for N=1 sale (the only case reachable today, since
-  // nothing creates a second Sale document); a real per-request Mongo query
-  // is future work for true multi-sale, not required by any shipped AC.
+  // Discovery endpoint — must come before :slug to avoid shadowing. Backed
+  // by saleResolver.findActive(), which applies the within-window >
+  // nearest-upcoming > most-recently-ended priority and returns 404 "No
+  // sales configured." when no sale exists. The current single-sale-derived
+  // ops (bootstrap.ts) are exact for N=1 sale; a real per-request Mongo
+  // query is future work for true multi-sale support.
   router.get("/active", async (_req, res) => {
     const sale = await saleResolver.findActive();
     if (sale === null) {
@@ -51,8 +48,8 @@ export function createSalesRouter({
   // Sale resolution middleware for all :slug routes.
   router.use("/:slug", saleResolver.forSlug());
 
-  // Sale details (Story 4.3): Sale (from req.sale, no extra Mongo query) +
-  // the Sale -> SaleProduct -> Product -> Inventory join from MongoDB +
+  // Sale details: Sale (from req.sale, no extra Mongo query) + the
+  // Sale -> SaleProduct -> Product -> Inventory join from MongoDB +
   // remaining stock from Redis.
   //
   // Unlike the rest of the API, Redis-down degrades gracefully here

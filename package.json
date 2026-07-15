@@ -12,6 +12,7 @@
   },
   "scripts": {
     "dev": "concurrently -k -n server,worker,client -c blue,cyan,green \"npm run dev -w server\" \"npm run dev:worker -w server\" \"npm run dev -w client\"",
+    "seed": "node db/scripts/seed-db.ts",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "stress": "npm run stress -w stress"

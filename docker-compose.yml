@@ -14,10 +14,8 @@ services:
       PORT: "3000"
       REDIS_URL: redis://redis:6379
       MONGODB_URI: mongodb://mongo:27017/flash-sale
-      # Overridable sale config; defaults give an already-active sale for inspection.
-      SALE_START_TIME: ${SALE_START_TIME:-2026-01-01T00:00:00Z}
-      SALE_END_TIME: ${SALE_END_TIME:-2027-01-01T00:00:00Z}
-      STOCK_QUANTITY: ${STOCK_QUANTITY:-100}
+      # Sale timing, stock, and product config live in MongoDB.
+      # Run `node db/scripts/seed-db.ts` before the first `make deploy`.
       # false (default) → write-behind worker runs in the separate `worker` service.
       # true            → worker runs inside this process; omit the worker profile.
       WORKER_COLOCATED: ${WORKER_COLOCATED:-false}

@@ -40,7 +40,7 @@ export const Product = mongoose.model<ProductDoc>("Product", productSchema, "pro
 export interface SaleDoc {
   /** Stable single-sale identity — the system has exactly one Flash Sale. */
   slug: string;
-  /** Display name for the sale details endpoint (Story 4.3). */
+  /** Human-readable display name served by the sale details endpoint. */
   name: string;
   startTime: Date;
   endTime: Date;

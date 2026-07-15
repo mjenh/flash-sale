@@ -73,7 +73,7 @@ describe("the router (AC1)", () => {
     });
   });
 
-  it("/ attempts the active-sale redirect and falls back gracefully today (Story 5.3 owns the real endpoint)", async () => {
+  it("/ attempts the active-sale redirect and falls back gracefully when no active sale is found", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(() => json(404, { success: false, error: "No sales configured." })),

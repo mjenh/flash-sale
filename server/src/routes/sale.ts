@@ -1,13 +1,10 @@
-// GET /sale/status delegates to the sale-status service. GET /sale/events
-// (SSE) only transports frames — the broadcaster owns composition,
-// coalescing, and fail-closed. Snapshot is awaited before headers are sent,
-// so a Redis-down rejection still becomes the 503 envelope through the
-// central middleware.
+// GET /status delegates to the sale-status service. GET /events (SSE) only
+// transports frames — the broadcaster owns composition, coalescing, and
+// fail-closed. Snapshot is awaited before headers are sent, so a Redis-down
+// rejection still becomes the 503 envelope through the central middleware.
 //
-// Story 4.4: both handlers read req.sale (attached by the sale-resolver
-// middleware — forSlug() for /api/sales/:slug/*, forActiveSale() for the
-// v1.0 alias mounts) instead of a bootstrap-frozen saleId/window, so the
-// same handler serves both route shapes identically.
+// Both handlers read req.sale (attached by forSlug() in the sale-resolver
+// middleware) instead of a bootstrap-frozen saleId/window.
 import { Router } from "express";
 import type { SaleStatusService } from "../services/sale-status.ts";
 import type { SaleEventsBroadcaster, SseSink } from "../services/sale-events.ts";
@@ -24,8 +21,9 @@ export function createSaleRouter({ saleStatus, saleEvents }: SaleRouterDeps): Ro
   router.get("/status", async (req, res) => {
     const sale = req.sale;
     if (sale === undefined) {
-      // Unreachable in practice — forSlug() 404s first, and forActiveSale()
-      // always finds the single boot-seeded sale. Defensive narrowing only.
+      // Defensive narrowing — forSlug() 404s before this handler runs when
+      // the slug names no sale, but TypeScript cannot see through the
+      // middleware chain.
       res.status(404).json({ success: false, error: "Sale not found." });
       return;
     }
@@ -35,7 +33,9 @@ export function createSaleRouter({ saleStatus, saleEvents }: SaleRouterDeps): Ro
   router.get("/events", async (req, res) => {
     const sale = req.sale;
     if (sale === undefined) {
-      // Unreachable in practice — see the /status handler's comment above.
+      // Defensive narrowing — forSlug() 404s before this handler runs when
+      // the slug names no sale, but TypeScript cannot see through the
+      // middleware chain.
       res.status(404).json({ success: false, error: "Sale not found." });
       return;
     }

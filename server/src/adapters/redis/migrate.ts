@@ -1,13 +1,13 @@
-// v1.0 -> v1.1 one-time data migration (Story 4.6). The v1.0 flat Redis keys
-// (`stock:remaining`, `orders:users`) predate Story 4.2's saleId
-// namespacing; the live request path has not read or written them since —
-// this adapter is the ONE transient exception, and only at boot.
+// v1.0 -> v1.1 one-time data migration. The v1.0 flat Redis keys
+// (`stock:remaining`, `orders:users`) predate saleId namespacing; the live
+// request path has not read or written them since — this adapter is the ONE
+// transient exception, and only at boot.
 //
-// Runs at boot strictly BEFORE Story 4.5's warm/cold reconciliation
-// (bootstrap.ts wires it that way): if this step RENAMEs the flat keys into
-// their namespaced equivalents, reconciliation's hasStockKey(saleId)
-// warm-start check then correctly sees them as warm and skips rebuilding —
-// migrated state is preserved rather than clobbered by a cold rebuild.
+// Runs at boot strictly BEFORE the warm/cold reconciliation (bootstrap.ts
+// wires it that way): if this step RENAMEs the flat keys into their
+// namespaced equivalents, reconciliation's hasStockKey(saleId) warm-start
+// check then correctly sees them as warm and skips rebuilding — migrated
+// state is preserved rather than clobbered by a cold rebuild.
 //
 // Guarded with EXISTS checks rather than a try/catch around RENAME (Redis
 // throws "ERR no such key" when the source is missing) — reads as a plain
@@ -66,9 +66,9 @@ export function createFlatKeyMigrator(
 
       if (namespacedExists) {
         // Both namespaced and flat keys exist: the namespaced keys are
-        // authoritative (Story 4.5's hasStockKey warm-start check already
-        // treats them as live state) — delete the stale flat leftovers so a
-        // future boot never mistakes them for surviving v1.0 state.
+        // authoritative (hasStockKey warm-start check already treats them as
+        // live state) — delete the stale flat leftovers so a future boot
+        // never mistakes them for surviving v1.0 state.
         if (flatStockExists) {
           await bounded(client.del(FLAT_STOCK_KEY), commandTimeoutMs);
         }

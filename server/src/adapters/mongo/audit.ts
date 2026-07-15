@@ -6,11 +6,10 @@
 // createOrderRecorder holds the ordering + duplicate-key semantics and is
 // fully unit-tested with fake ops.
 //
-// Story 4.4: recordOrder(saleId, email) takes saleId per call (from
-// req.sale._id via the order service's SaleContext) rather than a
-// bootstrap-frozen SaleRefs.saleId — createOrderRecorder now only closes
-// over productId, since v1.1 still ships exactly one product per sale
-// (Story 4.3) and there is no per-request product resolution yet.
+// recordOrder(saleId, email) takes saleId per call (from req.sale._id via
+// the order service's SaleContext) rather than a bootstrap-frozen saleId —
+// createOrderRecorder closes over productId only, since v1.1 ships exactly
+// one product per sale and there is no per-request product resolution yet.
 import { Order, OrderLine, User } from "./models.ts";
 import type { OrderAuditPort } from "../../services/order.ts";
 

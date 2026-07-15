@@ -1,5 +1,5 @@
 // Bounded reads, fail-closed RedisUnavailableError mapping. Fake client,
-// no I/O. Story 4.2: keys are namespaced by saleId.
+// no I/O. Keys are namespaced by saleId.
 import { describe, expect, it, vi } from "vitest";
 import {
   createStockStore,

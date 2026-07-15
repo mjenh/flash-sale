@@ -3,13 +3,12 @@
 // clock is injected and stock arrives through the StockReader port.
 // Window semantics: [start, end).
 //
-// Story 4.4: saleId and window are per-call arguments, not deps frozen at
-// construction — the HTTP status endpoint and the SSE broadcaster both
-// resolve them from req.sale (or the currently-active sale) fresh on every
-// call rather than a bootstrap-frozen constant. StockReader.getRemaining
-// now takes saleId directly, matching adapters/redis/stock.ts's
-// StockStore.getRemaining(saleId) shape exactly (Story 4.2) — the real
-// stockStore adapter can be injected here with zero wrapping.
+// saleId and window are per-call arguments, not deps frozen at construction —
+// the HTTP status endpoint and the SSE broadcaster both resolve them from
+// req.sale (or the currently-active sale) fresh on every call rather than a
+// bootstrap-frozen constant. StockReader.getRemaining takes saleId directly,
+// matching the StockStore.getRemaining(saleId) shape in adapters/redis/stock.ts
+// — the real stockStore adapter needs no wrapping at the injection site.
 import type { Clock } from "./clock.ts";
 
 export type SaleStatus = "upcoming" | "active" | "ended" | "sold_out";

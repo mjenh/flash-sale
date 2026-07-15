@@ -6,7 +6,7 @@ The system sells a fixed number of units (default 100) to a large concurrent
 audience within a bounded sale window. The implementation enforces three
 invariants:
 
-- **No oversell.** At most `STOCK_QUANTITY` orders are accepted.
+- **No oversell.** At most `sale.stockQuantity` (provisioned in MongoDB) orders are accepted.
 - **Idempotent identity.** A buyer's email is the identity key. A repeat attempt
   returns the same success, never a duplicate and never a spurious error, at any
   time.
@@ -86,7 +86,11 @@ integration tests. Its order is fixed:
    so connect is raced against a timeout and the client is destroyed on failure.
 3. **Mongo connect.**
 4. **Lua script registration** — `SCRIPT LOAD` and SHA cache.
-5. **Mongo seed** — idempotent upserts of Product, Sale, SaleProduct, and Inventory.
+5. **DB reads** — `mongoSaleBootstrapOps.listAllSales()` reads all Sale documents
+   from MongoDB (sale timing, stock quantity, and product pricing live in the
+   database, provisioned beforehand by `db/scripts/seed-db.ts` — never upserted
+   at server boot). `getSaleProduct(saleId)` fetches the active sale's product.
+   Boot fails immediately if no sale is found or no product is configured.
 6. **Multi-sale overlap validation** — fails boot if more than one sale's window
    overlaps `now()`; prevents ambiguous active-sale selection.
 7. **Active sale selection** — selects the sale by priority: within-window first,
@@ -262,9 +266,17 @@ timeout so a hang becomes a failure.
   upsert Orders, (4) resolve Order `_id`s, (5) bulk upsert OrderLines. All three
   `bulkWrite` calls use `ordered: false` so a duplicate-key skip does not abort the
   rest of the batch. Safe under at-least-once re-delivery.
-- **`seed.ts`** — idempotent boot seed of the domain documents from env config;
-  exposes `listConfirmedOrderEmails(saleId)`, the cold-rebuild source, and
-  `listAllSales()`, used at boot to validate multi-sale overlap.
+- **`seed.ts`** — exported string constants only (`SALE_SLUG`, `PRODUCT_SKU`,
+  `PRODUCT_NAME`, etc.). The boot-time upsert path was removed when sale and
+  product data was migrated to MongoDB (Story 6-1); the constants remain so
+  tests and the standalone seed script can import them as fixtures without
+  hardcoding strings.
+- **`sale-bootstrap.ts`** — the three boot-time read operations that replaced the
+  old seed path: `listAllSales()` (used for active-sale selection and the
+  multi-sale overlap guard), `getSaleProduct(saleId)` (fetches the active sale's
+  product and flash-sale price), and `listConfirmedOrderEmails(saleId)` (the
+  cold-rebuild source). None of these write to MongoDB; they only query existing
+  documents provisioned by `db/scripts/seed-db.ts`.
 - **`catalog.ts`** — `createCatalogReader`. Joins `SaleProduct` → `Product` and
   `Inventory` to produce the product list for `GET /api/sales/:slug`. The live
   `remaining` value comes from a separate Redis read; a missing or unavailable
@@ -278,16 +290,19 @@ timeout so a hang becomes a failure.
 The worker is a standalone process that drains `queue:orders` into MongoDB. It
 runs separately from the API by default and can also run co-located (§3.1).
 
-- **`order-worker.ts`** — polling loop using XREADGROUP consumer group
-  `workers/worker-1`. Every iteration calls `readPending()` (`id="0"`, re-delivers
-  unACKed PEL entries) first, then `readBatch()` (`id=">"`, new messages) only when
-  the PEL is empty. This ensures failed batches are retried after a MongoDB outage
-  without losing messages. `XACK` fires only after `bulkRecordOrders` confirms.
-  Exponential backoff: 500 ms initial, 30 s cap.
+- **`order-worker.ts`** — polling loop using XREADGROUP with consumer group
+  `WORKER_GROUP` (default `"workers"`) and consumer ID `WORKER_CONSUMER_ID`
+  (default `worker-<hostname>`). Each replica must use a distinct consumer ID so
+  PEL re-delivery is scoped per-instance. Every iteration calls `readPending()`
+  (`id="0"`, re-delivers unACKed PEL entries) first, then `readBatch()`
+  (`id=">"`, new messages) only when the PEL is empty. This ensures failed batches
+  are retried after a MongoDB outage without losing messages. `XACK` fires only
+  after `bulkRecordOrders` confirms. Exponential backoff: 500 ms initial, 30 s cap.
 - **`index.ts`** — standalone entrypoint; connects Redis + MongoDB, starts worker,
   handles SIGTERM/SIGINT with ordered teardown (worker stop → disconnectMongo →
   redis.close). Calls `loadWorkerConfig()` (not `loadConfig()`), so sale-window env
-  vars are not needed for the worker process — only `REDIS_URL` and `MONGODB_URI`.
+  vars are not needed for the worker process — only `REDIS_URL`, `MONGODB_URI`,
+  and the optional `WORKER_CONSUMER_ID` / `WORKER_GROUP` overrides.
 
 ## 4. Request flows
 
@@ -347,9 +362,9 @@ resolve to a verdict, so no UI path strands a spinner.
 
 ### 5.1 Domain model
 
-Eight Mongoose collections ship in v1. Schema ships now; behavior is
-trigger-gated — some entities are boot-seeded constants, some are written per
-order, and one is dormant by design.
+Seven Mongoose collections ship in v1 (`users`, `products`, `sales`, `saleproducts`,
+`inventories`, `orders`, `orderlines`). Behavior is trigger-gated — some entities
+are boot-seeded constants, some are written per order.
 
 ```mermaid
 erDiagram
@@ -400,7 +415,7 @@ erDiagram
 
 | Category | Collections | Behavior |
 | --- | --- | --- |
-| Boot-seeded constants | `products`, `sales`, `saleproducts`, `inventories` | Upserted idempotently at boot from env config. Never written per order. `Inventory.initialQuantity` is seeded from `STOCK_QUANTITY` but never decremented — concurrency truth lives in Redis. |
+| Boot-seeded constants | `products`, `sales`, `saleproducts`, `inventories` | Provisioned by `db/scripts/seed-db.ts` (run once before first server start, idempotent). The server reads (never writes) these at boot via `mongoSaleBootstrapOps` (`sale-bootstrap.ts`). `Inventory.initialQuantity` is set on first seed (`$setOnInsert`) and is never decremented — concurrency truth lives in Redis. |
 | Per-order writes | `users`, `orders`, `orderlines` | Written by the background worker after draining `queue:orders` (§3.6). `Order` has a compound unique index on `(saleId, email)` as defense-in-depth. `OrderLine` defaults to qty 1, unitPrice 0 (payment out of scope). |
 
 All schemas use `timestamps: true`. Unique indexes guard `users.identifier`,
@@ -416,7 +431,7 @@ Keys are namespaced by the MongoDB `ObjectId` of the active sale document
 - `orders:{saleId}:users` — set of buyer emails holding a confirmed order.
 - `sale:{saleId}:events` — pub/sub channel of type-only event strings.
 - `queue:orders` — Redis Stream; the write-behind audit queue. Consumer group
-  `workers/worker-1` reads it; entries remain in the PEL until `XACK` confirms
+  consumer group `workers` (default; configurable via `WORKER_GROUP`) reads it; entries remain in the PEL until `XACK` confirms
   MongoDB receipt. Not namespaced by `saleId` — the payload carries `saleId`.
 
 Permitted writers of the two state keys (`stock:*`, `orders:*`) are exactly three:
@@ -427,8 +442,8 @@ reset script.
 
 | Type | Location | Purpose |
 | --- | --- | --- |
-| `AppConfig` | `adapters/config.ts` | Boot-parsed env: port, store URLs, stock, sale window (epoch ms + ISO strings), Redis timeouts. |
-| `WorkerConfig` | `adapters/config.ts` | Minimal config for the standalone worker: `REDIS_URL`, `MONGODB_URI`, Redis timeouts. Sale-window vars not needed. |
+| `AppConfig` | `adapters/config.ts` | Boot-parsed env for the API process: `port`, `redisUrl`, `mongodbUri`, `redisConnectTimeoutMs`, `redisCommandTimeoutMs`, `redisReconnectMaxMs`, `mongoSelectionTimeoutMs`, `httpBodyLimit`, `saleResolverCacheTtlMs`. Sale timing, stock, and product pricing are **not** in `AppConfig` — they are read from MongoDB at boot. |
+| `WorkerConfig` | `adapters/config.ts` | Minimal config for the standalone worker: `redisUrl`, `mongodbUri`, Redis timeouts, `workerConsumerId` (defaults to `worker-<hostname>`; must be unique per replica), `workerGroup` (defaults to `"workers"`). Sale-window vars not needed. |
 | `OrderVerdict` | `adapters/redis/orders.ts` | `"OK" \| "ALREADY" \| "SOLD_OUT"` — the Lua script's three outcomes. |
 | `SaleStatus` | `services/sale-status.ts` | `"upcoming" \| "active" \| "ended" \| "sold_out"` — the four lifecycle states. |
 | `OrderOutcome` | `services/order.ts` | `created \| already \| sold_out \| inactive` — the service-level verdicts mapped to HTTP. |
@@ -448,12 +463,12 @@ On boot, after the active sale is selected and key migration runs, the reconcile
 checks whether `stock:{saleId}:remaining` exists.
 
 - **Warm start (key present):** surviving Redis state is authoritative — nothing is
-  touched. Consequently, changing `STOCK_QUANTITY` against surviving state is a
-  no-op; a true reset occurs only via the offline reset script or
+  touched. Consequently, editing `sale.stockQuantity` in MongoDB against surviving
+  Redis state is a no-op; a true reset occurs only via the offline reset script or
   `docker compose down -v`.
 - **Cold start (key absent):** Redis is rebuilt from Mongo truth — list confirmed
-  order emails, set `stock:{saleId}:remaining = STOCK_QUANTITY − count` (clamped at
-  0, with a warning if orders exceed stock), and repopulate `orders:{saleId}:users`.
+  order emails, set `stock:{saleId}:remaining = sale.stockQuantity − count` (clamped
+  at 0, with a warning if orders exceed stock), and repopulate `orders:{saleId}:users`.
   Redis is rebuilt from Mongo, never the reverse.
 
 Because the rebuild writes the sentinel last, a crash mid-rebuild is safe: the next
@@ -502,17 +517,44 @@ order key is canonicalized (NFC-normalized and case-folded) so `A@x.com` and
 ## 8. Configuration
 
 Configuration is environment variables only, parsed and validated once at boot
-(`adapters/config.ts`), fail-fast; there is no runtime admin surface.
-`SALE_START_TIME` and `SALE_END_TIME` are required ISO-8601 datetimes with an
-explicit UTC offset (`Z` or `±HH:MM`; a bare local-time string is rejected); end
-must be strictly after start; both are parsed to UTC epoch ms once. `STOCK_QUANTITY` (default 100) and `PORT`
-(default 3000) must be positive integers; `REDIS_URL` and `MONGODB_URI` default to
-local. The Redis timeouts (2 s connect, 1 s per command) are fixed constants, not
-tunables.
+(`adapters/config.ts`), fail-fast before `listen()`; there is no runtime admin
+surface.
 
-`WORKER_COLOCATED` (`true` / `false`) controls whether the write-behind worker
-runs inside the API process. The standalone worker process reads only
-`REDIS_URL` and `MONGODB_URI` via `loadWorkerConfig()`.
+**Sale timing, stock quantity, and product pricing are not environment variables.**
+They are stored in MongoDB and provisioned via `db/scripts/seed-db.ts` before the
+first server start. The API reads these at boot via `mongoSaleBootstrapOps`
+(`adapters/mongo/sale-bootstrap.ts`) and fails fast if no sale or product is found.
+
+**API server (`AppConfig` via `loadConfig()`):**
+
+| Variable | Default | Constraint |
+| --- | --- | --- |
+| `REDIS_URL` | `redis://localhost:6379` | Redis 8, AOF enabled |
+| `MONGODB_URI` | `mongodb://localhost:27017/flash-sale` | Audit database and sale config |
+| `PORT` | `3000` | Positive integer ≤ 65535 |
+| `REDIS_CONNECT_TIMEOUT_MS` | `2000` | Positive integer; boot connect timeout. Increase for TLS/Atlas/cluster. |
+| `REDIS_COMMAND_TIMEOUT_MS` | `1000` | Positive integer; per-command timeout. A timeout is treated as unreachable (503). |
+| `REDIS_RECONNECT_MAX_MS` | `2000` | Positive integer; reconnect backoff ceiling. Raise if Redis failover exceeds 2 s. |
+| `MONGO_SELECTION_TIMEOUT_MS` | `5000` | Positive integer; server-selection timeout. Atlas replica-set elections can exceed 5 s. |
+| `HTTP_BODY_LIMIT` | `8kb` | Express JSON body size limit. Increase if a gateway pre-aggregates chunks. |
+| `SALE_RESOLVER_CACHE_TTL_MS` | `60000` | Positive integer ≤ 60 000; slug→sale in-memory cache TTL in ms. Lower in dev for faster iteration. |
+| `WORKER_COLOCATED` | `false` | `true`: run the write-behind worker inside the API process. `false` / unset: run it separately. |
+
+**Standalone write-behind worker (`WorkerConfig` via `loadWorkerConfig()`):**
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `REDIS_URL` | `redis://localhost:6379` | Same as API |
+| `MONGODB_URI` | `mongodb://localhost:27017/flash-sale` | Same as API |
+| `REDIS_CONNECT_TIMEOUT_MS` | `2000` | Same semantics as API |
+| `REDIS_COMMAND_TIMEOUT_MS` | `1000` | Same semantics as API |
+| `REDIS_RECONNECT_MAX_MS` | `2000` | Same semantics as API |
+| `WORKER_CONSUMER_ID` | `worker-<hostname>` | Unique XREADGROUP consumer name per replica. Each pod must use a distinct value so PEL re-delivery is scoped per-instance. |
+| `WORKER_GROUP` | `workers` | Consumer group name shared by all workers draining the same stream. |
+
+The worker reads only `REDIS_URL`, `MONGODB_URI`, the Redis timeouts, and the
+worker identity vars via `loadWorkerConfig()` — sale-window env vars are not needed
+for the worker process.
 
 ## 9. Testing and the stress proof
 

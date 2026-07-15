@@ -12,21 +12,19 @@
 // for FUTURE boundaries only; elapsed boundaries arm nothing —
 // snapshot-on-connect heals.
 //
-// Story 4.4: sale-status.getStatus() now takes (saleId, window) per call
-// instead of a bootstrap-frozen window. This broadcaster stays a SINGLE
-// shared state machine (sinks, the coalescing chain, the heartbeat, and the
-// window-boundary timers are all still boot-scoped, unchanged) — v1.1
-// enforces exactly one active sale at a time, so one instance is correct.
-// Two call sites need a saleId+window to compose a frame, and they differ in
-// whether they have request context:
+// sale-status.getStatus() takes (saleId, window) per call rather than a
+// bootstrap-frozen window. The broadcaster stays a single shared state
+// machine (sinks, coalescing chain, heartbeat, and window-boundary timers
+// are all boot-scoped) — v1.1 enforces exactly one active sale at a time,
+// so one instance is correct. Two call sites need a saleId+window to
+// compose a frame, and they differ in whether they have request context:
 //   - snapshotFrame(saleId, window): called from the SSE route at connect
-//     time, which already has req.sale in hand — accepts it explicitly
-//     ("subscribe-time" parameterization).
-//   - emit() / ensureTerminalIfSoldOut(): triggered by the Redis pub/sub
-//     subscriber or the heartbeat timer, neither of which has a request —
+//     time, which already has req.sale in hand — accepts it explicitly.
+//   - emit() / ensureTerminalIfSoldOut(): triggered by the pub/sub
+//     subscriber or the heartbeat timer, which have no request context —
 //     these re-derive the current active sale via the injected
-//     getActiveSale() on every call, rather than freezing one at
-//     construction, so the broadcaster tracks whichever sale is active.
+//     getActiveSale() on every call so the broadcaster always tracks the
+//     currently active sale.
 import type { Clock } from "./clock.ts";
 import type { SaleStatus, SaleStatusService, SaleWindow } from "./sale-status.ts";
 

@@ -29,26 +29,24 @@ async function boot(opts: {
   nowMs: number;
   stock?: string;
   stockQuantity?: string;
-  /** Runs after the saleId is reserved but before bootstrap() seeds the
-   *  default product — lets tests add extra catalog products via
-   *  addCatalogProduct() ahead of the real seeder's own upsert. */
+  /** Runs after the saleId is reserved (KEYCAP-ONE already seeded) but before
+   *  bootstrap() runs — lets tests add extra catalog products via
+   *  addCatalogProduct(). Products added here appear AFTER KEYCAP-ONE in the
+   *  SaleProduct insertion order (and thus the response order). */
   beforeBootstrap?: (mongo: ReturnType<typeof createFakeMongo>, saleId: string) => Promise<void>;
-  /** Story 5.3: overrides the sale-resolver's lookup ops entirely — used to
-   *  simulate "no sales exist" for GET /api/sales/active's 404 branch, a
-   *  state the normal boot path can never reach (seed() always upserts one
-   *  Sale document before this override would matter for anything else). */
+  /** Overrides the sale-resolver's lookup ops entirely — used to simulate
+   *  "no sales exist" for GET /api/sales/active's 404 branch, a state the
+   *  normal boot path can never reach. */
   saleLookupOps?: SaleLookupOps;
 }) {
   const mongo = createFakeMongo();
-  const saleId = await reserveSaleId(mongo, SALE_SLUG);
+  // Sale timing comes from DB. Pass 2026 timing so the clock (which is
+  // pinned to the 2026 window) sees an active sale.
+  const saleId = await reserveSaleId(mongo, SALE_SLUG, { startMs, endMs });
   await opts.beforeBootstrap?.(mongo, saleId);
   const fake: FakeRedis = createFakeRedis(opts.stock === undefined ? {} : { stock: opts.stock, saleId });
   const overrides: BootstrapOverrides = {
-    env: {
-      SALE_START_TIME: SALE_START,
-      SALE_END_TIME: SALE_END,
-      STOCK_QUANTITY: opts.stockQuantity ?? "100",
-    },
+    env: {},
     logger: pino({ level: "silent" }),
     clock: () => opts.nowMs,
     createRedis: () => fake.client,
@@ -78,9 +76,9 @@ describe("GET /api/sales/active (discovery endpoint)", () => {
     expect(res.body.slug).toBe("flash-sale");
   });
 
-  // Story 5.3 (v1.1-FR-6/AC1): "No sales configured." — a state the normal
-  // boot path can never produce (seed() always upserts one Sale document),
-  // reached here only by overriding the resolver's lookup ops directly.
+  // "No sales configured." is a state the normal boot path can never produce
+  // (a Sale document is always seeded at boot) — reached here only by
+  // overriding the resolver's lookup ops directly.
   it("returns 404 'No sales configured.' when the resolver finds no sale", async () => {
     const { app } = await boot({
       nowMs: IN_WINDOW,
@@ -100,7 +98,7 @@ describe("GET /api/sales/active (discovery endpoint)", () => {
   });
 });
 
-describe("GET /api/sales/:slug (sale details with inventory, Story 4.3)", () => {
+describe("GET /api/sales/:slug (sale details with inventory)", () => {
   it("returns sale info + the joined product with remaining from Redis (AC1)", async () => {
     const { app } = await boot({ nowMs: IN_WINDOW, stock: "42" });
     const res = await request(app).get("/api/sales/flash-sale");
@@ -138,15 +136,13 @@ describe("GET /api/sales/:slug (sale details with inventory, Story 4.3)", () => 
 
     const res = await request(app).get("/api/sales/flash-sale");
     expect(res.status).toBe(200);
-    // beforeBootstrap adds EXTRA-1 before bootstrap()'s own seeder links the
-    // default KEYCAP-ONE product, so SaleProduct listing order (and thus the
-    // response order) has EXTRA-1 first — proving the join preserves
-    // SaleProduct order rather than sorting or reordering by sku/name.
-    // EXTRA-1 was added via addCatalogProduct with no explicit prices → defaults to 0.
-    // KEYCAP-ONE was seeded by bootstrap with the config defaults.
+    // reserveSaleId pre-seeds KEYCAP-ONE first (before beforeBootstrap runs),
+    // so KEYCAP-ONE appears first in SaleProduct insertion order and thus in
+    // the response. EXTRA-1, added by beforeBootstrap, appears second.
+    // This proves the join preserves SaleProduct insertion order.
     expect(res.body.sale.products).toEqual([
-      { sku: "EXTRA-1", name: "Extra Widget", initialQuantity: 25, remaining: 7, originalPrice: 0, flashSalePrice: 0 },
       { sku: PRODUCT_SKU, name: PRODUCT_NAME, initialQuantity: 100, remaining: 7, originalPrice: PRODUCT_ORIGINAL_PRICE, flashSalePrice: PRODUCT_FLASH_SALE_PRICE },
+      { sku: "EXTRA-1", name: "Extra Widget", initialQuantity: 25, remaining: 7, originalPrice: 0, flashSalePrice: 0 },
     ]);
   });
 
@@ -187,16 +183,13 @@ describe("GET /api/sales/:slug (sale details with inventory, Story 4.3)", () => 
 });
 
 describe("GET /api/sales/:slug/status", () => {
-  it("returns the same status as the v1.0 /api/sale/status", async () => {
+  it("returns the correct status body inside the window", async () => {
     const { app } = await boot({ nowMs: IN_WINDOW, stock: "37" });
 
-    const v10 = await request(app).get("/api/sale/status");
-    const v11 = await request(app).get("/api/sales/flash-sale/status");
+    const res = await request(app).get("/api/sales/flash-sale/status");
 
-    expect(v10.status).toBe(200);
-    expect(v11.status).toBe(200);
-    expect(v11.body).toEqual(v10.body);
-    expect(v11.body).toEqual({
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
       success: true,
       status: "active",
       stock: 37,
@@ -334,37 +327,6 @@ describe("GET /api/sales/:slug/order/:email", () => {
     const res = await request(app).get("/api/sales/nonexistent/order/buyer@example.com");
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ success: false, error: "Sale not found." });
-  });
-});
-
-describe("v1.0 alias routes still work (req.sale is set by forActiveSale middleware)", () => {
-  it("GET /api/sale/status is identical to GET /api/sales/flash-sale/status", async () => {
-    const { app } = await boot({ nowMs: IN_WINDOW, stock: "37" });
-
-    const v10 = await request(app).get("/api/sale/status");
-    const v11 = await request(app).get("/api/sales/flash-sale/status");
-    expect(v10.body).toEqual(v11.body);
-  });
-
-  it("POST /api/order is identical to POST /api/sales/flash-sale/order", async () => {
-    const { app } = await boot({ nowMs: IN_WINDOW, stock: "5" });
-
-    const v10 = await request(app).post("/api/order").send({ email: "alias@example.com" });
-    expect(v10.status).toBe(202);
-
-    // The order placed via v1.0 is visible via v1.1 order check.
-    const check = await request(app).get("/api/sales/flash-sale/order/alias@example.com");
-    expect(check.status).toBe(200);
-    expect(check.body.ordered).toBe(true);
-  });
-
-  it("GET /api/order/:email is identical to GET /api/sales/flash-sale/order/:email", async () => {
-    const { app } = await boot({ nowMs: IN_WINDOW, stock: "5" });
-    await request(app).post("/api/order").send({ email: "cross@example.com" });
-
-    const v10 = await request(app).get("/api/order/cross@example.com");
-    const v11 = await request(app).get("/api/sales/flash-sale/order/cross@example.com");
-    expect(v10.body).toEqual(v11.body);
   });
 });
 

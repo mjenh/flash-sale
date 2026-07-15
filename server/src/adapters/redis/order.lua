@@ -14,13 +14,13 @@
 -- coexist without collision.
 --
 -- Reply: { verdict, remaining } — verdict is exactly one of OK | ALREADY |
--- SOLD_OUT; remaining is the stock after this call (post-DECR on OK). Story
--- 1.6 consumes "OK with remaining == 0" to publish sale.sold_out exactly once.
+-- SOLD_OUT; remaining is the stock after this call (post-DECR on OK). The
+-- caller publishes sale.sold_out exactly once when remaining == 0 on an OK.
 --
 -- Missing stock key -> error reply (fail closed, 503 at the API edge): never
 -- fabricate a number — 0 would lie "sold out". A flushed Redis lost
 -- orders:{saleId}:users too, so no honest ALREADY exists in that state either.
--- Story 1.4's cold-start rebuild makes this state unreachable.
+-- The cold-start rebuild (bootstrap.ts) makes this state unreachable.
 local stockKey = KEYS[1]
 local ordersKey = KEYS[2]
 local stock = tonumber(redis.call('GET', stockKey))

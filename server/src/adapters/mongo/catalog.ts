@@ -1,5 +1,5 @@
 // Mongo adapter for the Sale -> SaleProduct -> Product -> Inventory join used
-// by the sale details endpoint (GET /api/sales/:slug, Story 4.3). Read-only;
+// by the sale details endpoint (GET /api/sales/:slug). Read-only;
 // never invoked outside that handler, never on the order-accept path.
 //
 // Same split as audit.ts/seed.ts: thin one-query-per-op mongoose calls

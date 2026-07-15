@@ -3,7 +3,7 @@
 // in-memory fake, but the REAL createOrderRecorder / createDomainSeeder /
 // createReconciler compositions run over them.
 //
-// Story 4.2: Redis keys are namespaced by saleId. boot() always reserves the
+// Redis keys are namespaced by saleId. boot() always reserves the
 // (idempotent) saleId up front from the shared mongo — reused across boots
 // so the sale-scoped keys stay identical across restarts.
 import { Writable } from "node:stream";
@@ -23,10 +23,8 @@ import {
   type FakeRedis,
 } from "./helpers/fake-redis.ts";
 import { createFakeMongo, reserveSaleId, type FakeMongo } from "./helpers/fake-mongo.ts";
-import { START_MS, IN_WINDOW, START_ISO, END_ISO } from "./helpers/time-fixtures.ts";
+import { START_MS, IN_WINDOW } from "./helpers/time-fixtures.ts";
 
-const SALE_START = START_ISO;
-const SALE_END = END_ISO;
 const startMs = START_MS;
 
 /** Drain macro/microtasks so the fire-and-forget side effects settle. */
@@ -46,6 +44,9 @@ function captureLogger(): { lines: string[]; logger: Logger } {
 async function boot(opts: {
   nowMs: number;
   stock?: string;
+  /** stockQuantity comes from MongoDB (the fake sale), not env vars.
+   *  reserveSaleId is called with this value so bootstrap's cold rebuild uses it.
+   *  $set semantics: a repeat call with the same mongo updates the sale's qty. */
   stockQuantity?: string;
   redis?: FakeRedis;
   mongo?: FakeMongo;
@@ -57,15 +58,15 @@ async function boot(opts: {
   directAudit?: boolean;
 }) {
   const mongo = opts.mongo ?? createFakeMongo();
-  // Idempotent by slug — reserving again on a reused mongo returns the same id.
-  const saleId = await reserveSaleId(mongo, SALE_SLUG);
+  // Idempotent by slug with $set semantics for stockQuantity — reserving again
+  // on a reused mongo updates the sale's stockQuantity (mirrors the change the
+  // operator would make in the real DB before a cold restart).
+  const saleId = await reserveSaleId(mongo, SALE_SLUG, {
+    stockQuantity: Number(opts.stockQuantity ?? "100"),
+  });
   const fake = opts.redis ?? createFakeRedis(opts.stock === undefined ? {} : { stock: opts.stock, saleId });
   const overrides: BootstrapOverrides = {
-    env: {
-      SALE_START_TIME: SALE_START,
-      SALE_END_TIME: SALE_END,
-      STOCK_QUANTITY: opts.stockQuantity ?? "100",
-    },
+    env: {},
     logger: opts.logger ?? pino({ level: "silent" }),
     clock: () => opts.nowMs,
     createRedis: () => fake.client,
@@ -84,8 +85,10 @@ async function boot(opts: {
   return { fake, mongo, saleId, app };
 }
 
-describe("boot seed", () => {
-  it("cold boot seeds Product, Sale, SaleProduct, Inventory from env and is idempotent across boots", async () => {
+describe("boot: DB-driven sale + cold rebuild", () => {
+  it("pre-seeded domain docs drive cold rebuild and are idempotent across boots", async () => {
+    // Sale/product data comes from the DB (reserveSaleId pre-seeds
+    // the fake), not from env vars. Bootstrap reads and cold-rebuilds Redis.
     const mongo = createFakeMongo();
     const first = await boot({ nowMs: IN_WINDOW, mongo, stockQuantity: "5" });
     expect(first.fake.kv.get(stockKeyFor(first.saleId))).toBe("5");
@@ -97,7 +100,7 @@ describe("boot seed", () => {
     expect(sale?.startTime).toEqual(new Date(startMs));
     expect(sale?.stockQuantity).toBe(5);
 
-    // Second boot (same stores): still exactly one of each seed doc.
+    // Second boot (same stores, same stockQuantity): still exactly one of each.
     await boot({ nowMs: IN_WINDOW, mongo, redis: first.fake, stockQuantity: "5" });
     expect(mongo.products.size).toBe(1);
     expect(mongo.sales.size).toBe(1);
@@ -112,7 +115,7 @@ describe("async Mongo audit + payment after OK", () => {
     const { mongo } = await boot({ nowMs: IN_WINDOW, stock: "5", payment: { charge }, directAudit: true }).then(
       async (booted) => {
         const res = await request(booted.app)
-          .post("/api/order")
+          .post("/api/sales/flash-sale/order")
           .send({ email: "buyer@example.com" });
         expect(res.status).toBe(202);
         expect(res.body).toEqual({
@@ -148,10 +151,10 @@ describe("async Mongo audit + payment after OK", () => {
   it("an idempotent retry (200) does not grow the audit trail or charge again", async () => {
     const charge = vi.fn(async (email: string) => ({ approved: true, reference: `noop:${email}` }));
     const { app, mongo } = await boot({ nowMs: IN_WINDOW, stock: "5", payment: { charge }, directAudit: true });
-    await request(app).post("/api/order").send({ email: "buyer@example.com" });
+    await request(app).post("/api/sales/flash-sale/order").send({ email: "buyer@example.com" });
     await drain();
 
-    const retry = await request(app).post("/api/order").send({ email: "buyer@example.com" });
+    const retry = await request(app).post("/api/sales/flash-sale/order").send({ email: "buyer@example.com" });
     expect(retry.status).toBe(200);
     await drain();
     expect(mongo.orders).toHaveLength(1);
@@ -163,11 +166,11 @@ describe("async Mongo audit + payment after OK", () => {
     const charge = vi.fn(async (email: string) => ({ approved: true, reference: `noop:${email}` }));
     const { app, mongo } = await boot({ nowMs: IN_WINDOW, stock: "0", payment: { charge } });
 
-    expect((await request(app).post("/api/order").send({ email: "late@x.com" })).status).toBe(409); // sold out
-    expect((await request(app).post("/api/order").send({ email: "" })).status).toBe(400); // validation
+    expect((await request(app).post("/api/sales/flash-sale/order").send({ email: "late@x.com" })).status).toBe(409); // sold out
+    expect((await request(app).post("/api/sales/flash-sale/order").send({ email: "" })).status).toBe(400); // validation
 
     const after = await boot({ nowMs: startMs - 1000, stock: "5", payment: { charge } });
-    expect((await request(after.app).post("/api/order").send({ email: "early@x.com" })).status).toBe(409); // inactive
+    expect((await request(after.app).post("/api/sales/flash-sale/order").send({ email: "early@x.com" })).status).toBe(409); // inactive
 
     await drain();
     expect(mongo.orders).toHaveLength(0);
@@ -180,7 +183,7 @@ describe("async Mongo audit + payment after OK", () => {
       throw new Error("gateway exploded");
     });
     const { app } = await boot({ nowMs: IN_WINDOW, stock: "5", payment: { charge } });
-    const res = await request(app).post("/api/order").send({ email: "buyer@example.com" });
+    const res = await request(app).post("/api/sales/flash-sale/order").send({ email: "buyer@example.com" });
     expect(res.status).toBe(202);
     expect(res.body.message).toBe("Order accepted.");
     await drain();
@@ -193,7 +196,7 @@ describe("Mongo write failure: logged, never rolled back, response unchanged", (
     const { app, fake, saleId, mongo } = await boot({ nowMs: IN_WINDOW, stock: "5", logger, directAudit: true });
     mongo.failingAudit = true;
 
-    const res = await request(app).post("/api/order").send({ email: "unlucky@example.com" });
+    const res = await request(app).post("/api/sales/flash-sale/order").send({ email: "unlucky@example.com" });
     expect(res.status).toBe(202);
     expect(res.body).toEqual({
       success: true,
@@ -217,8 +220,8 @@ describe("Mongo write failure: logged, never rolled back, response unchanged", (
 describe("restart safety", () => {
   it("warm restart touches nothing — surviving state wins and STOCK_QUANTITY changes are no-ops", async () => {
     const first = await boot({ nowMs: IN_WINDOW, stock: "5", stockQuantity: "5" });
-    await request(first.app).post("/api/order").send({ email: "w-1@x.com" });
-    await request(first.app).post("/api/order").send({ email: "w-2@x.com" });
+    await request(first.app).post("/api/sales/flash-sale/order").send({ email: "w-1@x.com" });
+    await request(first.app).post("/api/sales/flash-sale/order").send({ email: "w-2@x.com" });
     await drain();
     expect(first.fake.kv.get(stockKeyFor(first.saleId))).toBe("3");
 
@@ -234,7 +237,7 @@ describe("restart safety", () => {
   it("cold restart rebuilds membership + stock from MongoDB; counts and idempotent retries survive", async () => {
     const first = await boot({ nowMs: IN_WINDOW, stock: "5", stockQuantity: "5", directAudit: true });
     for (const email of ["w-1@x.com", "w-2@x.com", "w-3@x.com"]) {
-      const res = await request(first.app).post("/api/order").send({ email });
+      const res = await request(first.app).post("/api/sales/flash-sale/order").send({ email });
       expect(res.status).toBe(202);
     }
     await drain();
@@ -254,12 +257,12 @@ describe("restart safety", () => {
     expect(orderSetMembers(first.fake, first.saleId)).toEqual(["w-1@x.com", "w-2@x.com", "w-3@x.com"]);
     expect(first.fake.kv.get(stockKeyFor(first.saleId))).toBe("2");
 
-    const status = await request(second.app).get("/api/sale/status");
+    const status = await request(second.app).get("/api/sales/flash-sale/status");
     expect(status.body.stock).toBe(2);
     expect(status.body.status).toBe("active");
 
     // Idempotent retry survives the restart.
-    const retry = await request(second.app).post("/api/order").send({ email: "w-2@x.com" });
+    const retry = await request(second.app).post("/api/sales/flash-sale/order").send({ email: "w-2@x.com" });
     expect(retry.status).toBe(200);
     expect(retry.body).toEqual({
       success: true,
@@ -268,7 +271,7 @@ describe("restart safety", () => {
     });
 
     // And the sale continues where it left off.
-    const fresh = await request(second.app).post("/api/order").send({ email: "w-4@x.com" });
+    const fresh = await request(second.app).post("/api/sales/flash-sale/order").send({ email: "w-4@x.com" });
     expect(fresh.status).toBe(202);
     expect(first.fake.kv.get(stockKeyFor(first.saleId))).toBe("1");
     await drain();
@@ -277,13 +280,13 @@ describe("restart safety", () => {
 
   it("restart never heals Mongo from Redis: a dropped audit write stays a permanent undercount", async () => {
     const first = await boot({ nowMs: IN_WINDOW, stock: "5", stockQuantity: "5", directAudit: true });
-    await request(first.app).post("/api/order").send({ email: "audited-1@x.com" });
-    await request(first.app).post("/api/order").send({ email: "audited-2@x.com" });
+    await request(first.app).post("/api/sales/flash-sale/order").send({ email: "audited-1@x.com" });
+    await request(first.app).post("/api/sales/flash-sale/order").send({ email: "audited-2@x.com" });
     await drain();
 
     // The crash window: Redis accepted, the Mongo write was lost.
     first.mongo.failingAudit = true;
-    const lost = await request(first.app).post("/api/order").send({ email: "lost@x.com" });
+    const lost = await request(first.app).post("/api/sales/flash-sale/order").send({ email: "lost@x.com" });
     expect(lost.status).toBe(202);
     await drain();
     first.mongo.failingAudit = false;
@@ -302,7 +305,7 @@ describe("restart safety", () => {
   it("cold rebuild clamps stock:{saleId}:remaining at 0 when confirmed orders exceed STOCK_QUANTITY", async () => {
     const first = await boot({ nowMs: IN_WINDOW, stock: "10", stockQuantity: "10", directAudit: true });
     for (let i = 0; i < 6; i += 1) {
-      await request(first.app).post("/api/order").send({ email: `b-${i}@x.com` });
+      await request(first.app).post("/api/sales/flash-sale/order").send({ email: `b-${i}@x.com` });
     }
     await drain();
     expect(first.mongo.orders).toHaveLength(6);
@@ -318,7 +321,7 @@ describe("restart safety", () => {
 
     expect(first.fake.kv.get(stockKeyFor(first.saleId))).toBe("0"); // clamped, never negative
     expect(orderSetSize(first.fake, first.saleId)).toBe(6);
-    const status = await request(second.app).get("/api/sale/status");
+    const status = await request(second.app).get("/api/sales/flash-sale/status");
     expect(status.body.status).toBe("sold_out");
   });
 });

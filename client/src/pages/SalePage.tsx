@@ -3,15 +3,13 @@
 // Enter is inert while the button is disabled, for free, because browsers do
 // not submit a form through a disabled submit button.
 //
-// Story 5.1: this file is the renamed/relocated `App.tsx` — the full Noon
-// Poster experience, now parameterized by `slug` instead of assuming one
-// implicit sale. `SalePage` itself takes `slug` as a plain prop (rather than
-// calling `useParams()` internally) so it stays trivially testable in
-// isolation, exactly as `App` was; `SalePageRoute` below is the thin
-// route-level wrapper that extracts `slug` from the URL via `useParams()`
-// (AC2) and hands it down. Every behavioral/accessibility invariant from
-// Epics 1-3 is unchanged — only the URL construction (via the slug) and the
-// new "Sale not found" state (AC3) are new.
+// The full Noon Poster experience, parameterized by `slug` instead of
+// assuming one implicit sale. `SalePage` takes `slug` as a plain prop
+// (rather than calling `useParams()` internally) so it stays trivially
+// testable in isolation. `SalePageRoute` below is the thin route-level
+// wrapper that extracts `slug` from the URL via `useParams()` and hands
+// it down. Every behavioral/accessibility invariant is preserved — only
+// URL construction (via the slug) and the "Sale not found" state are additions.
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { localTime } from "../utils/formatSaleTime.ts";

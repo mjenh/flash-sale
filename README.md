@@ -97,59 +97,96 @@ revisit each — is in
 ## Quick start
 
 ```bash
-make deploy    # build + start: api · worker · nginx client · redis · mongo
+make deploy    # build all images, seed MongoDB, then start: api · worker · nginx client · redis · mongo
 ```
 
-Open <http://localhost> (nginx on port 80 — SPA + API). The compose defaults
-ship an **already-active** sale (window `2026-01-01T00:00:00Z` →
-`2027-01-01T00:00:00Z`, 100 units), so the page is live the moment the stack
-is up. Override the window and stock with a `.env` file next to
-`docker-compose.yml` (see [Configuration](#configuration)).
+`make deploy` starts MongoDB, runs `db/scripts/seed-db.ts` to provision the sale
+and product data, then brings up the full stack. Open <http://localhost> (nginx
+on port 80 — SPA + API).
 
 > The write-behind worker runs as a separate container (`--profile worker`).
 > Use `WORKER_COLOCATED=true` to fold it into the API process instead.
 
+Sale timing, stock, and product config live in MongoDB. Edit the JSON files in
+`db/data/` to change them (see [Configuration](#configuration)).
+
 ## Configuration
 
-Environment variables only — parsed and validated once at boot, fail-fast. There
-is no runtime admin endpoint.
+### Sale and product config (MongoDB — Story 6-1)
 
-| Variable | Required | Default | Meaning |
-| --- | --- | --- | --- |
-| `SALE_START_TIME` | **yes** | — | ISO 8601 with explicit UTC offset (`Z` or `±HH:MM`); parsed to UTC epoch ms at boot |
-| `SALE_END_TIME` | **yes** | — | ISO 8601 with explicit UTC offset; must be strictly after the start |
-| `STOCK_QUANTITY` | no | `100` | Positive integer; units on sale |
-| `REDIS_URL` | no | `redis://localhost:6379` | Redis 8, AOF enabled |
-| `MONGODB_URI` | no | `mongodb://localhost:27017/flash-sale` | The audit database |
-| `PORT` | no | `3000` | API port |
-| `WORKER_COLOCATED` | no | `false` | `true`: run the write-behind worker inside the API process (single-container mode). `false` / unset: run the worker separately (`src/worker/index.ts` or the `worker` Compose service). |
-
-An invalid or missing required value fails the boot before the server listens.
-Compose ships defaults for an active sale; override them in `.env`:
+Sale timing, stock, and product data are stored in MongoDB, not env vars. Edit
+the JSON files in `db/data/` then provision (or re-provision) with:
 
 ```bash
-SALE_START_TIME=2026-07-13T12:00:00Z
-SALE_END_TIME=2026-07-13T13:00:00Z
-STOCK_QUANTITY=100
+npm run seed          # node db/scripts/seed-db.ts (uses $MONGODB_URI)
+make seed             # same, for the local docker-compose stack
 ```
 
-> Changing `STOCK_QUANTITY` against a Redis that already holds sale state is a
-> deliberate **no-op** (a warm start touches nothing). Reset with the harness's
-> reset step, or `docker compose down -v`.
+`make deploy` runs the seed step automatically after the stores are healthy.
+
+The data files (`db/data/*.json`) are JSON arrays — one file per collection:
+
+| File | Collection | Unique key |
+| --- | --- | --- |
+| `products.json` | `products` | `sku` |
+| `sales.json` | `sales` | `slug` |
+| `saleproducts.json` | `saleproducts` | `saleSlug` + `productSku` (resolved to ObjectIds) |
+| `inventories.json` | `inventories` | `productSku` (resolved to ObjectId) |
+
+The script is **idempotent** — re-running updates mutable fields (`$set`).
+`inventories.initialQuantity` uses `$setOnInsert` and is never overwritten.
+
+Accepted CLI flags: `--mongoUri` (overrides `$MONGODB_URI`) and `--dataDir`
+(overrides the default `db/data` path).
+
+> Changing `stockQuantity` in `db/data/sales.json` against a Redis that already
+> holds sale state is a warm-start **no-op** (Redis is the concurrency truth
+> until reset). Reset with `docker compose down -v` or the stress harness's
+> reset step.
+
+### Infrastructure environment variables
+
+Parsed and validated once at boot by `server/src/adapters/config.ts`; an invalid value fails fast before `listen()`. Sale timing, stock quantity, and product pricing are **not** env vars — they live in MongoDB and are set by `db/scripts/seed-db.ts`.
+
+**API server (`AppConfig`)**
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `REDIS_URL` | `redis://localhost:6379` | Redis 8, AOF enabled |
+| `MONGODB_URI` | `mongodb://localhost:27017/flash-sale` | Audit database and sale config |
+| `PORT` | `3000` | API listen port |
+| `REDIS_CONNECT_TIMEOUT_MS` | `2000` | Boot-time Redis connect timeout in ms. Increase for TLS/Atlas/cluster. |
+| `REDIS_COMMAND_TIMEOUT_MS` | `1000` | Per-command Redis timeout in ms. A timeout is treated as unreachable (503). |
+| `REDIS_RECONNECT_MAX_MS` | `2000` | Reconnect backoff ceiling in ms. Raise if Redis failover takes longer. |
+| `MONGO_SELECTION_TIMEOUT_MS` | `5000` | MongoDB server-selection timeout in ms. Atlas replica-set elections can exceed 5 s. |
+| `HTTP_BODY_LIMIT` | `8kb` | Express JSON body size limit. Increase if a gateway pre-aggregates chunks. |
+| `SALE_RESOLVER_CACHE_TTL_MS` | `60000` | Slug→sale in-memory cache TTL in ms (max 60 000). Lower in dev for faster iteration. |
+| `WORKER_COLOCATED` | `false` | `true`: run the write-behind worker inside the API process. `false` / unset: run the worker separately (`src/worker/index.ts` or the `worker` Compose service). |
+
+**Write-behind worker (`WorkerConfig`)**
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `REDIS_URL` | `redis://localhost:6379` | Same connection as the API. |
+| `MONGODB_URI` | `mongodb://localhost:27017/flash-sale` | Same database as the API. |
+| `REDIS_CONNECT_TIMEOUT_MS` | `2000` | Same semantics as the API. |
+| `REDIS_COMMAND_TIMEOUT_MS` | `1000` | Same semantics as the API. |
+| `REDIS_RECONNECT_MAX_MS` | `2000` | Same semantics as the API. |
+| `WORKER_CONSUMER_ID` | `worker-<hostname>` | Unique XREADGROUP consumer name per replica. Each pod must use a distinct value so PEL re-delivery is scoped per-instance. Defaults to `worker-` + the OS hostname. |
+| `WORKER_GROUP` | `workers` | Consumer group name shared by all workers draining the same stream. Override only when running independent consumer groups. |
 
 ## Development
 
 ```bash
 npm install                      # all workspaces, one root lockfile
 docker compose up -d redis mongo # stores only (ports 6379 / 27017 published)
-cp .env.example .env             # set the sale window to develop against
+npm run seed                     # provision sale + product in MongoDB (once, idempotent)
 npm run dev                      # server :3000 + worker + Vite client :5173 (/api proxied)
 ```
 
 `npm run dev` starts three concurrent processes: the API server (`:3000`), the
-write-behind worker, and the Vite dev client (`:5173`). The `.env.example`
-defaults to `WORKER_COLOCATED=true`; in `npm run dev` the worker runs as its
-own process regardless.
+write-behind worker, and the Vite dev client (`:5173`). `npm run seed` uses
+`$MONGODB_URI` if set, otherwise connects to `localhost:27017`.
 
 Gates:
 
@@ -198,10 +235,12 @@ at any scale. The combined exit code is the pass/fail signal. See §9 of
 
 ### Stress configuration
 
-The stress harness uses its own `.env.stress` file (separate from the
-development `.env`) so the API container and the harness always agree on
-`STOCK_QUANTITY` and the sale window. Explicit environment variables still
-override — `STOCK_QUANTITY=200 npm run stress` works as expected.
+The stress harness uses its own `.env.stress` file so the harness always agrees
+with the API container on `STOCK_QUANTITY` and the sale window. Explicit
+environment variables still override — `STOCK_QUANTITY=200 npm run stress` works
+as expected. The sale window and stock used by the API come from MongoDB (seeded
+by `db/scripts/seed-db.ts`); `.env.stress` carries the same values so the verifier
+can assert against the same quantities.
 
 ## Project layout
 
@@ -220,6 +259,8 @@ server/   Express 5 + TypeScript API (Node 24 native type stripping — no bundl
             adapters/       stores & ports: redis/ · mongo/ · payment/ · config.ts
             worker/         write-behind consumer worker
               order-worker.ts  XREADGROUP polling loop · at-least-once · exp. backoff
+                               consumer group: WORKER_GROUP (default "workers")
+                               consumer id: WORKER_CONSUMER_ID (default "worker-<hostname>")
               index.ts         standalone entrypoint (node src/worker/index.ts)
           test/             unit + integration tests
 
@@ -237,23 +278,32 @@ stress/   the fairness proof (imports no server code — an independent observer
             k6-order.js     the concurrent burst
             verify.ts       equality checks against Mongo + Redis
 
+db/       scripts/
+            seed-db.ts    idempotent DB provisioner — run before first server start
+                          (`npm run seed` / `make seed`)
+          data/
+            products.json     seed data — [{ sku, name, originalPrice }]
+            sales.json        seed data — [{ slug, name, startTime, endTime, stockQuantity }]
+            saleproducts.json seed data — [{ saleSlug, productSku, flashSalePrice }]
+            inventories.json  seed data — [{ productSku, initialQuantity }]
+
 docs/     architecture.md   the full architecture reference
 Dockerfile.server       node:24-alpine API image (no client build)
 Dockerfile.client       nginx image: Vite build → static SPA + /api proxy
 docker-compose.yml      api · worker (profile) · client (nginx) · redis:8-alpine · mongo:8
-Makefile                install / dev / build / deploy / stress / clean / worker-logs targets
+Makefile                install / seed / dev / build / deploy / stress / clean / worker-logs targets
 ```
 
 ## Domain model
 
-The system models a single flash sale with one product. Eight Mongo collections
+The system models a single flash sale with one product. Seven Mongo collections
 ship; Redis holds the runtime truth.
 
 **MongoDB (durable audit) — three categories:**
 
 | Category | Collections | Role |
 | --- | --- | --- |
-| Boot-seeded constants | `products`, `sales`, `saleproducts`, `inventories` | Upserted idempotently at boot from env config. Never written per order. `Inventory.initialQuantity` is seeded from `STOCK_QUANTITY` but never decremented — concurrency truth lives in Redis. |
+| DB-provisioned constants | `products`, `sales`, `saleproducts`, `inventories` | Written by `db/scripts/seed-db.ts` (idempotent, not per-boot). Read by `bootstrap.ts` to select the active sale and load stock + product config. `Inventory.initialQuantity` is set on first seed (`$setOnInsert`) and never decremented — concurrency truth lives in Redis. |
 | Per-order writes | `users`, `orders`, `orderlines` | Written by the background worker after draining `queue:orders`. `Order` carries a compound unique index on `(saleId, email)` as defense-in-depth. |
 
 **Redis (runtime truth) — two keys + one channel + one stream:**
@@ -344,7 +394,9 @@ true horizontal scale, per-node sub-inventories with a coordinator become
 necessary.
 
 **Runtime sale administration.** An admin endpoint to adjust the sale window or
-stock without restarting the API. Currently all config is boot-parsed env vars.
+stock without restarting the API. Sale config now lives in MongoDB (Story 6-1),
+so the data layer is ready; the missing piece is a write endpoint + live
+reconfiguration of the in-process timer and Redis keys.
 
 **Service decomposition.** If the system grows beyond a single product and sale,
 the monolith splits along its existing layer boundaries: an order service, an

@@ -23,15 +23,7 @@ bootstrap()
     }
 
     const server = app.listen(config.port, () => {
-      logger.info(
-        {
-          port: config.port,
-          saleStart: config.saleStartIso,
-          saleEnd: config.saleEndIso,
-          stock: config.stockQuantity,
-        },
-        "flash-sale api listening",
-      );
+      logger.info({ port: config.port }, "flash-sale api listening");
     });
 
     // Node is container PID 1, so default signal dispositions don't apply —

@@ -1,4 +1,4 @@
-.PHONY: install dev up-stores test typecheck build deploy up down restart logs worker-logs ps stress clean
+.PHONY: install dev up-stores seed test typecheck build deploy up down restart logs worker-logs ps stress clean
 
 COMPOSE := docker compose
 
@@ -20,7 +20,10 @@ install: ## npm install (all workspaces, single root lockfile)
 up-stores: ## start just redis + mongo for the local dev loop
 	$(COMPOSE) up -d redis mongo
 
-dev: ## concurrently: server :3000 + Vite client :5173 (/api proxied)
+seed: ## provision sale + product data in MongoDB (run once before first start)
+	node db/scripts/seed-db.ts
+
+dev: ## concurrently: server :3000 + worker + Vite client :5173 (/api proxied)
 	npm run dev
 
 ## ---- Gates ----
@@ -36,12 +39,15 @@ typecheck: ## tsc --noEmit in server and client
 build: ## build all images (api + worker); always includes worker profile so the image is current
 	$(COMPOSE) --profile worker build
 
-deploy: build ## build and start the full stack (separate worker unless WORKER_COLOCATED=true)
+deploy: build ## build, seed MongoDB, and start the full stack
+	$(COMPOSE) up -d --wait redis mongo
+	@echo "  Seeding MongoDB…"
+	MONGODB_URI=mongodb://127.0.0.1:27017/flash-sale node db/scripts/seed-db.ts
 	$(COMPOSE) $(WORKER_PROFILE) up -d
 	@echo "  app (nginx): http://localhost:80"
 	@echo "  api (direct): http://localhost:3000"
 
-up: ## start the stack without rebuilding
+up: ## start the stack without rebuilding (stores must already be seeded)
 	$(COMPOSE) $(WORKER_PROFILE) up -d
 
 down: ## stop the stack

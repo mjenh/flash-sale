@@ -4,11 +4,8 @@
 //
 // The wire field is `email` — the spine's older `userId` wording is superseded.
 //
-// Story 5.1: both `placeOrder` and `checkOrder` now take a `slug` and call
-// `/api/sales/${slug}/order[...]` instead of the v1.0 `/api/order[...]`
-// paths. Story 5.2 will extend this file further (dedicated URL-construction
-// tests, additional cleanup); this story's job was making the order flow
-// actually work end-to-end with a slug in the URL.
+// Both `placeOrder` and `checkOrder` take a `slug` and call
+// `/api/sales/${slug}/order[...]` instead of the v1.0 `/api/order[...]` paths.
 
 export const TIMEOUT_MS = 10_000;
 
