@@ -18,11 +18,8 @@ const IN_WINDOW = startMs + 1000;
 
 function overridesFor(fake: FakeRedis, mongo: FakeMongo, nowMs: number): BootstrapOverrides {
   return {
-    env: {
-      SALE_START_TIME: SALE_START,
-      SALE_END_TIME: SALE_END,
-      STOCK_QUANTITY: "100",
-    },
+    // Story 6-1: sale timing comes from MongoDB, not env vars.
+    env: {},
     logger: pino({ level: "silent" }),
     clock: () => nowMs,
     createRedis: () => fake.client,
@@ -36,7 +33,8 @@ function overridesFor(fake: FakeRedis, mongo: FakeMongo, nowMs: number): Bootstr
 
 async function boot(opts: { nowMs: number; stock?: string }) {
   const mongo = createFakeMongo();
-  const saleId = await reserveSaleId(mongo, SALE_SLUG);
+  // Story 6-1: pass 2026 timing so the pinned clock sees an active sale.
+  const saleId = await reserveSaleId(mongo, SALE_SLUG, { startMs, endMs });
   const fake = createFakeRedis(opts.stock === undefined ? {} : { stock: opts.stock, saleId });
   const { app } = await bootstrap(overridesFor(fake, mongo, opts.nowMs));
   return { fake, mongo, saleId, app };

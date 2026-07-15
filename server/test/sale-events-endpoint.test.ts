@@ -49,18 +49,24 @@ async function boot(opts: {
   nowMs?: number;
   clock?: () => number;
   stock?: string;
-  env?: Record<string, string>;
+  /** Story 6-1: boundary-timer tests pass real-time startMs/endMs here so
+   *  armWindowTimers fires at the correct wall-clock boundaries. All other
+   *  tests default to the 2026 constants (startMs / endMs above). */
+  startMs?: number;
+  endMs?: number;
 }) {
   const mongo = createFakeMongo();
-  const saleId = await reserveSaleId(mongo, SALE_SLUG);
+  // Story 6-1: sale timing comes from DB (reserveSaleId). Default to the 2026
+  // constants so the pinned clock sees an active sale. Real-timer tests supply
+  // their own startMs/endMs computed from Date.now().
+  const saleId = await reserveSaleId(mongo, SALE_SLUG, {
+    startMs: opts.startMs ?? startMs,
+    endMs: opts.endMs ?? endMs,
+  });
   const fake: FakeRedis = createFakeRedis(opts.stock === undefined ? {} : { stock: opts.stock, saleId });
   const { lines, logger } = captureLogger();
   const overrides: BootstrapOverrides = {
-    env: opts.env ?? {
-      SALE_START_TIME: SALE_START,
-      SALE_END_TIME: SALE_END,
-      STOCK_QUANTITY: "100",
-    },
+    env: {},
     logger,
     clock: opts.clock ?? (() => opts.nowMs as number),
     createRedis: () => fake.client,
@@ -323,15 +329,14 @@ describe("window-boundary timers through boot", () => {
     // Real short-delay timers: boundaries ~250/750 ms after boot (generous
     // gaps against event-loop jitter). The clock override is real time, so
     // armWindowTimers and the status composer agree.
+    // Story 6-1: boundary timing now comes from the DB (reserveSaleId), not
+    // from env vars. We pass startMs/endMs directly to boot().
     const now = Date.now();
     const { fake, app } = await boot({
       clock: () => Date.now(),
       stock: "37",
-      env: {
-        SALE_START_TIME: new Date(now + 250).toISOString(),
-        SALE_END_TIME: new Date(now + 750).toISOString(),
-        STOCK_QUANTITY: "100",
-      },
+      startMs: now + 250,
+      endMs: now + 750,
     });
     const stream = await openSse(app);
     const [snapshot] = await stream.waitForFrames(1);

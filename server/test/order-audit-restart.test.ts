@@ -23,10 +23,8 @@ import {
   type FakeRedis,
 } from "./helpers/fake-redis.ts";
 import { createFakeMongo, reserveSaleId, type FakeMongo } from "./helpers/fake-mongo.ts";
-import { START_MS, IN_WINDOW, START_ISO, END_ISO } from "./helpers/time-fixtures.ts";
+import { START_MS, IN_WINDOW } from "./helpers/time-fixtures.ts";
 
-const SALE_START = START_ISO;
-const SALE_END = END_ISO;
 const startMs = START_MS;
 
 /** Drain macro/microtasks so the fire-and-forget side effects settle. */
@@ -46,6 +44,9 @@ function captureLogger(): { lines: string[]; logger: Logger } {
 async function boot(opts: {
   nowMs: number;
   stock?: string;
+  /** Story 6-1: stockQuantity now comes from MongoDB (the fake sale), not env.
+   *  reserveSaleId is called with this value so bootstrap's cold rebuild uses it.
+   *  $set semantics: a repeat call with the same mongo updates the sale's qty. */
   stockQuantity?: string;
   redis?: FakeRedis;
   mongo?: FakeMongo;
@@ -57,15 +58,15 @@ async function boot(opts: {
   directAudit?: boolean;
 }) {
   const mongo = opts.mongo ?? createFakeMongo();
-  // Idempotent by slug — reserving again on a reused mongo returns the same id.
-  const saleId = await reserveSaleId(mongo, SALE_SLUG);
+  // Idempotent by slug with $set semantics for stockQuantity — reserving again
+  // on a reused mongo updates the sale's stockQuantity (mirrors the change the
+  // operator would make in the real DB before a cold restart).
+  const saleId = await reserveSaleId(mongo, SALE_SLUG, {
+    stockQuantity: Number(opts.stockQuantity ?? "100"),
+  });
   const fake = opts.redis ?? createFakeRedis(opts.stock === undefined ? {} : { stock: opts.stock, saleId });
   const overrides: BootstrapOverrides = {
-    env: {
-      SALE_START_TIME: SALE_START,
-      SALE_END_TIME: SALE_END,
-      STOCK_QUANTITY: opts.stockQuantity ?? "100",
-    },
+    env: {},
     logger: opts.logger ?? pino({ level: "silent" }),
     clock: () => opts.nowMs,
     createRedis: () => fake.client,
@@ -84,8 +85,10 @@ async function boot(opts: {
   return { fake, mongo, saleId, app };
 }
 
-describe("boot seed", () => {
-  it("cold boot seeds Product, Sale, SaleProduct, Inventory from env and is idempotent across boots", async () => {
+describe("boot: DB-driven sale + cold rebuild (Story 6-1)", () => {
+  it("pre-seeded domain docs drive cold rebuild and are idempotent across boots", async () => {
+    // Story 6-1: sale/product data comes from the DB (reserveSaleId pre-seeds
+    // the fake), not from env vars. Bootstrap reads and cold-rebuilds Redis.
     const mongo = createFakeMongo();
     const first = await boot({ nowMs: IN_WINDOW, mongo, stockQuantity: "5" });
     expect(first.fake.kv.get(stockKeyFor(first.saleId))).toBe("5");
@@ -97,7 +100,7 @@ describe("boot seed", () => {
     expect(sale?.startTime).toEqual(new Date(startMs));
     expect(sale?.stockQuantity).toBe(5);
 
-    // Second boot (same stores): still exactly one of each seed doc.
+    // Second boot (same stores, same stockQuantity): still exactly one of each.
     await boot({ nowMs: IN_WINDOW, mongo, redis: first.fake, stockQuantity: "5" });
     expect(mongo.products.size).toBe(1);
     expect(mongo.sales.size).toBe(1);

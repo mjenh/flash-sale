@@ -29,26 +29,24 @@ async function boot(opts: {
   nowMs: number;
   stock?: string;
   stockQuantity?: string;
-  /** Runs after the saleId is reserved but before bootstrap() seeds the
-   *  default product — lets tests add extra catalog products via
-   *  addCatalogProduct() ahead of the real seeder's own upsert. */
+  /** Runs after the saleId is reserved (KEYCAP-ONE already seeded) but before
+   *  bootstrap() runs — lets tests add extra catalog products via
+   *  addCatalogProduct(). Products added here appear AFTER KEYCAP-ONE in the
+   *  SaleProduct insertion order (and thus the response order). */
   beforeBootstrap?: (mongo: ReturnType<typeof createFakeMongo>, saleId: string) => Promise<void>;
   /** Story 5.3: overrides the sale-resolver's lookup ops entirely — used to
    *  simulate "no sales exist" for GET /api/sales/active's 404 branch, a
-   *  state the normal boot path can never reach (seed() always upserts one
-   *  Sale document before this override would matter for anything else). */
+   *  state the normal boot path can never reach. */
   saleLookupOps?: SaleLookupOps;
 }) {
   const mongo = createFakeMongo();
-  const saleId = await reserveSaleId(mongo, SALE_SLUG);
+  // Story 6-1: sale timing comes from DB. Pass 2026 timing so the clock
+  // (which is pinned to the 2026 window) sees an active sale.
+  const saleId = await reserveSaleId(mongo, SALE_SLUG, { startMs, endMs });
   await opts.beforeBootstrap?.(mongo, saleId);
   const fake: FakeRedis = createFakeRedis(opts.stock === undefined ? {} : { stock: opts.stock, saleId });
   const overrides: BootstrapOverrides = {
-    env: {
-      SALE_START_TIME: SALE_START,
-      SALE_END_TIME: SALE_END,
-      STOCK_QUANTITY: opts.stockQuantity ?? "100",
-    },
+    env: {},
     logger: pino({ level: "silent" }),
     clock: () => opts.nowMs,
     createRedis: () => fake.client,
@@ -138,15 +136,13 @@ describe("GET /api/sales/:slug (sale details with inventory, Story 4.3)", () => 
 
     const res = await request(app).get("/api/sales/flash-sale");
     expect(res.status).toBe(200);
-    // beforeBootstrap adds EXTRA-1 before bootstrap()'s own seeder links the
-    // default KEYCAP-ONE product, so SaleProduct listing order (and thus the
-    // response order) has EXTRA-1 first — proving the join preserves
-    // SaleProduct order rather than sorting or reordering by sku/name.
-    // EXTRA-1 was added via addCatalogProduct with no explicit prices → defaults to 0.
-    // KEYCAP-ONE was seeded by bootstrap with the config defaults.
+    // Story 6-1: reserveSaleId pre-seeds KEYCAP-ONE first (before beforeBootstrap
+    // runs), so KEYCAP-ONE appears first in SaleProduct insertion order and thus
+    // in the response. EXTRA-1, added by beforeBootstrap, appears second.
+    // This proves the join preserves SaleProduct insertion order.
     expect(res.body.sale.products).toEqual([
-      { sku: "EXTRA-1", name: "Extra Widget", initialQuantity: 25, remaining: 7, originalPrice: 0, flashSalePrice: 0 },
       { sku: PRODUCT_SKU, name: PRODUCT_NAME, initialQuantity: 100, remaining: 7, originalPrice: PRODUCT_ORIGINAL_PRICE, flashSalePrice: PRODUCT_FLASH_SALE_PRICE },
+      { sku: "EXTRA-1", name: "Extra Widget", initialQuantity: 25, remaining: 7, originalPrice: 0, flashSalePrice: 0 },
     ]);
   });
 
