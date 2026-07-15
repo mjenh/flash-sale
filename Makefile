@@ -64,4 +64,4 @@ stress: ## 5000-vs-100 fairness proof: stop api -> reset -> start api -> k6 -> v
 	npm run stress
 
 clean: ## stop stack and remove volumes + images
-	$(COMPOSE) down -v --rmi local
+	$(COMPOSE) --profile worker down -v --rmi local
