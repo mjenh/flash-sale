@@ -3,12 +3,12 @@
 // ("Can't reach the sale — retrying...") is not a verbatim API string, so it
 // never enters a chip.
 import type { SaleStatusBody } from "../api/sale.ts";
+import { localTime } from "../utils/formatSaleTime.ts";
 import "./StatusChip.css";
 
-/** Viewer-local h:mm AM/PM. Server-side UTC still governs all enforcement. */
-export function localTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-}
+// Re-exported so tests and sibling components that import `localTime` from
+// this module continue to work unchanged.
+export { localTime };
 
 /** The sole composer of the four status strings. */
 export function statusString(body: SaleStatusBody): string {

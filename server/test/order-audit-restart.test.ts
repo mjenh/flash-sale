@@ -77,7 +77,7 @@ async function boot(opts: {
     ...(opts.payment === undefined ? {} : { payment: opts.payment }),
     // Bypass the queue adapter for tests that need immediate Mongo writes.
     ...(opts.directAudit
-      ? { createOrderAudit: (productId) => createOrderRecorder(productId, mongo.ops.audit) }
+      ? { createOrderAudit: (productId, flashSalePrice) => createOrderRecorder(productId, flashSalePrice, mongo.ops.audit) }
       : {}),
   };
   const { app } = await bootstrap(overrides);
@@ -107,7 +107,7 @@ describe("boot seed", () => {
 });
 
 describe("async Mongo audit + payment after OK", () => {
-  it("a 202 accept audits upsert User + Order('confirmed') + one OrderLine (qty 1, unitPrice 0) and charges payment once", async () => {
+  it("a 202 accept audits upsert User + Order('confirmed') + one OrderLine (qty 1, unitPrice = flashSalePrice) and charges payment once", async () => {
     const charge = vi.fn(async (email: string) => ({ approved: true, reference: `noop:${email}` }));
     const { mongo } = await boot({ nowMs: IN_WINDOW, stock: "5", payment: { charge }, directAudit: true }).then(
       async (booted) => {
@@ -133,11 +133,14 @@ describe("async Mongo audit + payment after OK", () => {
     expect(order?.saleId).toBe([...mongo.sales.values()][0]?.id);
     expect(order?.userId).toBe(mongo.users.get("buyer@example.com"));
     expect(mongo.orderLines).toHaveLength(1);
+    // unitPrice must be the flash-sale price from config, not 0.
+    // Default FLASH_SALE_PRICE env var is unset in this test so config falls
+    // back to 99.99 — the same value createDomainSeeder seeds into saleproducts.
     expect(mongo.orderLines[0]).toEqual({
       orderId: order?.id,
       productId: [...mongo.products.values()][0]?.id,
       quantity: 1,
-      unitPrice: 0,
+      unitPrice: 99.99,
     });
     expect(charge).toHaveBeenCalledExactlyOnceWith("buyer@example.com");
   });

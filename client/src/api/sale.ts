@@ -114,6 +114,11 @@ export interface SaleProductDetails {
   name: string;
   initialQuantity: number;
   remaining: number | null;
+  /** Base retail price before any promotional discount. */
+  originalPrice: number;
+  /** Flash-sale promotional price for this event — equals orderlines.unitPrice
+   *  when the buyer completes a purchase. */
+  flashSalePrice: number;
 }
 
 /** Shape of `GET /api/sales/:slug`'s `sale` envelope. */
@@ -138,7 +143,11 @@ function parseSaleProductDetails(raw: unknown): SaleProductDetails | null {
     !Number.isInteger(p.initialQuantity) ||
     p.initialQuantity < 0 ||
     (p.remaining !== null &&
-      (typeof p.remaining !== "number" || !Number.isInteger(p.remaining) || p.remaining < 0))
+      (typeof p.remaining !== "number" || !Number.isInteger(p.remaining) || p.remaining < 0)) ||
+    typeof p.originalPrice !== "number" ||
+    p.originalPrice < 0 ||
+    typeof p.flashSalePrice !== "number" ||
+    p.flashSalePrice < 0
   ) {
     return null;
   }
@@ -147,6 +156,8 @@ function parseSaleProductDetails(raw: unknown): SaleProductDetails | null {
     name: p.name,
     initialQuantity: p.initialQuantity,
     remaining: p.remaining as number | null,
+    originalPrice: p.originalPrice,
+    flashSalePrice: p.flashSalePrice,
   };
 }
 

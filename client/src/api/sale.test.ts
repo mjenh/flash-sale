@@ -105,7 +105,14 @@ const DETAILS = {
   startTime: START_ISO,
   endTime: END_ISO,
   stockQuantity: 100,
-  products: [{ sku: "KC-001", name: "Keycap One", initialQuantity: 100, remaining: 42 }],
+  products: [{
+    sku: "KC-001",
+    name: "Keycap One",
+    initialQuantity: 100,
+    remaining: 42,
+    originalPrice: 199.99,
+    flashSalePrice: 99.99,
+  }],
 };
 
 describe("fetchSaleDetails (Story 5.2)", () => {

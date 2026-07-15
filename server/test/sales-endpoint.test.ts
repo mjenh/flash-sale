@@ -8,7 +8,14 @@ import request from "supertest";
 import { pino } from "pino";
 import { bootstrap, type BootstrapOverrides } from "../src/bootstrap.ts";
 import type { SaleLookupOps } from "../src/middleware/sale-resolver.ts";
-import { PRODUCT_NAME, PRODUCT_SKU, SALE_NAME, SALE_SLUG } from "../src/adapters/mongo/seed.ts";
+import {
+  PRODUCT_NAME,
+  PRODUCT_SKU,
+  PRODUCT_ORIGINAL_PRICE,
+  PRODUCT_FLASH_SALE_PRICE,
+  SALE_NAME,
+  SALE_SLUG,
+} from "../src/adapters/mongo/seed.ts";
 import { createFakeRedis, stockKeyFor, type FakeRedis } from "./helpers/fake-redis.ts";
 import { addCatalogProduct, createFakeMongo, reserveSaleId } from "./helpers/fake-mongo.ts";
 
@@ -107,7 +114,14 @@ describe("GET /api/sales/:slug (sale details with inventory, Story 4.3)", () => 
         endTime: "2026-07-10T05:00:00.000Z",
         stockQuantity: 100,
         products: [
-          { sku: PRODUCT_SKU, name: PRODUCT_NAME, initialQuantity: 100, remaining: 42 },
+          {
+            sku: PRODUCT_SKU,
+            name: PRODUCT_NAME,
+            initialQuantity: 100,
+            remaining: 42,
+            originalPrice: PRODUCT_ORIGINAL_PRICE,
+            flashSalePrice: PRODUCT_FLASH_SALE_PRICE,
+          },
         ],
       },
     });
@@ -128,9 +142,11 @@ describe("GET /api/sales/:slug (sale details with inventory, Story 4.3)", () => 
     // default KEYCAP-ONE product, so SaleProduct listing order (and thus the
     // response order) has EXTRA-1 first — proving the join preserves
     // SaleProduct order rather than sorting or reordering by sku/name.
+    // EXTRA-1 was added via addCatalogProduct with no explicit prices → defaults to 0.
+    // KEYCAP-ONE was seeded by bootstrap with the config defaults.
     expect(res.body.sale.products).toEqual([
-      { sku: "EXTRA-1", name: "Extra Widget", initialQuantity: 25, remaining: 7 },
-      { sku: PRODUCT_SKU, name: PRODUCT_NAME, initialQuantity: 100, remaining: 7 },
+      { sku: "EXTRA-1", name: "Extra Widget", initialQuantity: 25, remaining: 7, originalPrice: 0, flashSalePrice: 0 },
+      { sku: PRODUCT_SKU, name: PRODUCT_NAME, initialQuantity: 100, remaining: 7, originalPrice: PRODUCT_ORIGINAL_PRICE, flashSalePrice: PRODUCT_FLASH_SALE_PRICE },
     ]);
   });
 
@@ -149,7 +165,14 @@ describe("GET /api/sales/:slug (sale details with inventory, Story 4.3)", () => 
         endTime: "2026-07-10T05:00:00.000Z",
         stockQuantity: 100,
         products: [
-          { sku: PRODUCT_SKU, name: PRODUCT_NAME, initialQuantity: 100, remaining: null },
+          {
+            sku: PRODUCT_SKU,
+            name: PRODUCT_NAME,
+            initialQuantity: 100,
+            remaining: null,
+            originalPrice: PRODUCT_ORIGINAL_PRICE,
+            flashSalePrice: PRODUCT_FLASH_SALE_PRICE,
+          },
         ],
       },
     });

@@ -69,9 +69,10 @@ describe("mongo domain models", () => {
     expect(status.options.required).toBe(true);
   });
 
-  it("order line snapshots default to qty 1 / unitPrice 0", () => {
+  it("order line defaults qty to 1 and requires unitPrice without a default (snapshot enforced by caller)", () => {
     expect(OrderLine.schema.path("quantity").options.default).toBe(1);
-    expect(OrderLine.schema.path("unitPrice").options.default).toBe(0);
+    expect(OrderLine.schema.path("unitPrice").options.required).toBe(true);
+    expect(OrderLine.schema.path("unitPrice").options.default).toBeUndefined();
   });
 
 });

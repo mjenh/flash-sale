@@ -51,10 +51,11 @@ export interface BootstrapOverrides {
   disconnectMongoDb?: () => Promise<void>;
   /** Test seams — tests run the real recorder/seeder/catalog reader over fake model ops. */
   mongoModelOps?: { audit: AuditModelOps; seed: SeedModelOps; catalog: CatalogModelOps };
-  /** Override the order audit adapter — factory receives the boot-seeded productId so tests
-   *  that need immediate Mongo writes can inject createOrderRecorder(productId, ops) directly
-   *  instead of the default write-behind queue adapter. */
-  createOrderAudit?: (productId: string) => import("./services/order.ts").OrderAuditPort;
+  /** Override the order audit adapter — factory receives the boot-seeded productId and
+   *  flashSalePrice so tests that need immediate Mongo writes can inject
+   *  createOrderRecorder(productId, flashSalePrice, ops) directly instead of the
+   *  default write-behind queue adapter. */
+  createOrderAudit?: (productId: string, flashSalePrice: number) => import("./services/order.ts").OrderAuditPort;
   payment?: PaymentProvider;
   /** Dedicated subscriber connection for sale:events pub/sub. */
   duplicateRedis?: (client: RedisClient) => RedisClient;
@@ -311,15 +312,19 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
   const orderService = createOrderService({
     clock,
     orders: orderAttemptPort,
-    // productId still closes over the single boot-seeded product (v1.1 ships
-    // exactly one product per sale, per Story 4.3) — only saleId travels
-    // per-call now.
+    // productId and flashSalePrice still close over the single boot-seeded
+    // product (v1.1 ships exactly one product per sale, per Story 4.3) —
+    // only saleId travels per-call now.
     // Write-Behind: default path enqueues to the Redis Stream; a worker process
     // drains it into MongoDB asynchronously. Tests that need immediate Mongo
     // writes (audit + cold-restart tests) inject createOrderAudit to bypass the queue.
     audit: overrides.createOrderAudit
-      ? overrides.createOrderAudit(saleRefs.productId)
-      : createQueueAuditAdapter(createOrderQueueProducer(redis), saleRefs.productId),
+      ? overrides.createOrderAudit(saleRefs.productId, saleRefs.flashSalePrice)
+      : createQueueAuditAdapter(
+          createOrderQueueProducer(redis),
+          saleRefs.productId,
+          saleRefs.flashSalePrice,
+        ),
     payment: overrides.payment ?? noopPaymentProvider,
     events: orderEventsPort,
     reportSideEffectFailure: (effect, err) => {

@@ -6,7 +6,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PROCESSING_LINE, SalePage, UPCOMING_BUTTON_REASON } from "./SalePage.tsx";
+import { PROCESSING_LINE, SalePage, upcomingButtonReason } from "./SalePage.tsx";
 import { HOUSE_RULES } from "../components/MarqueeBand.tsx";
 import { ENDED_FRAME, SOLD_OUT_FRAME } from "../components/SaleStatusZone.tsx";
 import { SUCCESS_FRAME } from "../components/VerdictPanel.tsx";
@@ -111,7 +111,7 @@ describe("the living status zone, in the page", () => {
   it("paints on the first response — no skeleton in between", async () => {
     render(<SalePage slug={SLUG} />);
     expect(screen.queryByTestId("status-chip")).toBeNull();
-    expect(screen.getByText("Doors at noon.")).toBeInTheDocument();
+    expect(screen.getByText("Doors open soon.")).toBeInTheDocument();
 
     await act(async () => {
       FakeEventSource.current.open();
@@ -125,7 +125,7 @@ describe("the living status zone, in the page", () => {
     const seen = new Set<string>();
 
     for (const [status, stock, reason] of [
-      ["upcoming", 100, UPCOMING_BUTTON_REASON],
+      ["upcoming", 100, upcomingButtonReason(START)],
       ["active", 37, null],
       ["sold_out", 0, SOLD_OUT_FRAME],
       ["ended", 0, ENDED_FRAME],

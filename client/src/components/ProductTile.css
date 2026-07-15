@@ -1,7 +1,16 @@
+/* Product tile wrapper: stacks the keycap graphic and the price block
+ * vertically. The wrapper itself has no visual chrome. */
+.product-tile-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-stack);
+  margin: var(--sp-unit) auto var(--sp-zone);
+}
+
 /* 190px cream keycap face: 4px ink border, oversized 34px radius (it's a
  * keycap), −4° rotation, hard under-shadow. Rotation is reserved for stickers,
  * tags, and this tile. */
-
 .product-tile {
   width: 190px;
   height: 190px;
@@ -13,7 +22,7 @@
   border-radius: var(--r-tile);
   box-shadow: var(--shadow-panel);
   transform: rotate(-4deg);
-  margin: var(--sp-unit) auto var(--sp-zone);
+  /* margin handled by .product-tile-wrap */
 }
 
 .product-tile__mark {
@@ -21,5 +30,31 @@
   font-size: 64px;
   font-weight: 900;
   letter-spacing: -2px;
+  color: var(--ink);
+}
+
+/* Price block: original (crossed-out) and flash-sale price side by side. */
+.product-tile__prices {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-stack);
+}
+
+/* Crossed-out original price — muted, sentence-sized. */
+.product-tile__original {
+  font-family: var(--font-sans);
+  font-size: var(--body-size);
+  font-weight: var(--body-weight);
+  color: var(--sand-mute);
+  text-decoration: line-through;
+}
+
+/* Flash sale price — bold, larger, ink-coloured to draw the eye. */
+.product-tile__flash {
+  font-family: var(--font-sans);
+  font-size: var(--headline-size);
+  font-weight: var(--headline-weight);
+  letter-spacing: var(--headline-tracking);
+  line-height: var(--headline-line);
   color: var(--ink);
 }

@@ -28,6 +28,11 @@ export interface QueueOrderPayload {
   email: string;
   /** UTC epoch ms when the order was accepted by Redis. */
   enqueuedAt: number;
+  /** Immutable price snapshot — the flashSalePrice at the instant of
+   *  acceptance. Carried through the queue so the worker can persist it
+   *  without a second Mongo lookup, and so historical unitPrices are
+   *  unaffected by later price changes in saleproducts. */
+  flashSalePrice: number;
 }
 
 /** A deserialized stream entry as returned by readBatch(). */
@@ -47,7 +52,7 @@ export interface ProducerOptions {
 
 export interface OrderQueueProducer {
   /** XADD the order payload to the stream; returns the generated orderId UUID. */
-  enqueue(saleId: string, productId: string, email: string): Promise<string>;
+  enqueue(saleId: string, productId: string, email: string, flashSalePrice: number): Promise<string>;
 }
 
 export interface ConsumerOptions {
@@ -83,7 +88,7 @@ export function createOrderQueueProducer(
   { maxStreamLen = 200_000 }: ProducerOptions = {},
 ): OrderQueueProducer {
   return {
-    async enqueue(saleId: string, productId: string, email: string): Promise<string> {
+    async enqueue(saleId: string, productId: string, email: string, flashSalePrice: number): Promise<string> {
       const orderId = randomUUID();
       const payload: QueueOrderPayload = {
         orderId,
@@ -91,6 +96,7 @@ export function createOrderQueueProducer(
         productId,
         email,
         enqueuedAt: Date.now(),
+        flashSalePrice,
       };
       // XADD queue:orders * ... MAXLEN ~ <threshold>
       // Approximate trimming (~) keeps XADD O(1) amortised; exact (=) would
@@ -185,10 +191,11 @@ export function createOrderQueueConsumer(
 export function createQueueAuditAdapter(
   producer: OrderQueueProducer,
   productId: string,
+  flashSalePrice: number,
 ): OrderAuditPort {
   return {
     async recordOrder(saleId: string, email: string): Promise<void> {
-      await producer.enqueue(saleId, productId, email);
+      await producer.enqueue(saleId, productId, email, flashSalePrice);
     },
   };
 }

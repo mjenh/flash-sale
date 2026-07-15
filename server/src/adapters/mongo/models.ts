@@ -22,12 +22,15 @@ export const User = mongoose.model<UserDoc>("User", userSchema, "users");
 export interface ProductDoc {
   sku: string;
   name: string;
+  /** Base retail price before any promotional discount. */
+  originalPrice: number;
 }
 
 const productSchema = new Schema<ProductDoc>(
   {
     sku: { type: String, required: true, unique: true },
     name: { type: String, required: true },
+    originalPrice: { type: Number, required: true },
   },
   { timestamps: true },
 );
@@ -60,12 +63,15 @@ export const Sale = mongoose.model<SaleDoc>("Sale", saleSchema, "sales");
 export interface SaleProductDoc {
   saleId: Types.ObjectId;
   productId: Types.ObjectId;
+  /** Promotional price for this product in this specific sale event. */
+  flashSalePrice: number;
 }
 
 const saleProductSchema = new Schema<SaleProductDoc>(
   {
     saleId: { type: Schema.Types.ObjectId, ref: "Sale", required: true },
     productId: { type: Schema.Types.ObjectId, ref: "Product", required: true },
+    flashSalePrice: { type: Number, required: true },
   },
   { timestamps: true },
 );
@@ -121,7 +127,9 @@ export interface OrderLineDoc {
   orderId: Types.ObjectId;
   productId: Types.ObjectId;
   quantity: number;
-  /** Price snapshot — 0 while payment is out of scope. */
+  /** Immutable price snapshot — the flashSalePrice captured at the instant of
+   *  purchase. Never derived from client input; always sourced from the
+   *  saleproducts collection at order-acceptance time. */
   unitPrice: number;
 }
 
@@ -130,7 +138,7 @@ const orderLineSchema = new Schema<OrderLineDoc>(
     orderId: { type: Schema.Types.ObjectId, ref: "Order", required: true },
     productId: { type: Schema.Types.ObjectId, ref: "Product", required: true },
     quantity: { type: Number, required: true, default: 1 },
-    unitPrice: { type: Number, required: true, default: 0 },
+    unitPrice: { type: Number, required: true },
   },
   { timestamps: true },
 );

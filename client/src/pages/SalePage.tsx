@@ -12,7 +12,9 @@
 // (AC2) and hands it down. Every behavioral/accessibility invariant from
 // Epics 1-3 is unchanged — only the URL construction (via the slug) and the
 // new "Sale not found" state (AC3) are new.
+import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
+import { localTime } from "../utils/formatSaleTime.ts";
 import "./SalePage.css";
 import { MarqueeBand } from "../components/MarqueeBand.tsx";
 import { Masthead } from "../components/Masthead.tsx";
@@ -28,11 +30,13 @@ import { VerdictPanel } from "../components/VerdictPanel.tsx";
 import { useSaleStatus } from "../hooks/useSaleStatus.ts";
 import { useOrder } from "../hooks/useOrder.ts";
 import { useEmailField } from "../hooks/useEmailField.ts";
-import type { SaleStatusBody } from "../api/sale.ts";
+import { fetchSaleDetails, type SaleDetails, type SaleStatusBody } from "../api/sale.ts";
 import { NotFoundPage } from "./NotFoundPage.tsx";
 
-export const UPCOMING_BUTTON_REASON =
-  "The button naps until noon — type your email now so you're ready when it wakes.";
+/** Dynamic — returns the disabled reason for the Buy Now button during the upcoming window. */
+export function upcomingButtonReason(startTime: string): string {
+  return `The button opens at ${localTime(startTime)} — type your email now so you're ready.`;
+}
 export const PROCESSING_LINE = "Hang tight — checking stock for you…";
 /** The disabled reason during the brief cold-load window — status not read yet
  *  (channel `connecting`), or the stream is down and a poll has not landed a
@@ -58,7 +62,7 @@ function buttonReason(body: SaleStatusBody | null): string | null {
   }
   switch (body.status) {
     case "upcoming":
-      return UPCOMING_BUTTON_REASON;
+      return upcomingButtonReason(body.startTime);
     case "sold_out":
       return SOLD_OUT_FRAME;
     case "ended":
@@ -77,6 +81,31 @@ export interface SalePageProps {
 export function SalePage({ slug }: SalePageProps) {
   const { body, channel, notFound, refetch } = useSaleStatus(slug);
   const [email, setEmail] = useEmailField();
+
+  // Fetch the sale catalog once to obtain originalPrice and flashSalePrice.
+  // A failure here is non-fatal — prices simply remain undefined and the
+  // product tile renders without the price block rather than breaking the page.
+  const [saleDetails, setSaleDetails] = useState<SaleDetails | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetchSaleDetails(slug)
+      .then((details) => {
+        if (!cancelled) {
+          setSaleDetails(details);
+        }
+      })
+      .catch(() => {
+        // Non-fatal — price display degrades gracefully.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [slug]);
+
+  // Pick prices from the first (and v1.1 only) product in the catalog.
+  const firstProduct = saleDetails?.products[0];
+  const originalPrice = firstProduct?.originalPrice;
+  const flashSalePrice = firstProduct?.flashSalePrice;
   // Re-fetch sale status after every attempt — win, loss, or error.
   const { phase, verdict, verdictSource, fieldError, submit, clearFieldError, clearVerdict } =
     useOrder({
@@ -135,7 +164,7 @@ export function SalePage({ slug }: SalePageProps) {
         <main className="poster">
           <div className="poster__hero">
             <h1 className="t-display hero__headline">
-              The <span className="hero__hollow">Noon</span> Drop
+              The <span className="hero__hollow">{body?.startTime ? localTime(body.startTime) : "Live"}</span> Drop
             </h1>
             <p className="t-body hero__sub">
               One limited-run mechanical keyboard.
@@ -145,7 +174,7 @@ export function SalePage({ slug }: SalePageProps) {
           </div>
 
           <div className="poster__action">
-            <ProductTile />
+            <ProductTile originalPrice={originalPrice} flashSalePrice={flashSalePrice} />
 
             <Panel variant="yellow-lifted" className="form-panel">
               <form
@@ -245,8 +274,10 @@ export function SalePage({ slug }: SalePageProps) {
               <VerdictPanel
                 verdict={verdict}
                 saleState={body?.status ?? null}
+                startTime={body?.startTime}
                 onClose={clearVerdict}
                 focusOnMount={verdictSource === "submit"}
+                purchasePrice={verdict.kind === "success" ? flashSalePrice : undefined}
               />
             )}
           </div>

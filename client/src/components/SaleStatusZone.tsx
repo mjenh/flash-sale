@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { SaleStatusBody } from "../api/sale.ts";
 import type { Channel } from "../hooks/useSaleStatus.ts";
+import { localTime } from "../utils/formatSaleTime.ts";
 import { Panel } from "./Panel.tsx";
 import { StatusChip, statusString } from "./StatusChip.tsx";
 import { LiveSticker } from "./LiveSticker.tsx";
@@ -17,7 +18,12 @@ import { Countdown } from "./Countdown.tsx";
 import "./SaleStatusZone.css";
 
 export const COLD_LOAD_LINE = "Can't reach the sale — retrying…";
-export const UPCOMING_FRAME = "Almost time — doors open at 12:00.";
+/** Static fallback for contexts that lack a startTime (e.g. VerdictPanel). */
+export const UPCOMING_FRAME = "Almost time — the sale hasn't opened yet.";
+/** Dynamic — returns a formatted copy string for the upcoming state. */
+export function upcomingFrame(startTime: string): string {
+  return `Almost time — doors open at ${localTime(startTime)}.`;
+}
 export const SOLD_OUT_FRAME = "Gone in seconds — every last one found a home.";
 export const ENDED_FRAME = "That one's a wrap.";
 export const LIVE_NOTE = "Grab one now!";
@@ -94,7 +100,8 @@ export function SaleStatusZone({ body, channel }: SaleStatusZoneProps) {
             {COLD_LOAD_LINE}
           </p>
         ) : (
-          <p className="t-headline status-zone__headline">Doors at noon.</p>
+          // No timing data yet — generic placeholder until the first response lands.
+          <p className="t-headline status-zone__headline">Doors open soon.</p>
         )}
         {announcements}
       </Panel>
@@ -104,9 +111,9 @@ export function SaleStatusZone({ body, channel }: SaleStatusZoneProps) {
   if (body.status === "upcoming") {
     return (
       <Panel variant="poster" className="stripes status-zone">
-        <p className="t-headline status-zone__headline">Doors at noon.</p>
+        <p className="t-headline status-zone__headline">Doors at {localTime(body.startTime)}.</p>
         <StatusChip body={body} />
-        <p className="t-body status-zone__frame">{UPCOMING_FRAME}</p>
+        <p className="t-body status-zone__frame">{upcomingFrame(body.startTime)}</p>
         <Countdown startTime={body.startTime} />
         {announcements}
       </Panel>

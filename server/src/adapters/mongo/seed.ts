@@ -10,11 +10,13 @@ import type { SaleRefs } from "./audit.ts";
 
 // Default identity values — kept as named exports so existing tests can import
 // them as fixture constants. The live seed() path reads from AppConfig, which
-// defaults to these strings when the env vars are unset.
+// defaults to these strings/numbers when the env vars are unset.
 export const SALE_SLUG = "flash-sale";
 export const SALE_NAME = "Flash Sale";
 export const PRODUCT_SKU = "KEYCAP-ONE";
 export const PRODUCT_NAME = "Keycap One";
+export const PRODUCT_ORIGINAL_PRICE = 199.99;
+export const PRODUCT_FLASH_SALE_PRICE = 99.99;
 
 /** Story 4.5: the shape of a Sale document needed by boot-time active-sale
  *  resolution — structurally identical to `SaleSummary`
@@ -31,12 +33,12 @@ export interface SeedSaleDoc {
 
 /** Narrow model surface — one mongoose query per op. */
 export interface SeedModelOps {
-  upsertProduct(sku: string, name: string): Promise<string>;
+  upsertProduct(sku: string, name: string, originalPrice: number): Promise<string>;
   upsertSale(
     slug: string,
     sale: { name: string; startTime: Date; endTime: Date; stockQuantity: number },
   ): Promise<string>;
-  upsertSaleProduct(saleId: string, productId: string): Promise<void>;
+  upsertSaleProduct(saleId: string, productId: string, flashSalePrice: number): Promise<void>;
   upsertInventory(productId: string, initialQuantity: number): Promise<void>;
   listConfirmedOrderEmails(saleId: string): Promise<string[]>;
   /** Story 4.5: ALL Sale documents (not just the boot-seeded singleton) —
@@ -49,10 +51,12 @@ export interface SeedModelOps {
 }
 
 export const mongoSeedModelOps: SeedModelOps = {
-  async upsertProduct(sku: string, name: string): Promise<string> {
+  async upsertProduct(sku: string, name: string, originalPrice: number): Promise<string> {
     const product = await Product.findOneAndUpdate(
       { sku },
-      { $setOnInsert: { name } },
+      // $set updates originalPrice on every boot so env changes take effect;
+      // $setOnInsert handles the immutable name only on first creation.
+      { $set: { originalPrice }, $setOnInsert: { name } },
       { upsert: true, new: true },
     );
     if (product === null) {
@@ -73,9 +77,10 @@ export const mongoSeedModelOps: SeedModelOps = {
     return String(sale._id);
   },
 
-  async upsertSaleProduct(saleId: string, productId: string): Promise<void> {
-    // Empty update: with upsert, the filter's equality fields become the doc.
-    await SaleProduct.findOneAndUpdate({ saleId, productId }, {}, { upsert: true });
+  async upsertSaleProduct(saleId: string, productId: string, flashSalePrice: number): Promise<void> {
+    // $set updates flashSalePrice on every boot so env changes propagate;
+    // the filter keys (saleId, productId) become the doc on first insert.
+    await SaleProduct.findOneAndUpdate({ saleId, productId }, { $set: { flashSalePrice } }, { upsert: true });
   },
 
   async upsertInventory(productId: string, initialQuantity: number): Promise<void> {
@@ -117,16 +122,20 @@ export interface DomainSeeder {
 export function createDomainSeeder(ops: SeedModelOps = mongoSeedModelOps): DomainSeeder {
   return {
     async seed(config: AppConfig): Promise<SaleRefs> {
-      const productId = await ops.upsertProduct(config.productSku, config.productName);
+      const productId = await ops.upsertProduct(
+        config.productSku,
+        config.productName,
+        config.originalPrice,
+      );
       const saleId = await ops.upsertSale(config.saleSlug, {
         name: config.saleName,
         startTime: new Date(config.saleStartMs),
         endTime: new Date(config.saleEndMs),
         stockQuantity: config.stockQuantity,
       });
-      await ops.upsertSaleProduct(saleId, productId);
+      await ops.upsertSaleProduct(saleId, productId, config.flashSalePrice);
       await ops.upsertInventory(productId, config.stockQuantity);
-      return { saleId, productId };
+      return { saleId, productId, flashSalePrice: config.flashSalePrice };
     },
 
     listConfirmedOrderEmails(saleId: string): Promise<string[]> {

@@ -7,6 +7,8 @@ import {
   createDomainSeeder,
   PRODUCT_NAME,
   PRODUCT_SKU,
+  PRODUCT_ORIGINAL_PRICE,
+  PRODUCT_FLASH_SALE_PRICE,
   SALE_NAME,
   SALE_SLUG,
   type SeedModelOps,
@@ -44,16 +46,16 @@ describe("createDomainSeeder (boot seed)", () => {
     const ops = fakeOps();
     const refs = await createDomainSeeder(ops).seed(config);
 
-    expect(ops.upsertProduct).toHaveBeenCalledExactlyOnceWith(PRODUCT_SKU, PRODUCT_NAME);
+    expect(ops.upsertProduct).toHaveBeenCalledExactlyOnceWith(PRODUCT_SKU, PRODUCT_NAME, PRODUCT_ORIGINAL_PRICE);
     expect(ops.upsertSale).toHaveBeenCalledExactlyOnceWith(SALE_SLUG, {
       name: SALE_NAME,
       startTime: new Date(config.saleStartMs),
       endTime: new Date(config.saleEndMs),
       stockQuantity: 7,
     });
-    expect(ops.upsertSaleProduct).toHaveBeenCalledExactlyOnceWith("sale-1", "product-1");
+    expect(ops.upsertSaleProduct).toHaveBeenCalledExactlyOnceWith("sale-1", "product-1", PRODUCT_FLASH_SALE_PRICE);
     expect(ops.upsertInventory).toHaveBeenCalledExactlyOnceWith("product-1", 7);
-    expect(refs).toEqual({ saleId: "sale-1", productId: "product-1" });
+    expect(refs).toEqual({ saleId: "sale-1", productId: "product-1", flashSalePrice: PRODUCT_FLASH_SALE_PRICE });
   });
 
   it("stable identities: the sku, slug, and name are constants (single-sale system)", () => {

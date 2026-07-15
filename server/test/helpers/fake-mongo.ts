@@ -28,7 +28,7 @@ export interface FakeOrderLineDoc {
   orderId: string;
   productId: string;
   quantity: number;
-  unitPrice: number;
+  unitPrice: number; // snapshot of flashSalePrice at acceptance time
 }
 
 export interface FakeSaleDoc {
@@ -53,9 +53,9 @@ export interface FakeSaleWindowDoc {
 
 export interface FakeMongo {
   users: Map<string, string>; // identifier -> userId
-  products: Map<string, { id: string; name: string }>; // sku -> doc
+  products: Map<string, { id: string; name: string; originalPrice: number }>; // sku -> doc
   sales: Map<string, FakeSaleDoc>; // slug -> doc
-  saleProducts: Set<string>; // `${saleId}:${productId}`
+  saleProducts: Map<string, number>; // `${saleId}:${productId}` -> flashSalePrice
   inventories: Map<string, number>; // productId -> initialQuantity
   orders: FakeOrderDoc[];
   orderLines: FakeOrderLineDoc[];
@@ -76,7 +76,7 @@ export function createFakeMongo(): FakeMongo {
     users: new Map(),
     products: new Map(),
     sales: new Map(),
-    saleProducts: new Set(),
+    saleProducts: new Map(),
     inventories: new Map(),
     orders: [],
     orderLines: [],
@@ -125,13 +125,15 @@ export function createFakeMongo(): FakeMongo {
   };
 
   fake.seed = {
-    async upsertProduct(sku: string, name: string): Promise<string> {
+    async upsertProduct(sku: string, name: string, originalPrice: number): Promise<string> {
       const existing = fake.products.get(sku);
       if (existing !== undefined) {
+        // $set semantics: originalPrice updates on every boot.
+        existing.originalPrice = originalPrice;
         return existing.id;
       }
       const productId = id("product");
-      fake.products.set(sku, { id: productId, name });
+      fake.products.set(sku, { id: productId, name, originalPrice });
       return productId;
     },
 
@@ -150,8 +152,8 @@ export function createFakeMongo(): FakeMongo {
       return saleId;
     },
 
-    async upsertSaleProduct(saleId: string, productId: string): Promise<void> {
-      fake.saleProducts.add(`${saleId}:${productId}`);
+    async upsertSaleProduct(saleId: string, productId: string, flashSalePrice: number): Promise<void> {
+      fake.saleProducts.set(`${saleId}:${productId}`, flashSalePrice);
     },
 
     async upsertInventory(productId: string, initialQuantity: number): Promise<void> {
@@ -187,16 +189,24 @@ export function createFakeMongo(): FakeMongo {
   fake.catalog = {
     async listSaleProducts(saleId: string) {
       const prefix = `${saleId}:`;
-      return [...fake.saleProducts]
-        .filter((key) => key.startsWith(prefix))
-        .map((key) => ({ productId: key.slice(prefix.length) }));
+      return [...fake.saleProducts.entries()]
+        .filter(([key]) => key.startsWith(prefix))
+        .map(([key, flashSalePrice]) => ({
+          productId: key.slice(prefix.length),
+          flashSalePrice,
+        }));
     },
 
     async listProductsByIds(productIds: string[]) {
       const idSet = new Set(productIds);
       return [...fake.products.entries()]
         .filter(([, product]) => idSet.has(product.id))
-        .map(([sku, product]) => ({ id: product.id, sku, name: product.name }));
+        .map(([sku, product]) => ({
+          id: product.id,
+          sku,
+          name: product.name,
+          originalPrice: product.originalPrice,
+        }));
     },
 
     async listInventoriesByProductIds(productIds: string[]) {
@@ -219,10 +229,16 @@ export function createFakeMongo(): FakeMongo {
 export async function addCatalogProduct(
   mongo: FakeMongo,
   saleId: string,
-  product: { sku: string; name: string; initialQuantity: number },
+  product: {
+    sku: string;
+    name: string;
+    initialQuantity: number;
+    originalPrice?: number;
+    flashSalePrice?: number;
+  },
 ): Promise<string> {
-  const productId = await mongo.seed.upsertProduct(product.sku, product.name);
-  await mongo.seed.upsertSaleProduct(saleId, productId);
+  const productId = await mongo.seed.upsertProduct(product.sku, product.name, product.originalPrice ?? 0);
+  await mongo.seed.upsertSaleProduct(saleId, productId, product.flashSalePrice ?? 0);
   await mongo.seed.upsertInventory(productId, product.initialQuantity);
   return productId;
 }

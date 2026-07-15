@@ -13,16 +13,22 @@ export interface CatalogProduct {
   sku: string;
   name: string;
   initialQuantity: number;
+  /** Base retail price from the products collection. */
+  originalPrice: number;
+  /** Promotional price from the saleproducts collection for this event. */
+  flashSalePrice: number;
 }
 
 interface RawSaleProduct {
   productId: string;
+  flashSalePrice: number;
 }
 
 interface RawProduct {
   id: string;
   sku: string;
   name: string;
+  originalPrice: number;
 }
 
 interface RawInventory {
@@ -40,12 +46,20 @@ export interface CatalogModelOps {
 export const mongoCatalogModelOps: CatalogModelOps = {
   async listSaleProducts(saleId: string): Promise<RawSaleProduct[]> {
     const docs = await SaleProduct.find({ saleId }).lean();
-    return docs.map((doc) => ({ productId: String(doc.productId) }));
+    return docs.map((doc) => ({
+      productId: String(doc.productId),
+      flashSalePrice: doc.flashSalePrice ?? 0,
+    }));
   },
 
   async listProductsByIds(productIds: string[]): Promise<RawProduct[]> {
     const docs = await Product.find({ _id: { $in: productIds } }).lean();
-    return docs.map((doc) => ({ id: String(doc._id), sku: doc.sku, name: doc.name }));
+    return docs.map((doc) => ({
+      id: String(doc._id),
+      sku: doc.sku,
+      name: doc.name,
+      originalPrice: doc.originalPrice ?? 0,
+    }));
   },
 
   async listInventoriesByProductIds(productIds: string[]): Promise<RawInventory[]> {
@@ -81,6 +95,7 @@ export function createCatalogReader(ops: CatalogModelOps = mongoCatalogModelOps)
       ]);
       const productById = new Map(products.map((p) => [p.id, p]));
       const inventoryByProductId = new Map(inventories.map((inv) => [inv.productId, inv.initialQuantity]));
+      const saleProductByProductId = new Map(saleProducts.map((sp) => [sp.productId, sp]));
 
       const result: CatalogProduct[] = [];
       for (const sp of saleProducts) {
@@ -92,6 +107,8 @@ export function createCatalogReader(ops: CatalogModelOps = mongoCatalogModelOps)
           sku: product.sku,
           name: product.name,
           initialQuantity: inventoryByProductId.get(sp.productId) ?? 0,
+          originalPrice: product.originalPrice,
+          flashSalePrice: saleProductByProductId.get(sp.productId)?.flashSalePrice ?? 0,
         });
       }
       return result;

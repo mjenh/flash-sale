@@ -37,6 +37,10 @@ export interface AppConfig {
   productSku: string;
   /** Product display name seeded at boot (e.g. "Keycap One"). */
   productName: string;
+  /** Base / original retail price of the product (e.g. 199.99). */
+  originalPrice: number;
+  /** Flash-sale promotional price snapshotted into every order line (e.g. 99.99). */
+  flashSalePrice: number;
 }
 
 type Env = Record<string, string | undefined>;
@@ -68,6 +72,18 @@ function positiveInt(env: Env, key: string, fallback: number): number {
   const n = Number(raw);
   if (!Number.isSafeInteger(n) || n <= 0) {
     throw new ConfigError(`${key} must be a positive integer, got: "${raw}"`);
+  }
+  return n;
+}
+
+function positiveDecimal(env: Env, key: string, fallback: number): number {
+  const raw = env[key];
+  if (raw === undefined || raw.trim() === "") {
+    return fallback;
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new ConfigError(`${key} must be a positive number, got: "${raw}"`);
   }
   return n;
 }
@@ -152,5 +168,7 @@ export function loadConfig(env: Env = process.env): AppConfig {
     saleName: env.SALE_NAME?.trim() || "Flash Sale",
     productSku: env.PRODUCT_SKU?.trim() || "KEYCAP-ONE",
     productName: env.PRODUCT_NAME?.trim() || "Keycap One",
+    originalPrice: positiveDecimal(env, "ORIGINAL_PRICE", 199.99),
+    flashSalePrice: positiveDecimal(env, "FLASH_SALE_PRICE", 99.99),
   };
 }

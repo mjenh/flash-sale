@@ -18,16 +18,22 @@ function fakeOps(overrides: Partial<CatalogModelOps> = {}) {
 }
 
 describe("createCatalogReader (Sale -> SaleProduct -> Product -> Inventory join)", () => {
-  it("joins a single product's sku/name/initialQuantity", async () => {
+  it("joins a single product's sku/name/initialQuantity/originalPrice/flashSalePrice", async () => {
     const ops = fakeOps({
-      listSaleProducts: vi.fn(async () => [{ productId: "product-1" }]),
-      listProductsByIds: vi.fn(async () => [{ id: "product-1", sku: "KC-001", name: "Keycap One" }]),
+      listSaleProducts: vi.fn(async () => [{ productId: "product-1", flashSalePrice: 99.99 }]),
+      listProductsByIds: vi.fn(async () => [{ id: "product-1", sku: "KC-001", name: "Keycap One", originalPrice: 199.99 }]),
       listInventoriesByProductIds: vi.fn(async () => [{ productId: "product-1", initialQuantity: 100 }]),
     });
 
     const products = await createCatalogReader(ops).listProductsForSale("sale-1");
 
-    expect(products).toEqual([{ sku: "KC-001", name: "Keycap One", initialQuantity: 100 }]);
+    expect(products).toEqual([{
+      sku: "KC-001",
+      name: "Keycap One",
+      initialQuantity: 100,
+      originalPrice: 199.99,
+      flashSalePrice: 99.99,
+    }]);
     expect(ops.listSaleProducts).toHaveBeenCalledExactlyOnceWith("sale-1");
     expect(ops.listProductsByIds).toHaveBeenCalledExactlyOnceWith(["product-1"]);
     expect(ops.listInventoriesByProductIds).toHaveBeenCalledExactlyOnceWith(["product-1"]);
@@ -35,10 +41,13 @@ describe("createCatalogReader (Sale -> SaleProduct -> Product -> Inventory join)
 
   it("preserves SaleProduct listing order across multiple products", async () => {
     const ops = fakeOps({
-      listSaleProducts: vi.fn(async () => [{ productId: "p-2" }, { productId: "p-1" }]),
+      listSaleProducts: vi.fn(async () => [
+        { productId: "p-2", flashSalePrice: 49.99 },
+        { productId: "p-1", flashSalePrice: 59.99 },
+      ]),
       listProductsByIds: vi.fn(async () => [
-        { id: "p-1", sku: "AAA", name: "First" },
-        { id: "p-2", sku: "BBB", name: "Second" },
+        { id: "p-1", sku: "AAA", name: "First", originalPrice: 120.00 },
+        { id: "p-2", sku: "BBB", name: "Second", originalPrice: 100.00 },
       ]),
       listInventoriesByProductIds: vi.fn(async () => [
         { productId: "p-1", initialQuantity: 10 },
@@ -49,8 +58,8 @@ describe("createCatalogReader (Sale -> SaleProduct -> Product -> Inventory join)
     const products = await createCatalogReader(ops).listProductsForSale("sale-1");
 
     expect(products).toEqual([
-      { sku: "BBB", name: "Second", initialQuantity: 20 },
-      { sku: "AAA", name: "First", initialQuantity: 10 },
+      { sku: "BBB", name: "Second", initialQuantity: 20, originalPrice: 100.00, flashSalePrice: 49.99 },
+      { sku: "AAA", name: "First", initialQuantity: 10, originalPrice: 120.00, flashSalePrice: 59.99 },
     ]);
   });
 
@@ -66,26 +75,41 @@ describe("createCatalogReader (Sale -> SaleProduct -> Product -> Inventory join)
 
   it("skips a SaleProduct row with no matching Product doc (defensive — orphaned row)", async () => {
     const ops = fakeOps({
-      listSaleProducts: vi.fn(async () => [{ productId: "missing-product" }, { productId: "p-1" }]),
-      listProductsByIds: vi.fn(async () => [{ id: "p-1", sku: "AAA", name: "First" }]),
+      listSaleProducts: vi.fn(async () => [
+        { productId: "missing-product", flashSalePrice: 0 },
+        { productId: "p-1", flashSalePrice: 49.99 },
+      ]),
+      listProductsByIds: vi.fn(async () => [{ id: "p-1", sku: "AAA", name: "First", originalPrice: 99.99 }]),
       listInventoriesByProductIds: vi.fn(async () => [{ productId: "p-1", initialQuantity: 10 }]),
     });
 
     const products = await createCatalogReader(ops).listProductsForSale("sale-1");
 
-    expect(products).toEqual([{ sku: "AAA", name: "First", initialQuantity: 10 }]);
+    expect(products).toEqual([{
+      sku: "AAA",
+      name: "First",
+      initialQuantity: 10,
+      originalPrice: 99.99,
+      flashSalePrice: 49.99,
+    }]);
   });
 
   it("defaults initialQuantity to 0 when Inventory has no matching doc (defensive)", async () => {
     const ops = fakeOps({
-      listSaleProducts: vi.fn(async () => [{ productId: "p-1" }]),
-      listProductsByIds: vi.fn(async () => [{ id: "p-1", sku: "AAA", name: "First" }]),
+      listSaleProducts: vi.fn(async () => [{ productId: "p-1", flashSalePrice: 79.99 }]),
+      listProductsByIds: vi.fn(async () => [{ id: "p-1", sku: "AAA", name: "First", originalPrice: 159.99 }]),
       listInventoriesByProductIds: vi.fn(async () => []),
     });
 
     const products = await createCatalogReader(ops).listProductsForSale("sale-1");
 
-    expect(products).toEqual([{ sku: "AAA", name: "First", initialQuantity: 0 }]);
+    expect(products).toEqual([{
+      sku: "AAA",
+      name: "First",
+      initialQuantity: 0,
+      originalPrice: 159.99,
+      flashSalePrice: 79.99,
+    }]);
   });
 
   it("uses mongoCatalogModelOps by default when no ops are injected", () => {

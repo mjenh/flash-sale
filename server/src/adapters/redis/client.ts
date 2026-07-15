@@ -34,7 +34,7 @@ export function createRedisClient(
       reconnectStrategy: (retries: number) =>
         Math.min(retries * 100, options.redisReconnectMaxMs),
       noDelay: true,
-      keepAlive: 5_000,
+      keepAlive: true,
     },
   });
   client.on("error", onError);

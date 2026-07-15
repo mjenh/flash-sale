@@ -117,7 +117,10 @@ export const mongoBulkAudit: BulkAuditPort = {
                 orderId,
                 productId: productObjId,
                 quantity: 1,
-                unitPrice: 0,
+                // Snapshot the price carried in the queue payload — set once
+                // on insert, never overwritten, so historical orders are immutable
+                // even if flashSalePrice changes later.
+                unitPrice: p.flashSalePrice,
               },
             },
             upsert: true,
