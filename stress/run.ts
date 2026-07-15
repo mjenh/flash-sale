@@ -10,7 +10,7 @@
 // Every phase prints as it starts and hard-fails the run on error. The combined
 // exit code is the pass/fail signal: 0 only when every phase passed.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve as resolvePath } from "node:path";
 import mongoose from "mongoose";
@@ -48,6 +48,20 @@ function loadStressEnv(): void {
 
 loadStressEnv();
 
+/** yyyymmdd_hhmm — determined once at process start so every file in this run
+ *  lands in the same folder regardless of how long the harness takes. */
+function makeRunId(): string {
+  const d = new Date();
+  const p = (n: number, w = 2): string => String(n).padStart(w, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`;
+}
+
+const RUN_ID = makeRunId();
+/** Absolute path to docs/testing/stress/<yyyymmdd_hhmm>/ — created before k6
+ *  runs so handleSummary can write k6-summary.json there. Reports land in
+ *  the docs tree so they can be committed and linked from README.md. */
+const OUT_DIR = resolvePath(REPO_ROOT, "docs", "testing", "stress", RUN_ID);
+
 interface Phase {
   name: string;
   ok: boolean;
@@ -56,8 +70,8 @@ interface Phase {
 
 const phases: Phase[] = [];
 
-/** k6's corroborating counters, folded in from .out/k6-summary.json for the
- *  finish() report. Undefined until the burst has run. */
+/** k6's corroborating counters, folded in from the run's k6-summary.json for
+ *  the finish() report. Undefined until the burst has run. */
 let k6Summary: string | undefined;
 
 /** Full parsed k6-summary.json for the HTML report. */
@@ -155,10 +169,13 @@ function runK6(config: StressConfig): K6Result {
     RETRY: config.retry ? "1" : "0",
     RUN_TAG: String(Date.now()),
     SALE_SLUG,
+    // Relative path from the stress/ working directory — k6 (host binary) and
+    // the Docker container (workdir=/repo/stress) both resolve this the same way.
+    K6_OUT_DIR: `../docs/testing/stress/${RUN_ID}`,
   };
 
-  // handleSummary() writes here; k6 will not create the directory itself.
-  mkdirSync(resolvePath(HERE, ".out"), { recursive: true });
+  // handleSummary() writes into OUT_DIR; k6 will not create the directory itself.
+  mkdirSync(OUT_DIR, { recursive: true });
 
   const hasK6 = spawnSync("k6", ["version"], { stdio: "ignore" }).status === 0;
   if (hasK6) {
@@ -179,15 +196,20 @@ function runK6(config: StressConfig): K6Result {
     "--rm",
     "-i",
     // grafana/k6 runs as a non-root user; run it as the host UID so it can
-    // write .out/ on the host-owned bind mount.
+    // write .out/<RUN_ID>/ on the host-owned bind mount.
     ...(process.getuid ? ["--user", String(process.getuid())] : []),
     "--network",
     "host",
     "--add-host=host.docker.internal:host-gateway",
+    // Mount the repo root so the container can write to docs/testing/stress/
+    // via the relative K6_OUT_DIR (../docs/testing/stress/<RUN_ID>).
+    // Workdir is /repo/stress so k6-order.js is found at the cwd, same as
+    // the host-binary path. The UID binding ensures k6 can write the host-
+    // owned output directory.
     "-v",
-    `${HERE}:/stress`,
+    `${REPO_ROOT}:/repo`,
     "-w",
-    "/stress",
+    "/repo/stress",
     ...Object.entries({ ...env, API_URL: containerApiUrl }).flatMap(([k, v]) => [
       "-e",
       `${k}=${v}`,
@@ -220,12 +242,12 @@ function classify(status: number | null, runner: string): K6Result {
   };
 }
 
-/** The burst writes .out/k6-summary.json (handleSummary) — fold its
- *  corroborating counters (201/409/200 and any 5xx) into the harness report so
+/** The burst writes <OUT_DIR>/k6-summary.json (handleSummary) — fold its
+ *  corroborating counters (202/409/200 and any 5xx) into the harness report so
  *  the finish() output prints the shape the README promises. */
 function readK6Summary(): string | undefined {
   try {
-    const raw = readFileSync(resolvePath(HERE, ".out", "k6-summary.json"), "utf8");
+    const raw = readFileSync(resolvePath(OUT_DIR, "k6-summary.json"), "utf8");
     const data = JSON.parse(raw) as { metrics?: Record<string, { values?: { count?: number } }> };
     const count = (metric: string): number => data.metrics?.[metric]?.values?.count ?? 0;
     return `k6 counters — 202=${count("order_created_202")} · 409=${count("order_rejected_409")} · 200=${count("order_already_200")} · 5xx=${count("order_5xx")}`;
@@ -238,7 +260,7 @@ function readK6Summary(): string | undefined {
  *  parse error so the report generator can degrade gracefully. */
 function readK6SummaryRaw(): Record<string, unknown> | undefined {
   try {
-    const raw = readFileSync(resolvePath(HERE, ".out", "k6-summary.json"), "utf8");
+    const raw = readFileSync(resolvePath(OUT_DIR, "k6-summary.json"), "utf8");
     return JSON.parse(raw) as Record<string, unknown>;
   } catch {
     return undefined;
@@ -485,6 +507,7 @@ function finish(): void {
     phases,
     k6Raw: k6SummaryRaw,
     verifyReport,
+    outDir: OUT_DIR,
     config: {
       attempts: config.attempts,
       vus: config.vus,
@@ -494,9 +517,36 @@ function finish(): void {
   });
   if (reportPath !== undefined) {
     console.log(`Report: file://${reportPath}\n`);
+    updateReadme(reportPath);
   }
 
   process.exit(failed.length === 0 ? 0 : 1);
+}
+
+/** Replace the content between <!-- stress:latest --> sentinels in README.md
+ *  with a link to the report that just finished. Fail-safe — any error is
+ *  logged and never propagates to the harness exit code. */
+function updateReadme(reportPath: string): void {
+  try {
+    const readmePath = resolvePath(REPO_ROOT, "README.md");
+    // Relative path from the repo root — works as a Markdown link on GitHub
+    // once the docs/testing/stress/ tree is committed.
+    const rel = reportPath.slice(REPO_ROOT.length + 1).replace(/\\/g, "/");
+    const link = `**Latest stress report:** [${RUN_ID}](${rel})`;
+    const OPEN = "<!-- stress:latest -->";
+    const CLOSE = "<!-- /stress:latest -->";
+    const content = readFileSync(readmePath, "utf8");
+    const start = content.indexOf(OPEN);
+    const end = content.indexOf(CLOSE);
+    if (start === -1 || end === -1) return; // sentinels absent — skip silently
+    const updated =
+      content.slice(0, start + OPEN.length) + "\n" + link + "\n" + content.slice(end);
+    writeFileSync(readmePath, updated, "utf8");
+  } catch (err) {
+    console.error(
+      `[report] README update failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 // A bare `await main()` would let a StressConfigError, an unhandled rejection,

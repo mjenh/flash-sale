@@ -1,4 +1,4 @@
-// Generates stress/.out/report.html after every harness run.
+// Generates stress/.out/<yyyymmdd_hhmm>/report.html after every harness run.
 //
 // Inputs  : harness phase array, raw k6-summary.json object, verifier report
 // Output  : a single self-contained HTML file — no external deps, no CDN
@@ -6,11 +6,8 @@
 // The generator is intentionally fail-safe: any error is caught and logged;
 // it must never crash the harness or affect process.exit().
 import { writeFileSync, mkdirSync } from "node:fs";
-import { resolve as resolvePath, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve as resolvePath } from "node:path";
 import type { VerifyReport } from "./verify.ts";
-
-const HERE = dirname(fileURLToPath(import.meta.url));
 
 export interface HarnessPhase {
   name: string;
@@ -31,6 +28,9 @@ export interface ReportData {
     stockQuantity: number;
     apiUrl: string;
   };
+  /** Absolute path to the timestamped output directory (stress/.out/yyyymmdd_hhmm).
+   *  report.html is written here alongside k6-summary.json. */
+  outDir: string;
 }
 
 // ─── k6 metric helpers ───────────────────────────────────────────────────────
@@ -279,7 +279,7 @@ const CSS = `
 
 export function generateReport(data: ReportData): string | undefined {
   try {
-    const { phases, k6Raw, verifyReport, config } = data;
+    const { phases, k6Raw, verifyReport, config, outDir } = data;
     const overallOk = phases.every((p) => p.ok);
     const ts = new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC";
 
@@ -311,7 +311,6 @@ export function generateReport(data: ReportData): string | undefined {
 </body>
 </html>`;
 
-    const outDir = resolvePath(HERE, ".out");
     mkdirSync(outDir, { recursive: true });
     const outPath = resolvePath(outDir, "report.html");
     writeFileSync(outPath, html, "utf8");
