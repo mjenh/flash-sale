@@ -208,7 +208,7 @@ function classify(status: number | null, runner: string): K6Result {
       ok: false,
       runnerFailed: false,
       runner,
-      detail: "a k6 threshold was breached (a 5xx, or a status outside {201, 409})",
+      detail: "a k6 threshold was breached (a 5xx, a latency breach, or a status outside {202, 409})",
     };
   }
   return {
@@ -227,7 +227,7 @@ function readK6Summary(): string | undefined {
     const raw = readFileSync(resolvePath(HERE, ".out", "k6-summary.json"), "utf8");
     const data = JSON.parse(raw) as { metrics?: Record<string, { values?: { count?: number } }> };
     const count = (metric: string): number => data.metrics?.[metric]?.values?.count ?? 0;
-    return `k6 counters — 201=${count("order_created_201")} · 409=${count("order_rejected_409")} · 200=${count("order_already_200")} · 5xx=${count("order_5xx")}`;
+    return `k6 counters — 202=${count("order_created_202")} · 409=${count("order_rejected_409")} · 200=${count("order_already_200")} · 5xx=${count("order_5xx")}`;
   } catch {
     return undefined;
   }
@@ -256,24 +256,33 @@ async function windowPhase(config: StressConfig): Promise<boolean> {
       return record("window phase", false, "api never became ready with the closed window");
     }
 
-    const failures: string[] = [];
-    for (let i = 0; i < 20; i += 1) {
-      const res = await fetch(`${config.apiUrl}/api/order`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: `window-${Date.now()}-${i}@example.com` }),
-      });
-      let body: { success?: unknown; error?: unknown } = {};
-      try {
-        body = (await res.json()) as { success?: unknown; error?: unknown };
-      } catch {
-        // A non-JSON body is itself a breach of the closed-window contract —
-        // fall through and let the assertion below record the failure.
-      }
-      if (res.status !== 409 || body.success !== false || body.error !== "Sale is not active.") {
-        failures.push(`attempt ${i}: HTTP ${res.status} ${JSON.stringify(body)}`);
-      }
-    }
+    // Concurrent fan-out: all 20 requests fire simultaneously so the window
+    // boundary is probed under arrival pressure, not just sequentially. The
+    // window check is a correctness probe (is the right status returned?), but
+    // simultaneous arrival provides stronger evidence that the boundary holds
+    // when requests straddle the same instant.
+    const now = Date.now();
+    const results = await Promise.all(
+      Array.from({ length: 20 }, async (_, i) => {
+        const res = await fetch(`${config.apiUrl}/api/order`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: `window-${now}-${i}@example.com` }),
+        });
+        let body: { success?: unknown; error?: unknown } = {};
+        try {
+          body = (await res.json()) as { success?: unknown; error?: unknown };
+        } catch {
+          // A non-JSON body is itself a breach of the closed-window contract —
+          // fall through and let the assertion below record the failure.
+        }
+        return { i, status: res.status, body };
+      }),
+    );
+
+    const failures = results
+      .filter(({ status, body }) => status !== 409 || body.success !== false || body.error !== "Sale is not active.")
+      .map(({ i, status, body }) => `attempt ${i}: HTTP ${status} ${JSON.stringify(body)}`);
 
     if (failures.length > 0) {
       console.error(failures.join("\n"));
