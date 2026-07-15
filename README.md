@@ -397,6 +397,8 @@ the limit.
 return 503 for an order that actually committed server-side. The idempotent
 retry recovers on the next attempt, but the first response was wrong.
 
+**`stockQuantity` changes are silently ignored on a warm restart.** `make deploy` re-seeds MongoDB with the new `sales.json` values and recreates the API container, but leaves Redis running. Because `stock:{saleId}:remaining` already exists, the boot reconciler takes the warm path and never reads the updated `stockQuantity` from MongoDB — the change lands in the database but has no effect on the live stock counter. To apply a stock change against a running stack, flush Redis state first (`docker compose down -v` or the stress harness's offline reset) so the next boot takes the cold path and rebuilds from Mongo.
+
 **Sale identity is resolved once at boot.** The active sale's `_id` and slug
 are selected by `bootstrap()` and held in-process for the lifetime of the
 server. The slug resolver returns only the boot-resolved sale; a new sale
@@ -467,7 +469,10 @@ necessary.
 **Runtime sale administration.** An admin endpoint to adjust the sale window or
 stock without restarting the API. Sale config now lives in MongoDB, so the data
 layer is ready; the missing piece is a write endpoint + live reconfiguration of
-the in-process timer and Redis keys.
+the in-process timer and Redis keys. This also closes the warm-restart gap (see
+Known Limitations): a `PATCH /admin/sales/:id` endpoint that atomically updates
+both `sale.stockQuantity` in MongoDB and `stock:{saleId}:remaining` in Redis
+would make stock changes effective immediately without requiring a Redis flush.
 
 **Multi-sale dynamic resolution.** The current sale resolver is derived from a
 single sale locked in at boot. Serving a portfolio of scheduled sales without

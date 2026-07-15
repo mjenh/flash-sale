@@ -517,6 +517,17 @@ client runs a heartbeat/silence watchdog over the stream; and the order key is
 canonicalized (NFC-normalized and case-folded) so `A@x.com` and `a@x.com`
 collapse to one identity.
 
+- **`make deploy` against a running stack silently ignores `stockQuantity` changes.**
+  `make deploy` re-seeds MongoDB (updating `sale.stockQuantity`) and recreates the
+  API container, but leaves Redis running. At the boot reconcile step (§6), the
+  warm-start branch is taken because `stock:{saleId}:remaining` survives — the new
+  `stockQuantity` is never applied to Redis. The update is durable in MongoDB but
+  has no effect on the live counter. This is the intended behavior of the warm/cold
+  gate, not a bug, but it can silently surprise operators. The only way to apply the
+  change is to flush the Redis sentinel key before restarting (`docker compose down
+  -v` or the stress harness's offline reset), which forces a cold rebuild from
+  MongoDB. A runtime admin endpoint (§11.9) would close this gap without a flush.
+
 ## 8. Configuration
 
 Configuration is environment variables only, parsed and validated once at boot
@@ -792,3 +803,28 @@ because the browser needs a bundle; only the server skips it.
 
 **Revisit when.** The server must run on a Node older than the type-stripping
 baseline, or needs bundling for size/startup.
+
+### 11.9 No live reconfiguration path for stock
+
+**Decision.** Sale config (stock quantity, time window) is locked into process
+state at `bootstrap()`. Updating `db/data/sales.json` and running `make deploy`
+writes new values to MongoDB via the idempotent seeder, but the API's warm restart
+ignores the stock change because `stock:{saleId}:remaining` survives in Redis (§6).
+
+**Why.** The warm-start gate treats Redis as authoritative over MongoDB for the
+running stock count — this is intentional restart-safety behavior. Applying a
+`stockQuantity` change mid-sale would require a privileged write to both MongoDB
+and the live Redis key in a single atomic operation, which implies an operator admin
+surface that was out of scope for v1.
+
+**Cost.** Operators who update `sales.json` and redeploy expecting an immediate
+stock change are silently wrong. The only reliable reset path is `docker compose
+down -v` (flushes Redis) or the stress harness's offline reset step, both of which
+require downtime.
+
+**Revisit when.** A `PATCH /admin/sales/:id` endpoint is added. It must atomically
+update both `sale.stockQuantity` in MongoDB and `stock:{saleId}:remaining` in Redis
+— and should only decrease stock (not increase beyond the original seeded total
+without an audit-consistent journal entry). The existing `SaleBootstrapOps` and
+`StockStore` interfaces provide the seams; the missing piece is the write endpoint
+and operator auth.
