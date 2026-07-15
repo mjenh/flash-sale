@@ -35,6 +35,10 @@ export function createApp({ logger, apiRouter, clientDistDir, bodyLimit }: AppDe
   app.use(pinoHttp({ logger }));
   app.use(express.json({ limit: bodyLimit ?? "8kb" }));
 
+  app.get("/health", (_req: Request, res: Response) => {
+    res.json({ ok: true });
+  });
+
   app.use("/api", apiRouter);
   app.use("/api", (_req: Request, res: Response) => {
     res.status(404).json({ success: false, error: "Not found." });
