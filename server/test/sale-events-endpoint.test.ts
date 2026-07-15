@@ -83,10 +83,10 @@ async function boot(opts: {
 /** Drain the microtask/immediate queue so fire-and-forget publishes settle. */
 const drain = () => new Promise((resolve) => setImmediate(resolve));
 
-describe("GET /api/sale/events — stream contract", () => {
+describe("GET /api/sales/:slug/events", () => {
   it("responds 200 text/event-stream with an immediate snapshot status frame carrying the exact body", async () => {
     const { app } = await boot({ nowMs: IN_WINDOW, stock: "37" });
-    const stream = await openSse(app);
+    const stream = await openSse(app, "/api/sales/flash-sale/events");
 
     expect(stream.statusCode).toBe(200);
     expect(stream.headers["content-type"]).toBe("text/event-stream");
@@ -108,61 +108,12 @@ describe("GET /api/sale/events — stream contract", () => {
 
   it("a SECOND connect receives its own snapshot — snapshot on every (re)connect, no replay", async () => {
     const { app } = await boot({ nowMs: IN_WINDOW, stock: "37" });
-    const first = await openSse(app);
+    const first = await openSse(app, "/api/sales/flash-sale/events");
     await first.waitForFrames(1);
 
-    const second = await openSse(app);
+    const second = await openSse(app, "/api/sales/flash-sale/events");
     const [snapshot] = await second.waitForFrames(1);
     expect(snapshot).toBe(first.frames()[0]);
-  });
-});
-
-// The slug-scoped SSE route must be byte-for-byte identical to the v1.0
-// alias — both flow through the same broadcaster and resolve the same
-// req.sale (forSlug() on the one valid slug vs. forActiveSale() on the
-// alias mount), so their snapshots, live updates, and terminal frames must
-// never diverge.
-describe("GET /api/sales/:slug/events — identical to the v1.0 alias", () => {
-  it("the connect-time snapshot is byte-for-byte identical to GET /api/sale/events", async () => {
-    const { app } = await boot({ nowMs: IN_WINDOW, stock: "37" });
-
-    const alias = await openSse(app, "/api/sale/events");
-    const [aliasSnapshot] = await alias.waitForFrames(1);
-
-    const scoped = await openSse(app, "/api/sales/flash-sale/events");
-    const [scopedSnapshot] = await scoped.waitForFrames(1);
-
-    expect(scopedSnapshot).toBe(aliasSnapshot);
-    expect(frameData(scopedSnapshot as string)).toEqual({
-      success: true,
-      status: "active",
-      stock: 37,
-      startTime: START_ISO,
-      endTime: END_ISO,
-    });
-  });
-
-  it("a live order.accepted update reaches BOTH the alias and slug-scoped connections with the identical frame", async () => {
-    const { app } = await boot({ nowMs: IN_WINDOW, stock: "3" });
-    const alias = await openSse(app, "/api/sale/events");
-    const scoped = await openSse(app, "/api/sales/flash-sale/events");
-    await alias.waitForFrames(1);
-    await scoped.waitForFrames(1);
-
-    const res = await request(app).post("/api/sales/flash-sale/order").send({ email: "buyer@example.com" });
-    expect(res.status).toBe(202);
-    await drain();
-
-    const aliasFrames = await alias.waitForFrames(2);
-    const scopedFrames = await scoped.waitForFrames(2);
-    expect(scopedFrames[1]).toBe(aliasFrames[1]);
-    expect(frameData(scopedFrames[1] as string)).toEqual({
-      success: true,
-      status: "active",
-      stock: 2,
-      startTime: START_ISO,
-      endTime: END_ISO,
-    });
   });
 
   it("returns 404 for an unknown slug — never opens a stream", async () => {
@@ -172,7 +123,7 @@ describe("GET /api/sales/:slug/events — identical to the v1.0 alias", () => {
     expect(res.body).toEqual({ success: false, error: "Sale not found." });
   });
 
-  it("fails closed with the exact 503 envelope while Redis is down, same as the v1.0 alias", async () => {
+  it("fails closed with the exact 503 envelope while Redis is down", async () => {
     const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "37" });
     fake.failing = true;
     const res = await request(app).get("/api/sales/flash-sale/events");
@@ -184,10 +135,10 @@ describe("GET /api/sales/:slug/events — identical to the v1.0 alias", () => {
 describe("live update path", () => {
   it("an accepted order publishes order.accepted and the stream receives the decremented truth", async () => {
     const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "3" });
-    const stream = await openSse(app);
+    const stream = await openSse(app, "/api/sales/flash-sale/events");
     await stream.waitForFrames(1);
 
-    const res = await request(app).post("/api/order").send({ email: "buyer@example.com" });
+    const res = await request(app).post("/api/sales/flash-sale/order").send({ email: "buyer@example.com" });
     expect(res.status).toBe(202);
     await drain();
     expect(fake.published).toEqual(["order.accepted"]);
@@ -204,12 +155,12 @@ describe("live update path", () => {
 
   it("draining stock to 0 publishes sale.sold_out exactly once and both open streams end on the identical sold_out frame", async () => {
     const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "1" });
-    const one = await openSse(app);
-    const two = await openSse(app);
+    const one = await openSse(app, "/api/sales/flash-sale/events");
+    const two = await openSse(app, "/api/sales/flash-sale/events");
     await one.waitForFrames(1);
     await two.waitForFrames(1);
 
-    const res = await request(app).post("/api/order").send({ email: "last@example.com" });
+    const res = await request(app).post("/api/sales/flash-sale/order").send({ email: "last@example.com" });
     expect(res.status).toBe(202);
     await drain();
     expect(fake.published).toEqual(["order.accepted", "sale.sold_out"]);
@@ -233,7 +184,7 @@ describe("live update path", () => {
 
   it("a rejected attempt (SOLD_OUT verdict at stock 0) publishes NOTHING", async () => {
     const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "0" });
-    const res = await request(app).post("/api/order").send({ email: "late@example.com" });
+    const res = await request(app).post("/api/sales/flash-sale/order").send({ email: "late@example.com" });
     expect(res.status).toBe(409);
     await drain();
     expect(fake.published).toEqual([]);
@@ -242,11 +193,13 @@ describe("live update path", () => {
 
   it("coalesces a burst: 5 accepted orders produce strictly fewer frames, and the LAST frame is the final truth", async () => {
     const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "5" });
-    const stream = await openSse(app);
+    const stream = await openSse(app, "/api/sales/flash-sale/events");
     await stream.waitForFrames(1);
 
     for (let i = 0; i < 5; i += 1) {
-      const res = await request(app).post("/api/order").send({ email: `burst-${i}@example.com` });
+      const res = await request(app)
+        .post("/api/sales/flash-sale/order")
+        .send({ email: `burst-${i}@example.com` });
       expect(res.status).toBe(202);
     }
     await drain();
@@ -273,14 +226,14 @@ describe("fail closed", () => {
     const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "37" });
     fake.failing = true;
     // The request completes (no stream opens), so plain supertest works.
-    const res = await request(app).get("/api/sale/events");
+    const res = await request(app).get("/api/sales/flash-sale/events");
     expect(res.status).toBe(503);
     expect(res.body).toEqual({ success: false, error: "Service temporarily unavailable." });
   });
 
   it("mid-stream Redis loss: an emit's fresh read fails -> the stream ENDS and the failure is logged", async () => {
     const { fake, saleId, app, lines } = await boot({ nowMs: IN_WINDOW, stock: "37" });
-    const stream = await openSse(app);
+    const stream = await openSse(app, "/api/sales/flash-sale/events");
     await stream.waitForFrames(1);
 
     fake.failing = true;
@@ -294,7 +247,7 @@ describe("fail closed", () => {
 
   it("subscriber connection loss closes open streams", async () => {
     const { fake, app, lines } = await boot({ nowMs: IN_WINDOW, stock: "37" });
-    const stream = await openSse(app);
+    const stream = await openSse(app, "/api/sales/flash-sale/events");
     await stream.waitForFrames(1);
 
     fake.emitSubscriberError(new Error("gone"));
@@ -307,7 +260,9 @@ describe("fail closed", () => {
     const { fake, app, lines } = await boot({ nowMs: IN_WINDOW, stock: "3" });
     fake.failingPublish = true;
 
-    const res = await request(app).post("/api/order").send({ email: "buyer@example.com" });
+    const res = await request(app)
+      .post("/api/sales/flash-sale/order")
+      .send({ email: "buyer@example.com" });
     expect(res.status).toBe(202);
     expect(res.body).toEqual({
       success: true,
@@ -338,7 +293,7 @@ describe("window-boundary timers through boot", () => {
       startMs: now + 250,
       endMs: now + 750,
     });
-    const stream = await openSse(app);
+    const stream = await openSse(app, "/api/sales/flash-sale/events");
     const [snapshot] = await stream.waitForFrames(1);
     expect((frameData(snapshot as string) as { status: string }).status).toBe("upcoming");
 
@@ -366,7 +321,7 @@ describe("window-boundary timers through boot", () => {
 
   it("boot after end publishes ZERO boundary events — future boundaries only; snapshot heals (negative space)", async () => {
     const { fake, app } = await boot({ nowMs: endMs + 60_000, stock: "12" });
-    const stream = await openSse(app);
+    const stream = await openSse(app, "/api/sales/flash-sale/events");
     const [snapshot] = await stream.waitForFrames(1);
     expect((frameData(snapshot as string) as { status: string }).status).toBe("ended");
 

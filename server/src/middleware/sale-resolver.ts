@@ -1,7 +1,7 @@
 // Sale resolution middleware — resolves :slug to a Sale document and attaches
 // it to req.sale. In-memory cache with configurable TTL (default 60s).
-// Active-sale resolution for v1.0 aliases follows the priority: within
-// [startTime, endTime) window > nearest upcoming > most recently ended.
+// Active-sale resolution follows the priority: within [startTime, endTime)
+// window > nearest upcoming > most recently ended.
 //
 // This middleware lives at the HTTP layer (it imports from express); the
 // lookup ops port is satisfied by the adapter layer and injected at boot.
@@ -101,9 +101,6 @@ export interface SaleResolver {
   /** Middleware for /:slug routes — resolves req.params.slug to req.sale.
    *  Returns 404 if the slug matches no Sale document. */
   forSlug(): (req: Request, res: Response, next: NextFunction) => Promise<void>;
-  /** Middleware for v1.0 alias routes — resolves the active sale to req.sale.
-   *  Non-blocking: always calls next() (v1.0 handlers use injected services). */
-  forActiveSale(): (req: Request, res: Response, next: NextFunction) => Promise<void>;
   /** Direct lookup of the active sale (for the GET /api/sales/active endpoint). */
   findActive(): Promise<SaleSummary | null>;
 }
@@ -157,16 +154,6 @@ export function createSaleResolver({ ops, clock, cacheTtlMs }: SaleResolverDeps)
           return;
         }
         req.sale = sale;
-        next();
-      };
-    },
-
-    forActiveSale() {
-      return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
-        const sale = await resolveActive();
-        if (sale !== null) {
-          req.sale = sale;
-        }
         next();
       };
     },

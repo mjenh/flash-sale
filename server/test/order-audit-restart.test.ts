@@ -115,7 +115,7 @@ describe("async Mongo audit + payment after OK", () => {
     const { mongo } = await boot({ nowMs: IN_WINDOW, stock: "5", payment: { charge }, directAudit: true }).then(
       async (booted) => {
         const res = await request(booted.app)
-          .post("/api/order")
+          .post("/api/sales/flash-sale/order")
           .send({ email: "buyer@example.com" });
         expect(res.status).toBe(202);
         expect(res.body).toEqual({
@@ -151,10 +151,10 @@ describe("async Mongo audit + payment after OK", () => {
   it("an idempotent retry (200) does not grow the audit trail or charge again", async () => {
     const charge = vi.fn(async (email: string) => ({ approved: true, reference: `noop:${email}` }));
     const { app, mongo } = await boot({ nowMs: IN_WINDOW, stock: "5", payment: { charge }, directAudit: true });
-    await request(app).post("/api/order").send({ email: "buyer@example.com" });
+    await request(app).post("/api/sales/flash-sale/order").send({ email: "buyer@example.com" });
     await drain();
 
-    const retry = await request(app).post("/api/order").send({ email: "buyer@example.com" });
+    const retry = await request(app).post("/api/sales/flash-sale/order").send({ email: "buyer@example.com" });
     expect(retry.status).toBe(200);
     await drain();
     expect(mongo.orders).toHaveLength(1);
@@ -166,11 +166,11 @@ describe("async Mongo audit + payment after OK", () => {
     const charge = vi.fn(async (email: string) => ({ approved: true, reference: `noop:${email}` }));
     const { app, mongo } = await boot({ nowMs: IN_WINDOW, stock: "0", payment: { charge } });
 
-    expect((await request(app).post("/api/order").send({ email: "late@x.com" })).status).toBe(409); // sold out
-    expect((await request(app).post("/api/order").send({ email: "" })).status).toBe(400); // validation
+    expect((await request(app).post("/api/sales/flash-sale/order").send({ email: "late@x.com" })).status).toBe(409); // sold out
+    expect((await request(app).post("/api/sales/flash-sale/order").send({ email: "" })).status).toBe(400); // validation
 
     const after = await boot({ nowMs: startMs - 1000, stock: "5", payment: { charge } });
-    expect((await request(after.app).post("/api/order").send({ email: "early@x.com" })).status).toBe(409); // inactive
+    expect((await request(after.app).post("/api/sales/flash-sale/order").send({ email: "early@x.com" })).status).toBe(409); // inactive
 
     await drain();
     expect(mongo.orders).toHaveLength(0);
@@ -183,7 +183,7 @@ describe("async Mongo audit + payment after OK", () => {
       throw new Error("gateway exploded");
     });
     const { app } = await boot({ nowMs: IN_WINDOW, stock: "5", payment: { charge } });
-    const res = await request(app).post("/api/order").send({ email: "buyer@example.com" });
+    const res = await request(app).post("/api/sales/flash-sale/order").send({ email: "buyer@example.com" });
     expect(res.status).toBe(202);
     expect(res.body.message).toBe("Order accepted.");
     await drain();
@@ -196,7 +196,7 @@ describe("Mongo write failure: logged, never rolled back, response unchanged", (
     const { app, fake, saleId, mongo } = await boot({ nowMs: IN_WINDOW, stock: "5", logger, directAudit: true });
     mongo.failingAudit = true;
 
-    const res = await request(app).post("/api/order").send({ email: "unlucky@example.com" });
+    const res = await request(app).post("/api/sales/flash-sale/order").send({ email: "unlucky@example.com" });
     expect(res.status).toBe(202);
     expect(res.body).toEqual({
       success: true,
@@ -220,8 +220,8 @@ describe("Mongo write failure: logged, never rolled back, response unchanged", (
 describe("restart safety", () => {
   it("warm restart touches nothing — surviving state wins and STOCK_QUANTITY changes are no-ops", async () => {
     const first = await boot({ nowMs: IN_WINDOW, stock: "5", stockQuantity: "5" });
-    await request(first.app).post("/api/order").send({ email: "w-1@x.com" });
-    await request(first.app).post("/api/order").send({ email: "w-2@x.com" });
+    await request(first.app).post("/api/sales/flash-sale/order").send({ email: "w-1@x.com" });
+    await request(first.app).post("/api/sales/flash-sale/order").send({ email: "w-2@x.com" });
     await drain();
     expect(first.fake.kv.get(stockKeyFor(first.saleId))).toBe("3");
 
@@ -237,7 +237,7 @@ describe("restart safety", () => {
   it("cold restart rebuilds membership + stock from MongoDB; counts and idempotent retries survive", async () => {
     const first = await boot({ nowMs: IN_WINDOW, stock: "5", stockQuantity: "5", directAudit: true });
     for (const email of ["w-1@x.com", "w-2@x.com", "w-3@x.com"]) {
-      const res = await request(first.app).post("/api/order").send({ email });
+      const res = await request(first.app).post("/api/sales/flash-sale/order").send({ email });
       expect(res.status).toBe(202);
     }
     await drain();
@@ -257,12 +257,12 @@ describe("restart safety", () => {
     expect(orderSetMembers(first.fake, first.saleId)).toEqual(["w-1@x.com", "w-2@x.com", "w-3@x.com"]);
     expect(first.fake.kv.get(stockKeyFor(first.saleId))).toBe("2");
 
-    const status = await request(second.app).get("/api/sale/status");
+    const status = await request(second.app).get("/api/sales/flash-sale/status");
     expect(status.body.stock).toBe(2);
     expect(status.body.status).toBe("active");
 
     // Idempotent retry survives the restart.
-    const retry = await request(second.app).post("/api/order").send({ email: "w-2@x.com" });
+    const retry = await request(second.app).post("/api/sales/flash-sale/order").send({ email: "w-2@x.com" });
     expect(retry.status).toBe(200);
     expect(retry.body).toEqual({
       success: true,
@@ -271,7 +271,7 @@ describe("restart safety", () => {
     });
 
     // And the sale continues where it left off.
-    const fresh = await request(second.app).post("/api/order").send({ email: "w-4@x.com" });
+    const fresh = await request(second.app).post("/api/sales/flash-sale/order").send({ email: "w-4@x.com" });
     expect(fresh.status).toBe(202);
     expect(first.fake.kv.get(stockKeyFor(first.saleId))).toBe("1");
     await drain();
@@ -280,13 +280,13 @@ describe("restart safety", () => {
 
   it("restart never heals Mongo from Redis: a dropped audit write stays a permanent undercount", async () => {
     const first = await boot({ nowMs: IN_WINDOW, stock: "5", stockQuantity: "5", directAudit: true });
-    await request(first.app).post("/api/order").send({ email: "audited-1@x.com" });
-    await request(first.app).post("/api/order").send({ email: "audited-2@x.com" });
+    await request(first.app).post("/api/sales/flash-sale/order").send({ email: "audited-1@x.com" });
+    await request(first.app).post("/api/sales/flash-sale/order").send({ email: "audited-2@x.com" });
     await drain();
 
     // The crash window: Redis accepted, the Mongo write was lost.
     first.mongo.failingAudit = true;
-    const lost = await request(first.app).post("/api/order").send({ email: "lost@x.com" });
+    const lost = await request(first.app).post("/api/sales/flash-sale/order").send({ email: "lost@x.com" });
     expect(lost.status).toBe(202);
     await drain();
     first.mongo.failingAudit = false;
@@ -305,7 +305,7 @@ describe("restart safety", () => {
   it("cold rebuild clamps stock:{saleId}:remaining at 0 when confirmed orders exceed STOCK_QUANTITY", async () => {
     const first = await boot({ nowMs: IN_WINDOW, stock: "10", stockQuantity: "10", directAudit: true });
     for (let i = 0; i < 6; i += 1) {
-      await request(first.app).post("/api/order").send({ email: `b-${i}@x.com` });
+      await request(first.app).post("/api/sales/flash-sale/order").send({ email: `b-${i}@x.com` });
     }
     await drain();
     expect(first.mongo.orders).toHaveLength(6);
@@ -321,7 +321,7 @@ describe("restart safety", () => {
 
     expect(first.fake.kv.get(stockKeyFor(first.saleId))).toBe("0"); // clamped, never negative
     expect(orderSetSize(first.fake, first.saleId)).toBe(6);
-    const status = await request(second.app).get("/api/sale/status");
+    const status = await request(second.app).get("/api/sales/flash-sale/status");
     expect(status.body.status).toBe("sold_out");
   });
 });

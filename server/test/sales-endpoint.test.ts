@@ -183,16 +183,13 @@ describe("GET /api/sales/:slug (sale details with inventory)", () => {
 });
 
 describe("GET /api/sales/:slug/status", () => {
-  it("returns the same status as the v1.0 /api/sale/status", async () => {
+  it("returns the correct status body inside the window", async () => {
     const { app } = await boot({ nowMs: IN_WINDOW, stock: "37" });
 
-    const v10 = await request(app).get("/api/sale/status");
-    const v11 = await request(app).get("/api/sales/flash-sale/status");
+    const res = await request(app).get("/api/sales/flash-sale/status");
 
-    expect(v10.status).toBe(200);
-    expect(v11.status).toBe(200);
-    expect(v11.body).toEqual(v10.body);
-    expect(v11.body).toEqual({
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
       success: true,
       status: "active",
       stock: 37,
@@ -330,37 +327,6 @@ describe("GET /api/sales/:slug/order/:email", () => {
     const res = await request(app).get("/api/sales/nonexistent/order/buyer@example.com");
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ success: false, error: "Sale not found." });
-  });
-});
-
-describe("v1.0 alias routes still work (req.sale is set by forActiveSale middleware)", () => {
-  it("GET /api/sale/status is identical to GET /api/sales/flash-sale/status", async () => {
-    const { app } = await boot({ nowMs: IN_WINDOW, stock: "37" });
-
-    const v10 = await request(app).get("/api/sale/status");
-    const v11 = await request(app).get("/api/sales/flash-sale/status");
-    expect(v10.body).toEqual(v11.body);
-  });
-
-  it("POST /api/order is identical to POST /api/sales/flash-sale/order", async () => {
-    const { app } = await boot({ nowMs: IN_WINDOW, stock: "5" });
-
-    const v10 = await request(app).post("/api/order").send({ email: "alias@example.com" });
-    expect(v10.status).toBe(202);
-
-    // The order placed via v1.0 is visible via v1.1 order check.
-    const check = await request(app).get("/api/sales/flash-sale/order/alias@example.com");
-    expect(check.status).toBe(200);
-    expect(check.body.ordered).toBe(true);
-  });
-
-  it("GET /api/order/:email is identical to GET /api/sales/flash-sale/order/:email", async () => {
-    const { app } = await boot({ nowMs: IN_WINDOW, stock: "5" });
-    await request(app).post("/api/order").send({ email: "cross@example.com" });
-
-    const v10 = await request(app).get("/api/order/cross@example.com");
-    const v11 = await request(app).get("/api/sales/flash-sale/order/cross@example.com");
-    expect(v10.body).toEqual(v11.body);
   });
 });
 
