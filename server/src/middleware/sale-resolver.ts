@@ -53,10 +53,12 @@ export function windowFromSale(sale: SaleSummary): SaleWindow {
   };
 }
 
-/** Story 4.5: pure window-containment check — is `sale` live at `nowMs`?
- *  [startTime, endTime), matching the AD-nowhere-else-duplicated definition
- *  of "currently active" used both by the priority selection below and by
- *  bootstrap.ts's boot-time overlap validation (v1.1-NFR-5). */
+/**
+ * Pure window-containment check — is `sale` live at `nowMs`?
+ * Uses the [startTime, endTime) half-open interval as the single shared
+ * definition of "currently active", referenced by both the priority
+ * selection below and bootstrap.ts's boot-time overlap validation.
+ */
 export function isSaleActiveAt(sale: SaleSummary, nowMs: number): boolean {
   return sale.startTime.getTime() <= nowMs && nowMs < sale.endTime.getTime();
 }

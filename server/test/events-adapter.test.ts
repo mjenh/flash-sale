@@ -1,16 +1,15 @@
 // Fake clients, zero I/O. The publisher is one bounded PUBLISH on the
 // sale-scoped channel (timeout and rejection wrap into RedisUnavailableError);
 // the subscription wires the dedicated duplicated connection: error listener
-// before connect, fail-fast bounded connect, SUBSCRIBE sale:{saleId}:events,
-// best-effort teardown.
-//
-// Story 4.2: the channel is `sale:{saleId}:events`, not the v1.0 flat
-// `sale:events`.
+// before connect, fail-fast bounded connect,
+// PSUBSCRIBE sale:*:events (finding #5 — pattern subscription), best-effort
+// teardown.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   saleEventsChannel,
   createEventPublisher,
   createSaleEventsSubscription,
+  SALE_EVENTS_PATTERN,
 } from "../src/adapters/redis/events.ts";
 import { RedisUnavailableError } from "../src/adapters/redis/stock.ts";
 import type { SaleEventType } from "../src/services/sale-events.ts";
@@ -79,6 +78,7 @@ describe("createEventPublisher", () => {
 function fakeSubscriber() {
   const errorListeners: Array<(err: Error) => void> = [];
   const listeners = new Map<string, (message: string) => void>();
+  const patternListeners = new Map<string, (message: string, channel: string) => void>();
   const subscriber = {
     isOpen: false,
     connect: vi.fn(async () => {
@@ -89,6 +89,16 @@ function fakeSubscriber() {
     }),
     unsubscribe: vi.fn(async (channel: string) => {
       listeners.delete(channel);
+    }),
+    pSubscribe: vi.fn(async (pattern: string, listener: (message: string, channel: string) => void) => {
+      patternListeners.set(pattern, listener);
+    }),
+    pUnsubscribe: vi.fn(async (pattern?: string) => {
+      if (pattern !== undefined) {
+        patternListeners.delete(pattern);
+      } else {
+        patternListeners.clear();
+      }
     }),
     on: vi.fn((event: "error", listener: (err: Error) => void) => {
       if (event === "error") {
@@ -103,7 +113,7 @@ function fakeSubscriber() {
       subscriber.isOpen = false;
     }),
   };
-  return { subscriber, errorListeners, listeners };
+  return { subscriber, errorListeners, listeners, patternListeners };
 }
 
 describe("createSaleEventsSubscription", () => {
@@ -115,24 +125,29 @@ describe("createSaleEventsSubscription", () => {
     ...overrides,
   });
 
-  it("subscribes to exactly sale:{saleId}:events and forwards messages to onEvent", async () => {
-    const { subscriber, listeners } = fakeSubscriber();
+  it("uses PSUBSCRIBE with SALE_EVENTS_PATTERN and forwards messages to onEvent", async () => {
+    const { subscriber, patternListeners } = fakeSubscriber();
     const opts = options();
     await createSaleEventsSubscription(subscriber, opts);
 
-    const channel = saleEventsChannel(SALE_ID);
-    expect(subscriber.subscribe).toHaveBeenCalledTimes(1);
-    expect(subscriber.subscribe.mock.calls[0]?.[0]).toBe(channel);
-    expect([...listeners.keys()]).toEqual([channel]);
+    expect(subscriber.pSubscribe).toHaveBeenCalledTimes(1);
+    expect(subscriber.pSubscribe.mock.calls[0]?.[0]).toBe(SALE_EVENTS_PATTERN);
+    expect(subscriber.subscribe).not.toHaveBeenCalled();
+    expect([...patternListeners.keys()]).toEqual([SALE_EVENTS_PATTERN]);
 
-    listeners.get(channel)?.("order.accepted");
+    patternListeners.get(SALE_EVENTS_PATTERN)?.(
+      "order.accepted",
+      saleEventsChannel(SALE_ID),
+    );
     expect(opts.onEvent).toHaveBeenCalledExactlyOnceWith("order.accepted");
   });
 
-  it("a different saleId subscribes to a different channel", async () => {
-    const { subscriber, listeners } = fakeSubscriber();
-    await createSaleEventsSubscription(subscriber, options({ saleId: "other-sale" }));
-    expect([...listeners.keys()]).toEqual(["sale:other-sale:events"]);
+  it("always uses the same pattern regardless of saleId (pattern subscription is sale-agnostic)", async () => {
+    for (const saleId of [SALE_ID, "other-sale", "yet-another"]) {
+      const { subscriber, patternListeners } = fakeSubscriber();
+      await createSaleEventsSubscription(subscriber, options({ saleId }));
+      expect([...patternListeners.keys()]).toEqual([SALE_EVENTS_PATTERN]);
+    }
   });
 
   it("registers the error listener BEFORE connecting and forwards errors to onConnectionLost", async () => {
@@ -175,31 +190,32 @@ describe("createSaleEventsSubscription", () => {
     expect(subscriber.destroy).toHaveBeenCalledTimes(1);
   });
 
-  it("a subscribe failure after connect destroys the connection and wraps into RedisUnavailableError", async () => {
+  it("a pSubscribe failure after connect destroys the connection and wraps into RedisUnavailableError", async () => {
     const { subscriber } = fakeSubscriber();
-    subscriber.subscribe = vi.fn(async () => {
-      throw new Error("subscribe refused");
-    }) as typeof subscriber.subscribe;
+    subscriber.pSubscribe = vi.fn(async () => {
+      throw new Error("pSubscribe refused");
+    }) as typeof subscriber.pSubscribe;
     await expect(createSaleEventsSubscription(subscriber, options())).rejects.toBeInstanceOf(
       RedisUnavailableError,
     );
     expect(subscriber.destroy).toHaveBeenCalledTimes(1);
   });
 
-  it("close() unsubscribes from sale:{saleId}:events and closes the open connection", async () => {
+  it("close() calls pUnsubscribe with SALE_EVENTS_PATTERN and closes the open connection", async () => {
     const { subscriber } = fakeSubscriber();
     const subscription = await createSaleEventsSubscription(subscriber, options());
     await subscription.close();
-    expect(subscriber.unsubscribe).toHaveBeenCalledExactlyOnceWith(saleEventsChannel(SALE_ID));
+    expect(subscriber.pUnsubscribe).toHaveBeenCalledExactlyOnceWith(SALE_EVENTS_PATTERN);
+    expect(subscriber.unsubscribe).not.toHaveBeenCalled();
     expect(subscriber.close).toHaveBeenCalledTimes(1);
   });
 
-  it("close() is best-effort: unsubscribe rejection is swallowed and a dead client is destroy()ed", async () => {
+  it("close() is best-effort: pUnsubscribe rejection is swallowed and a dead client is destroy()ed", async () => {
     const { subscriber } = fakeSubscriber();
     const subscription = await createSaleEventsSubscription(subscriber, options());
-    subscriber.unsubscribe = vi.fn(async () => {
+    subscriber.pUnsubscribe = vi.fn(async () => {
       throw new Error("already gone");
-    }) as typeof subscriber.unsubscribe;
+    }) as typeof subscriber.pUnsubscribe;
     subscriber.isOpen = false;
     await subscription.close(); // must not throw
     expect(subscriber.close).not.toHaveBeenCalled();

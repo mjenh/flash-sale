@@ -73,13 +73,28 @@ export const mongoBulkAudit: BulkAuditPort = {
     );
 
     // Phase 4: resolve Order _ids — needed as FK on OrderLine.orderId.
-    const orderDocs = await Order.find({
-      $or: payloads.map((p) => ({ saleId: new Types.ObjectId(p.saleId), email: p.email })),
-    })
-      .select("_id email")
-      .lean();
+    // Finding #9: group payloads by saleId so each sub-query is a single
+    // { saleId, email: { $in: [...] } } rather than a multi-clause $or.
+    // The compound index { saleId: 1, email: 1 } is used cleanly for each
+    // sub-query; the old $or caused a planner penalty on large batches.
+    const bySaleId = new Map<string, { saleObjId: Types.ObjectId; emails: string[] }>();
+    for (const p of payloads) {
+      const entry = bySaleId.get(p.saleId);
+      if (entry !== undefined) {
+        entry.emails.push(p.email);
+      } else {
+        bySaleId.set(p.saleId, { saleObjId: new Types.ObjectId(p.saleId), emails: [p.email] });
+      }
+    }
+    const orderQueryResults = await Promise.all(
+      [...bySaleId.values()].map(({ saleObjId, emails }) =>
+        Order.find({ saleId: saleObjId, email: { $in: emails } })
+          .select("_id email")
+          .lean(),
+      ),
+    );
     const orderIdByEmail = new Map<string, Types.ObjectId>(
-      orderDocs.map((o) => [o.email, o._id]),
+      orderQueryResults.flat().map((o) => [o.email, o._id]),
     );
 
     // Phase 5: bulk upsert OrderLines, idempotent on (orderId, productId).

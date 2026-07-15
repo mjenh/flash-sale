@@ -75,7 +75,8 @@ export function useOrder({ slug, onAttemptSettled }: UseOrderOptions): OrderHand
         return;
       }
       if (inFlight.current) {
-        return; // First click wins. Not a debounce — a guard.
+        // First click wins — this is an atomic in-flight guard, not a debounce.
+        return;
       }
 
       // From here on the load check is superseded: mark it, and abort it in

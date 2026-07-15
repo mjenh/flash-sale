@@ -98,7 +98,8 @@ export function useSaleStatus(slug: string): SaleStatusHandle {
 
   const refetch = useCallback(() => {
     if (notFoundRef.current) {
-      return; // Terminal — nothing left to re-sync.
+      // Terminal outcome — no further re-sync is possible or useful.
+      return;
     }
     void fetchSaleStatus(slug)
       .then((next) => {
@@ -209,7 +210,8 @@ export function useSaleStatus(slug: string): SaleStatusHandle {
         try {
           raw = JSON.parse((event as MessageEvent<string>).data);
         } catch {
-          return; // A malformed frame is ignored, never painted.
+          // Malformed SSE frame — ignore it; the UI keeps whatever state it had.
+          return;
         }
         const next = parseSaleStatus(raw);
         if (next !== null) {
@@ -296,7 +298,8 @@ export function useSaleStatus(slug: string): SaleStatusHandle {
         return;
       }
       if (timerRef.current !== null) {
-        return; // Exactly one poll timer, ever.
+        // Guard: only one poll interval may run at a time.
+        return;
       }
       pollOnce(true);
       timerRef.current = setInterval(() => {
@@ -317,7 +320,8 @@ export function useSaleStatus(slug: string): SaleStatusHandle {
         return;
       }
       if (reconnectTimerRef.current !== null) {
-        return; // Exactly one reconnect timer, ever.
+        // Guard: only one reconnect timer may run at a time.
+        return;
       }
       const attempt = () => {
         reconnectTimerRef.current = null;

@@ -26,7 +26,8 @@ const STRESS_ENV_FILE = resolvePath(REPO_ROOT, ".env.stress");
  *  already present in process.env take precedence (explicit overrides win). */
 function loadStressEnv(): void {
   if (!existsSync(STRESS_ENV_FILE)) {
-    return; // fall back to process.env / defaults — backwards compatible
+    // No stress env file — fall back to process.env defaults. Backwards compatible.
+    return;
   }
   const lines = readFileSync(STRESS_ENV_FILE, "utf8").split("\n");
   for (const line of lines) {

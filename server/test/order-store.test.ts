@@ -3,8 +3,8 @@
 // parsing, bounded timeouts and fail-closed wrapping, and the
 // outside-window SISMEMBER probe.
 //
-// Story 4.2: saleId travels as ARGV[1] and no KEYS[] are passed — the script
-// derives `orders:{saleId}:users` / `stock:{saleId}:remaining` internally.
+// KEYS[1] = stock:{saleId}:remaining, KEYS[2] = orders:{saleId}:users,
+// ARGV[1] = email — passed via KEYS[] for Redis Cluster hash-slot routing.
 import { describe, expect, it, vi } from "vitest";
 import {
   createOrderStore,
@@ -12,7 +12,7 @@ import {
   ORDER_SCRIPT_SOURCE,
   type OrderCommands,
 } from "../src/adapters/redis/orders.ts";
-import { RedisUnavailableError } from "../src/adapters/redis/stock.ts";
+import { RedisUnavailableError, stockKeyFor } from "../src/adapters/redis/stock.ts";
 
 const OPTS = { commandTimeoutMs: 50 };
 const SALE_ID = "sale-abc123";
@@ -36,8 +36,8 @@ describe("createOrderStore", () => {
 
     await store.attempt(SALE_ID, "a@example.com");
     expect(client.evalSha).toHaveBeenCalledWith("sha-1", {
-      keys: [],
-      arguments: [SALE_ID, "a@example.com"],
+      keys: [stockKeyFor(SALE_ID), ordersKeyFor(SALE_ID)],
+      arguments: ["a@example.com"],
     });
     expect(client.eval).not.toHaveBeenCalled();
   });
@@ -79,8 +79,8 @@ describe("createOrderStore", () => {
     const decision = await store.attempt(SALE_ID, "a@x.com");
     expect(decision).toEqual({ verdict: "OK", remaining: 7 });
     expect(client.eval).toHaveBeenCalledWith(ORDER_SCRIPT_SOURCE, {
-      keys: [],
-      arguments: [SALE_ID, "a@x.com"],
+      keys: [stockKeyFor(SALE_ID), ordersKeyFor(SALE_ID)],
+      arguments: ["a@x.com"],
     });
 
     // Re-registration is fired; subsequent attempts use EVALSHA again.

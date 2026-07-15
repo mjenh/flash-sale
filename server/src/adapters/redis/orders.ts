@@ -10,14 +10,13 @@
 // any command rejection, or an unparseable reply surfaces as
 // RedisUnavailableError -> 503 at the central error middleware.
 //
-// Story 4.2 key namespacing: saleId travels as ARGV[1] and the script
-// constructs `orders:{saleId}:users` / `stock:{saleId}:remaining` internally
-// (see order.lua) rather than via KEYS[]. Redis Cluster best practice is
-// normally to route by KEYS[] so a cluster can hash-slot the command, but
-// this codebase runs single-node Redis (docker-compose.yml) and the saleId-
-// as-ARGV shape is a deliberate, already-decided trade-off for this project.
+// Key namespacing: KEYS[1] = stock:{saleId}:remaining, KEYS[2] =
+// orders:{saleId}:users — passed via KEYS[] so Redis Cluster can hash-slot
+// the command. Key names are constructed here from the caller-supplied saleId
+// via stockKeyFor/ordersKeyFor and forwarded to the script; the script never
+// hard-codes or derives key names itself.
 import { readFileSync } from "node:fs";
-import { RedisUnavailableError } from "./stock.ts";
+import { RedisUnavailableError, stockKeyFor } from "./stock.ts";
 
 /** The authoritative script source — order.lua is the implementation of record. */
 export const ORDER_SCRIPT_SOURCE = readFileSync(new URL("./order.lua", import.meta.url), "utf8");
@@ -90,6 +89,14 @@ function parseDecision(reply: unknown): OrderDecision {
   if (!Number.isFinite(remaining)) {
     throw new RedisUnavailableError(new Error(`unexpected remaining stock: ${String(rawRemaining)}`));
   }
+  // Finding #11: guard against a negative remaining value. In normal operation
+  // the Lua script only DECRs when stock > 0, so remaining can never go below
+  // 0 on the OK path. A negative value can only arise from external mutation
+  // of the key (operator error). Fail closed rather than silently propagate a
+  // corrupt count — the next boot's cold rebuild will restore truth.
+  if (remaining < 0) {
+    throw new RedisUnavailableError(new Error(`stock key went negative (${remaining}); external mutation suspected`));
+  }
   return { verdict, remaining };
 }
 
@@ -108,10 +115,11 @@ export function createOrderStore(
     }
   };
 
-  // No KEYS[] — order.lua constructs its key names from ARGV[1] (saleId).
+  // KEYS[1] = stockKey, KEYS[2] = ordersKey — passed so Redis Cluster can
+  // hash-slot on the keys. ARGV[1] = email (the only per-call argument).
   const scriptOptions = (saleId: string, email: string) => ({
-    keys: [],
-    arguments: [saleId, email],
+    keys: [stockKeyFor(saleId), ordersKeyFor(saleId)],
+    arguments: [email],
   });
 
   return {

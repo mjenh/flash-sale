@@ -1,10 +1,10 @@
 // Loaded through the SAME loader production uses (ORDER_SCRIPT_SOURCE). Pins
-// the ARGV shape, commands, and mutation ordering so the .lua file and the
-// test fake's JS port cannot drift silently.
+// the KEYS/ARGV shape, commands, and mutation ordering so the .lua file and
+// the test fake's JS port cannot drift silently.
 //
-// Story 4.2: the script no longer receives KEYS[] — it receives
-// ARGV = [saleId, email] and constructs `orders:{saleId}:users` /
-// `stock:{saleId}:remaining` internally.
+// KEYS[1] = stock:{saleId}:remaining, KEYS[2] = orders:{saleId}:users,
+// ARGV[1] = email — key names are passed via KEYS[] so Redis Cluster can
+// hash-slot the command (constructed by the caller in orders.ts).
 import { describe, expect, it } from "vitest";
 import { ORDER_SCRIPT_SOURCE } from "../src/adapters/redis/orders.ts";
 
@@ -18,20 +18,24 @@ describe("order.lua (authoritative source)", () => {
     expect(ORDER_SCRIPT_SOURCE).toContain("order.lua");
   });
 
-  it("addresses exactly ARGV[1] (saleId) and ARGV[2] (email) — no KEYS[] at all", () => {
+  it("uses KEYS[1] (stockKey) and KEYS[2] (ordersKey), ARGV[1] for email — no higher indices", () => {
+    expect(stripped).toContain("KEYS[1]");
+    expect(stripped).toContain("KEYS[2]");
     expect(stripped).toContain("ARGV[1]");
-    expect(stripped).toContain("ARGV[2]");
-    expect(stripped).not.toMatch(/ARGV\[[3-9]\]/);
-    // Story 4.2 AC2: key construction moved INSIDE the script — no KEYS[]
-    // reference anywhere, and no hardcoded v1.0 flat key names.
-    expect(stripped).not.toContain("KEYS[");
+    // No higher KEYS or ARGV indices — the contract is exactly (2 keys, 1 arg).
+    expect(stripped).not.toMatch(/KEYS\[[3-9]\]/);
+    expect(stripped).not.toMatch(/ARGV\[[2-9]\]/);
+    // No hardcoded v1.0 flat key names.
     expect(stripped).not.toContain("'orders:users'");
     expect(stripped).not.toContain("'stock:remaining'");
   });
 
-  it("constructs the sale-scoped key names from ARGV[1] via string concatenation", () => {
-    expect(stripped).toContain("'orders:' .. saleId .. ':users'");
-    expect(stripped).toContain("'stock:' .. saleId .. ':remaining'");
+  it("assigns KEYS[1] to stockKey and KEYS[2] to ordersKey at the top of the script", () => {
+    expect(stripped).toContain("KEYS[1]");
+    expect(stripped).toContain("KEYS[2]");
+    // The script must reference stockKey (for GET / error message) and ordersKey (for SISMEMBER / SADD).
+    expect(stripped).toContain("stockKey");
+    expect(stripped).toContain("ordersKey");
   });
 
   it("contains the four decision commands and the three verdicts", () => {

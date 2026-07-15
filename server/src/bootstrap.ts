@@ -172,8 +172,8 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
   const saleId = activeSale._id;
 
   // Sale resolution middleware — slug -> Sale doc with in-memory cache.
-  // Note: the "active" slug guard now lives in loadConfig() so it is caught
-  // before any connection is established. This comment is kept for audit trail.
+  // The "active" slug guard lives in loadConfig() so it is caught before
+  // any connection is established; this comment preserves the context.
   // Single-sale ops derived from the boot-resolved active sale. A later
   // story will replace this with a Mongoose-backed implementation for true
   // multi-sale slug lookup (Story 4.3 added the Mongo-backed
@@ -276,7 +276,7 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
       saleEvents.onDomainEvent(event);
     },
     onConnectionLost: (err) => {
-      logger.error({ err }, "sale:{saleId}:events subscriber connection lost; closing open streams");
+      logger.error({ err }, "sale-events pattern subscriber connection lost; closing open streams");
       saleEvents.closeAll();
     },
     connectTimeoutMs: config.redisConnectTimeoutMs * 5,

@@ -18,7 +18,7 @@ import { ConfigError } from "../src/adapters/config.ts";
 import { SALE_SLUG } from "../src/adapters/mongo/seed.ts";
 import { stockKeyFor } from "../src/adapters/redis/stock.ts";
 import { ordersKeyFor } from "../src/adapters/redis/orders.ts";
-import { saleEventsChannel } from "../src/adapters/redis/events.ts";
+import { saleEventsChannel, SALE_EVENTS_PATTERN } from "../src/adapters/redis/events.ts";
 import type { RedisClient } from "../src/adapters/redis/client.ts";
 import { createFakeMongo, reserveSaleId } from "./helpers/fake-mongo.ts";
 import { START_ISO, END_ISO } from "./helpers/time-fixtures.ts";
@@ -50,6 +50,10 @@ function fakeSubscriber() {
     }),
     subscribe: vi.fn(async (_channel: string, _listener: (message: string) => void) => {}),
     unsubscribe: vi.fn(async (_channel: string) => {}),
+    // Finding #5: bootstrap now uses pSubscribe(SALE_EVENTS_PATTERN) instead of
+    // a saleId-scoped subscribe — the stub must satisfy the updated interface.
+    pSubscribe: vi.fn(async (_pattern: string, _listener: (message: string, channel: string) => void) => {}),
+    pUnsubscribe: vi.fn(async (_pattern?: string) => {}),
     on: vi.fn((_event: string, _listener: (err: Error) => void) => {}),
     destroy: vi.fn(() => {
       subscriber.isOpen = false;
@@ -218,15 +222,20 @@ describe("bootstrap", () => {
     expect(overrides.disconnectRedis).toHaveBeenCalledWith(fakeRedis);
   });
 
-  it("subscribes the duplicated connection to exactly sale:{saleId}:events during bootstrap() — error listener before connect", async () => {
-    const { fakeRedis, subscriber, saleId, overrides } = await fakeOverrides(validEnv);
+  it("subscribes the duplicated connection via PSUBSCRIBE(sale:*:events) during bootstrap() — error listener before connect", async () => {
+    // Finding #5: bootstrap now uses pSubscribe(SALE_EVENTS_PATTERN) so the
+    // subscriber receives events from any sale — isolation is at the broadcaster
+    // layer. saleEventsChannel is still used for publisher.publish() calls.
+    const { fakeRedis, subscriber, overrides } = await fakeOverrides(validEnv);
     await bootstrap(overrides);
 
     const duplicate = (fakeRedis as unknown as { duplicate: ReturnType<typeof vi.fn> }).duplicate;
     expect(duplicate).toHaveBeenCalledTimes(1);
     expect(subscriber.connect).toHaveBeenCalledTimes(1);
-    expect(subscriber.subscribe).toHaveBeenCalledTimes(1);
-    expect(subscriber.subscribe.mock.calls[0]?.[0]).toBe(saleEventsChannel(saleId));
+    expect(subscriber.pSubscribe).toHaveBeenCalledTimes(1);
+    expect(subscriber.pSubscribe.mock.calls[0]?.[0]).toBe(SALE_EVENTS_PATTERN);
+    // subscribe() is NOT called — only pSubscribe is used now.
+    expect(subscriber.subscribe).toHaveBeenCalledTimes(0);
 
     // The error listener (connection-lost trigger) is wired first.
     const onOrder = subscriber.on.mock.invocationCallOrder[0];
@@ -243,11 +252,14 @@ describe("bootstrap", () => {
     await expect(bootstrap(overrides)).rejects.toThrow("Service temporarily unavailable.");
   });
 
-  it("teardown closes the sale:{saleId}:events subscriber (unsubscribe + close)", async () => {
-    const { subscriber, saleId, overrides } = await fakeOverrides(validEnv);
+  it("teardown calls pUnsubscribe(SALE_EVENTS_PATTERN) then close() before MongoDB disconnects", async () => {
+    // Finding #5: teardown now calls pUnsubscribe(SALE_EVENTS_PATTERN) instead
+    // of unsubscribe(saleEventsChannel(saleId)).
+    const { subscriber, overrides } = await fakeOverrides(validEnv);
     const { teardown } = await bootstrap(overrides);
     await teardown();
-    expect(subscriber.unsubscribe).toHaveBeenCalledExactlyOnceWith(saleEventsChannel(saleId));
+    expect(subscriber.pUnsubscribe).toHaveBeenCalledExactlyOnceWith(SALE_EVENTS_PATTERN);
+    expect(subscriber.unsubscribe).toHaveBeenCalledTimes(0);
     expect(subscriber.close).toHaveBeenCalledTimes(1);
     // Subscriber teardown runs before the store disconnects.
     const closeOrder = subscriber.close.mock.invocationCallOrder[0];

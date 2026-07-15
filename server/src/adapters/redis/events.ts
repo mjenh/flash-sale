@@ -48,12 +48,20 @@ export function createEventPublisher(
   };
 }
 
+/** Glob pattern that matches ALL sale event channels regardless of saleId.
+ *  Using PSUBSCRIBE instead of SUBSCRIBE means a future second sale's events
+ *  are received without re-subscribing after a redeploy (finding #5). */
+export const SALE_EVENTS_PATTERN = "sale:*:events";
+
 /** Narrow surface of the DEDICATED duplicated subscriber connection —
  *  structurally satisfied by node-redis RedisClientType. */
 export interface SubscriberCommands {
   connect(): Promise<unknown>;
   subscribe(channel: string, listener: (message: string) => void): Promise<unknown>;
   unsubscribe(channel: string): Promise<unknown>;
+  /** Pattern subscription — listener receives (message, channel). */
+  pSubscribe(pattern: string, listener: (message: string, channel: string) => void): Promise<unknown>;
+  pUnsubscribe(pattern?: string): Promise<unknown>;
   on(event: "error", listener: (err: Error) => void): unknown;
   destroy(): void;
   close(): Promise<unknown> | void;
@@ -61,8 +69,9 @@ export interface SubscriberCommands {
 }
 
 export interface SaleEventsSubscriptionOptions {
-  /** The sale whose channel this subscriber follows — Story 4.2 subscribes
-   *  to `sale:{saleId}:events` only. */
+  /** Kept for logging and error-message context; the subscription itself uses
+   *  SALE_EVENTS_PATTERN (`sale:*:events`) rather than a channel scoped to
+   *  this saleId (finding #5 — pattern subscription for future multi-sale). */
   saleId: string;
   onEvent: (event: string) => void;
   /** Mid-stream trigger — bootstrap closes every open SSE stream on connection loss. */
@@ -77,12 +86,16 @@ export interface SaleEventsSubscription {
 /** Wires the dedicated duplicated connection: error listener first (an
  *  unhandled 'error' would crash the process — and it is the connection-lost
  *  signal), then a fail-fast bounded connect (a rejection fails bootstrap()
- *  strictly before listen()), then SUBSCRIBE sale:{saleId}:events. */
+ *  strictly before listen()), then PSUBSCRIBE sale:*:events.
+ *
+ *  Finding #5: using PSUBSCRIBE with SALE_EVENTS_PATTERN instead of a
+ *  saleId-scoped SUBSCRIBE means events from any sale are received without
+ *  re-subscribing after a redeploy that introduces a different saleId.
+ *  saleId is retained in options for logging context only. */
 export async function createSaleEventsSubscription(
   subscriber: SubscriberCommands,
   { saleId, onEvent, onConnectionLost, connectTimeoutMs }: SaleEventsSubscriptionOptions,
 ): Promise<SaleEventsSubscription> {
-  const channel = saleEventsChannel(saleId);
   subscriber.on("error", onConnectionLost);
 
   let timer: NodeJS.Timeout | undefined;
@@ -93,7 +106,9 @@ export async function createSaleEventsSubscription(
         timer = setTimeout(() => {
           reject(
             new RedisUnavailableError(
-              new Error(`${channel} subscriber not connected within ${connectTimeoutMs} ms`),
+              new Error(
+                `sale-events subscriber (saleId=${saleId}) not connected within ${connectTimeoutMs} ms`,
+              ),
             ),
           );
         }, connectTimeoutMs);
@@ -106,10 +121,10 @@ export async function createSaleEventsSubscription(
     clearTimeout(timer);
   }
 
-  // A subscribe failure after a successful connect must not leak the duplicated
+  // A pSubscribe failure after a successful connect must not leak the duplicated
   // connection: destroy it and surface a wrapped RedisUnavailableError.
   try {
-    await subscriber.subscribe(channel, (message: string) => {
+    await subscriber.pSubscribe(SALE_EVENTS_PATTERN, (message: string) => {
       onEvent(message);
     });
   } catch (err) {
@@ -120,9 +135,9 @@ export async function createSaleEventsSubscription(
   return {
     async close(): Promise<void> {
       // Bound teardown with the same timeout discipline as connect — a hung
-      // unsubscribe/close must never block shutdown; on timeout, destroy().
+      // pUnsubscribe/close must never block shutdown; on timeout, destroy().
       try {
-        await bounded(Promise.resolve(subscriber.unsubscribe(channel)), connectTimeoutMs);
+        await bounded(Promise.resolve(subscriber.pUnsubscribe(SALE_EVENTS_PATTERN)), connectTimeoutMs);
       } catch {
         // Best-effort: a dead connection has nothing to unsubscribe.
       }

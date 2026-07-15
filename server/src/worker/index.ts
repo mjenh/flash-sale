@@ -20,7 +20,7 @@ async function main(): Promise<void> {
   );
   await redis.connect();
 
-  // MongoDB.
+  // MongoDB — must be connected before the worker loop starts draining the stream.
   await connectMongo(config.mongodbUri);
 
   const worker = createOrderWorker({ redis, bulkAudit: mongoBulkAudit, logger });

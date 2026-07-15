@@ -37,6 +37,14 @@ export interface QueueMessage {
   payload: QueueOrderPayload;
 }
 
+export interface ProducerOptions {
+  /** Approximate maximum stream length (XADD MAXLEN ~ threshold).
+   *  Prevents unbounded stream growth during a MongoDB outage (finding #6).
+   *  Approximate trimming (~) keeps XADD O(1) amortised. Default: 200_000
+   *  — well above any realistic stock quantity while staying memory-safe. */
+  maxStreamLen?: number;
+}
+
 export interface OrderQueueProducer {
   /** XADD the order payload to the stream; returns the generated orderId UUID. */
   enqueue(saleId: string, productId: string, email: string): Promise<string>;
@@ -56,7 +64,10 @@ export interface OrderQueueConsumer {
   ack(streamIds: string[]): Promise<void>;
 }
 
-export function createOrderQueueProducer(redis: RedisClient): OrderQueueProducer {
+export function createOrderQueueProducer(
+  redis: RedisClient,
+  { maxStreamLen = 200_000 }: ProducerOptions = {},
+): OrderQueueProducer {
   return {
     async enqueue(saleId: string, productId: string, email: string): Promise<string> {
       const orderId = randomUUID();
@@ -67,11 +78,15 @@ export function createOrderQueueProducer(redis: RedisClient): OrderQueueProducer
         email,
         enqueuedAt: Date.now(),
       };
-      // XADD queue:orders * orderId <uuid> data <json-payload>
-      await redis.xAdd(QUEUE_STREAM_KEY, "*", {
-        orderId,
-        data: JSON.stringify(payload),
-      });
+      // XADD queue:orders * ... MAXLEN ~ <threshold>
+      // Approximate trimming (~) keeps XADD O(1) amortised; exact (=) would
+      // scan the entire stream on every enqueue. Finding #6.
+      await redis.xAdd(
+        QUEUE_STREAM_KEY,
+        "*",
+        { orderId, data: JSON.stringify(payload) },
+        { TRIM: { strategy: "MAXLEN", strategyModifier: "~", threshold: maxStreamLen } },
+      );
       return orderId;
     },
   };

@@ -173,7 +173,8 @@ describe("POST /api/order (booted via bootstrap())", () => {
 
     it("a 256-char email is valid (boundary)", async () => {
       const { app } = await boot({ nowMs: IN_WINDOW, stock: "5" });
-      const email = "a".repeat(256);
+      // 251 local-part chars + "@b.co" = exactly 256 chars; valid format + max length.
+      const email = "a".repeat(251) + "@b.co";
       const res = await request(app).post("/api/order").send({ email });
       expect(res.status).toBe(202);
       expect(res.body.email).toBe(email);

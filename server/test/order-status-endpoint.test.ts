@@ -117,8 +117,9 @@ describe("GET /api/order/:email (booted via bootstrap())", () => {
 
     it("a 256-char email is valid (boundary)", async () => {
       const { app } = await boot({ nowMs: IN_WINDOW, stock: "5" });
-      const email = "a".repeat(256);
-      const res = await request(app).get(`/api/order/${email}`);
+      // 251 local-part chars + "@b.co" = exactly 256 chars; valid format + max length.
+      const email = "a".repeat(251) + "@b.co";
+      const res = await request(app).get(`/api/order/${encodeURIComponent(email)}`);
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ success: true, ordered: false, email });
     });

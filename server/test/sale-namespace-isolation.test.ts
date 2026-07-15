@@ -104,7 +104,11 @@ describe("Story 4.2 AC5 — Redis key namespace isolation across saleIds", () =>
     expect(orderSetMembers(fake, SALE_B)).toEqual(["existing-b@example.com"]);
   });
 
-  it("sale:{saleId}:events pub/sub channels are isolated — a subscriber for A never hears B's events", async () => {
+  it("PSUBSCRIBE sale:*:events delivers events from ALL sales to ALL pattern subscribers — broadcaster-level getActiveSale() provides the per-sale filter", async () => {
+    // Finding #5: createSaleEventsSubscription now uses pSubscribe(sale:*:events)
+    // rather than a per-saleId subscribe. Both subscribers receive every sale's
+    // events; isolation is enforced at the broadcaster layer (getActiveSale()
+    // re-reads which sale is active and only composes frames for it).
     const fake = createFakeRedis();
     const publisher = createEventPublisher(fake.client, OPTS);
 
@@ -126,7 +130,8 @@ describe("Story 4.2 AC5 — Redis key namespace isolation across saleIds", () =>
     await publisher.publish("sale.sold_out", SALE_A);
     await publisher.publish("sale.started", SALE_B);
 
-    expect(receivedByA).toEqual(["sale.sold_out"]);
-    expect(receivedByB).toEqual(["sale.started"]);
+    // Both subscribers receive both events — pattern subscription is sale-agnostic.
+    expect(receivedByA).toEqual(["sale.sold_out", "sale.started"]);
+    expect(receivedByB).toEqual(["sale.sold_out", "sale.started"]);
   });
 });

@@ -1,12 +1,11 @@
 // Shared in-memory fake Redis client for endpoint tests. Exposes exactly the
 // command surface production code uses (get/set/exists/del/sAdd/sIsMember/
-// scriptLoad/evalSha/eval/publish/duplicate/xAdd) so tests boot through the
-// REAL bootstrap(); swap it for a real client against compose-run Redis and
-// the endpoint test files run unchanged.
+// scriptLoad/evalSha/eval/publish/duplicate/xAdd/pSubscribe/pUnsubscribe) so
+// tests boot through the REAL bootstrap(); swap it for a real client against
+// compose-run Redis and the endpoint test files run unchanged.
 //
-// Pub/sub bus: publish() delivers synchronously to listeners subscribed
-// through duplicate()d subscriber clients (all duplicates share one bus).
-// Test seams: deliver() injects an event at the subscription without a
+// Pub/sub bus: publish() delivers synchronously to both exact-channel and
+// pattern listeners. deliver() injects an event at the subscription without a
 // publish (drives the broadcaster while `failing` blocks the bus),
 // emitSubscriberError() fires the subscriber connection's error listeners
 // (connection-lost trigger), and failingPublish fails ONLY publishes
@@ -19,9 +18,8 @@
 // SYNCHRONOUSLY within one call, the honest in-process analogue of Redis's
 // single-threaded script atomicity: nothing interleaves mid-decision.
 //
-// Story 4.2: keys are namespaced by saleId. The script no longer receives
-// KEYS[] — it receives ARGV = [saleId, email] and derives key names itself,
-// mirroring order.lua exactly (see stockKeyFor/ordersKeyFor).
+// KEYS[1] = stock:{saleId}:remaining, KEYS[2] = orders:{saleId}:users,
+// ARGV[1] = email — mirrors the updated order.lua contract (finding #1).
 import { createHash } from "node:crypto";
 import { ORDER_SCRIPT_SOURCE, ordersKeyFor } from "../../src/adapters/redis/orders.ts";
 import { stockKeyFor } from "../../src/adapters/redis/stock.ts";
@@ -77,7 +75,18 @@ export function createFakeRedis(initial?: { stock?: string; saleId?: string }): 
 
   // Pub/sub bus shared by the main client and every duplicate()d subscriber.
   const channelListeners = new Map<string, Set<(message: string) => void>>();
+  // Pattern listeners (pSubscribe): each entry is a glob pattern → set of
+  // listeners. On publish/deliver, patterns are matched with globMatch().
+  const patternListeners = new Map<string, Set<(message: string, channel: string) => void>>();
   const subscriberErrorListeners = new Set<(err: Error) => void>();
+
+  /** Minimal Redis-compatible glob match (only * is used in practice). */
+  function globMatch(pattern: string, channel: string): boolean {
+    const regex = new RegExp(
+      "^" + pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$",
+    );
+    return regex.test(channel);
+  }
 
   const streams = new Map<string, Array<{ id: string; fields: Record<string, string> }>>();
   const fake: FakeRedis = {
@@ -90,6 +99,14 @@ export function createFakeRedis(initial?: { stock?: string; saleId?: string }): 
     deliver: (channel, message) => {
       for (const listener of [...(channelListeners.get(channel) ?? [])]) {
         listener(message);
+      }
+      // Also fire any pattern listeners that match the channel.
+      for (const [pattern, listeners] of patternListeners) {
+        if (globMatch(pattern, channel)) {
+          for (const listener of [...listeners]) {
+            listener(message, channel);
+          }
+        }
       }
     },
     emitSubscriberError: (err) => {
@@ -117,12 +134,12 @@ export function createFakeRedis(initial?: { stock?: string; saleId?: string }): 
   // Faithful port of order.lua, executed atomically (synchronously) per call.
   // Branch order mirrors the .lua source exactly:
   //   missing stock key -> error | ALREADY | SOLD_OUT | SADD + DECR -> OK.
-  // ARGV = [saleId, email] — no KEYS[]; key names are derived here exactly
-  // as order.lua derives them internally.
-  const runOrderScript = (args: string[]): [string, number] => {
-    const [saleId, email] = args as [string, string];
-    const stockKey = stockKeyFor(saleId);
-    const ordersKey = ordersKeyFor(saleId);
+  // KEYS[1] = stockKey, KEYS[2] = ordersKey, ARGV[1] = email — mirrors the
+  // updated Lua contract (finding #1: keys via KEYS[] for Cluster routing).
+  const runOrderScript = (keys: string[], args: string[]): [string, number] => {
+    const stockKey = keys[0] as string;
+    const ordersKey = keys[1] as string;
+    const email = args[0] as string;
     const rawStock = kv.get(stockKey);
     const stock = rawStock === undefined ? Number.NaN : Number.parseInt(rawStock, 10);
     if (Number.isNaN(stock)) {
@@ -203,7 +220,7 @@ export function createFakeRedis(initial?: { stock?: string; saleId?: string }): 
       if (source !== ORDER_SCRIPT_SOURCE) {
         throw new Error(`fake-redis only implements order.lua, got sha ${sha}`);
       }
-      return runOrderScript(options.arguments);
+      return runOrderScript(options.keys, options.arguments);
     },
     eval: async (source: string, options: { keys: string[]; arguments: string[] }) => {
       assertUp();
@@ -211,9 +228,9 @@ export function createFakeRedis(initial?: { stock?: string; saleId?: string }): 
       if (source !== ORDER_SCRIPT_SOURCE) {
         throw new Error("fake-redis only implements order.lua");
       }
-      return runOrderScript(options.arguments);
+      return runOrderScript(options.keys, options.arguments);
     },
-    xAdd: async (key: string, id: string, fields: Record<string, string>) => {
+    xAdd: async (key: string, id: string, fields: Record<string, string>, _options?: unknown) => {
       assertUp();
       const entries = streams.get(key) ?? [];
       const entryId = `${Date.now()}-${entries.length}`;
@@ -228,16 +245,26 @@ export function createFakeRedis(initial?: { stock?: string; saleId?: string }): 
         throw new Error("publish rejected (failingPublish)");
       }
       fake.published.push(message);
-      const listeners = channelListeners.get(channel) ?? new Set();
-      for (const listener of [...listeners]) {
+      // Exact-channel listeners.
+      const exactListeners = channelListeners.get(channel) ?? new Set();
+      for (const listener of [...exactListeners]) {
         listener(message);
       }
-      return listeners.size;
+      // Pattern listeners (finding #5: pSubscribe support).
+      for (const [pattern, listeners] of patternListeners) {
+        if (globMatch(pattern, channel)) {
+          for (const listener of [...listeners]) {
+            listener(message, channel);
+          }
+        }
+      }
+      return exactListeners.size;
     },
     duplicate: () => {
       // Subscriber-side fake client sharing the bus; its commands honor
       // `failing` like every other command on the fake.
       const mine = new Map<string, (message: string) => void>();
+      const minePattern = new Map<string, (message: string, channel: string) => void>();
       const subscriber = {
         isOpen: false,
         connect: async () => {
@@ -257,6 +284,29 @@ export function createFakeRedis(initial?: { stock?: string; saleId?: string }): 
           if (listener !== undefined) {
             channelListeners.get(channel)?.delete(listener);
             mine.delete(channel);
+          }
+        },
+        // Finding #5: pSubscribe/pUnsubscribe for wildcard channel patterns.
+        pSubscribe: async (pattern: string, listener: (message: string, channel: string) => void) => {
+          assertUp();
+          minePattern.set(pattern, listener);
+          const listeners = patternListeners.get(pattern) ?? new Set();
+          listeners.add(listener);
+          patternListeners.set(pattern, listeners);
+        },
+        pUnsubscribe: async (pattern?: string) => {
+          assertUp();
+          if (pattern !== undefined) {
+            const listener = minePattern.get(pattern);
+            if (listener !== undefined) {
+              patternListeners.get(pattern)?.delete(listener);
+              minePattern.delete(pattern);
+            }
+          } else {
+            for (const [p, listener] of minePattern) {
+              patternListeners.get(p)?.delete(listener);
+            }
+            minePattern.clear();
           }
         },
         on: (event: string, listener: (err: Error) => void) => {

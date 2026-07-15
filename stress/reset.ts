@@ -1,4 +1,4 @@
-// The reset contract (ARCHITECTURE-SPINE "Reset contract"), made mechanical.
+// Mechanical implementation of the reset contract.
 //
 // Runs ONLY while the API is stopped: while the API serves, the Lua script
 // is the sole writer of `stock:{saleId}:remaining` and `orders:{saleId}:users`,
@@ -116,7 +116,8 @@ export async function probeApiUrl(apiUrl: string, timeoutMs = 2000): Promise<str
     return `HTTP ${res.status} from ${apiUrl}/api/sale/status`;
   } catch (err) {
     if (isConnectionRefused(err)) {
-      return null; // genuinely refused — nothing is listening. Safe to reset.
+      // Genuine ECONNREFUSED — nothing is listening on that address. Safe to proceed.
+      return null;
     }
     // Timeout / abort / DNS / anything else: the API may still be alive but
     // slow. NOT safe to reset — treat it as still serving.

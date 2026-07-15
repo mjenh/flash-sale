@@ -61,7 +61,8 @@ export function createOrderWorker({
       await bulkAudit.bulkRecordOrders(messages.map((m) => m.payload));
       // ACK only after MongoDB confirms — messages stay in PEL if we crash here.
       await consumer.ack(messages.map((m) => m.streamId));
-      backoffMs = INITIAL_BACKOFF_MS; // reset on success
+      // Successful write: reset the backoff so the next failure starts from the minimum delay.
+      backoffMs = INITIAL_BACKOFF_MS;
       logger.info({ count: messages.length }, "worker: batch persisted and ACKed");
     } catch (err) {
       // Do NOT ACK — messages remain in PEL and will be re-delivered.

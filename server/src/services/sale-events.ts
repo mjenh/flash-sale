@@ -158,13 +158,15 @@ export function createSaleEventsBroadcaster({
       return;
     }
     if (sawTerminal || sinks.size === 0) {
-      return; // state changed while the read was in flight
+      // State changed while the status read was in flight — skip the stale result.
+      return;
     }
     if (status === "sold_out") {
       sawTerminal = true;
       emit(); // composes a fresh sold_out frame to every sink via the chain
     } else if (status === "ended") {
-      sawTerminal = true; // terminal; stop polling — snapshot heals reconnects
+      // Terminal boundary reached — stop polling. Snapshot-on-connect heals future reconnects.
+      sawTerminal = true;
     }
   };
 
@@ -211,7 +213,8 @@ export function createSaleEventsBroadcaster({
     chain = chain
       .then(async () => {
         if (sinks.size === 0) {
-          return; // nobody listening — skip the read entirely
+          // No active connections — skip the Redis read entirely.
+          return;
         }
         const active = await getActiveSale();
         const frame = formatStatusFrame(await saleStatus.getStatus(active.saleId, active.window));
@@ -253,7 +256,8 @@ export function createSaleEventsBroadcaster({
         return;
       }
       if (pending !== undefined) {
-        return; // one trailing emit already absorbs this burst
+        // A trailing emit is already queued — it will coalesce this burst.
+        return;
       }
       const elapsed = clock() - lastEmitAt;
       if (elapsed >= coalesceMs) {
@@ -300,7 +304,8 @@ export function armWindowTimers({
 
   const armAt = (boundaryMs: number, event: "sale.started" | "sale.ended"): void => {
     if (boundaryMs <= clock()) {
-      return; // elapsed boundary — emit nothing; snapshot-on-connect heals
+      // Boundary already elapsed — emit nothing; snapshot-on-connect heals reconnecting clients.
+      return;
     }
     const schedule = (): void => {
       const remaining = boundaryMs - clock();
