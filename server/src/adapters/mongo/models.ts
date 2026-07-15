@@ -1,5 +1,5 @@
 // Mongoose domain models. Product/Sale/SaleProduct/Inventory are boot-seeded;
-// Inventory is never ticked per order; Reservation is defined but dormant.
+// Inventory is never ticked per order.
 // MongoDB is the durable audit record, never the concurrency mechanism.
 //
 // Collection names are explicit (third arg). Unique indexes:
@@ -136,30 +136,3 @@ const orderLineSchema = new Schema<OrderLineDoc>(
 );
 
 export const OrderLine = mongoose.model<OrderLineDoc>("OrderLine", orderLineSchema, "orderlines");
-
-export interface ReservationDoc {
-  saleId: Types.ObjectId;
-  productId: Types.ObjectId;
-  email: string;
-  status: string;
-  expiresAt: Date;
-}
-
-// Dormant by design: schema defined but no code path writes to it. Activates
-// only when the reserve->confirm payment flow is implemented.
-const reservationSchema = new Schema<ReservationDoc>(
-  {
-    saleId: { type: Schema.Types.ObjectId, ref: "Sale", required: true },
-    productId: { type: Schema.Types.ObjectId, ref: "Product", required: true },
-    email: { type: String, required: true },
-    status: { type: String, required: true },
-    expiresAt: { type: Date, required: true },
-  },
-  { timestamps: true },
-);
-
-export const Reservation = mongoose.model<ReservationDoc>(
-  "Reservation",
-  reservationSchema,
-  "reservations",
-);

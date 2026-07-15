@@ -255,7 +255,6 @@ ship; Redis holds the runtime truth.
 | --- | --- | --- |
 | Boot-seeded constants | `products`, `sales`, `saleproducts`, `inventories` | Upserted idempotently at boot from env config. Never written per order. `Inventory.initialQuantity` is seeded from `STOCK_QUANTITY` but never decremented — concurrency truth lives in Redis. |
 | Per-order writes | `users`, `orders`, `orderlines` | Written by the background worker after draining `queue:orders`. `Order` carries a compound unique index on `(saleId, email)` as defense-in-depth. |
-| Dormant | `reservations` | Schema ships, no code writes it. Reserved for a future reserve-then-confirm payment flow. |
 
 **Redis (runtime truth) — two keys + one channel + one stream:**
 
@@ -319,7 +318,8 @@ Each builds on the current architecture without disturbing the decision core.
 
 **Payment integration.** The `PaymentProvider` port already exists with a no-op
 implementation. A real adapter (Stripe, etc.) slots in after the Redis `OK`,
-with a reserve-then-confirm flow activating the dormant `Reservation` schema.
+with a reserve-then-confirm flow requiring a new `Reservation` collection
+(schema to be designed alongside the payment adapter).
 This is the first feature that turns the system from a demo into a real sale.
 
 **Authentication and account identity.** Replace the raw email with an

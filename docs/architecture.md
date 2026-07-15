@@ -248,9 +248,8 @@ timeout so a hang becomes a failure.
 
 **MongoDB (`adapters/mongo/`)**
 
-- **`models.ts`** — the full v1 Mongoose schema: `User`, `Product`, `Sale`,
-  `SaleProduct`, `Inventory`, `Order`, `OrderLine`, and a dormant `Reservation`
-  that ships but is never written. Unique indexes guard `users.identifier`,
+- **`models.ts`** — the v1 Mongoose schema: `User`, `Product`, `Sale`,
+  `SaleProduct`, `Inventory`, `Order`, `OrderLine`. Unique indexes guard `users.identifier`,
   `products.sku`, `(saleId, productId)`, and `(saleId, email)` on orders as
   defense-in-depth. `Inventory` is seeded once and never decremented per order;
   concurrency truth lives in Redis.
@@ -361,8 +360,6 @@ erDiagram
     User ||--o{ Order : places
     Order ||--o{ OrderLine : includes
     Product ||--o{ OrderLine : of_product
-    Sale ||--o{ Reservation : "reserves (dormant)"
-    Product ||--o{ Reservation : "reserved for (dormant)"
 
     Sale {
         string slug UK "flash-sale"
@@ -397,13 +394,6 @@ erDiagram
         number quantity "1"
         number unitPrice "0 (payment out of scope)"
     }
-    Reservation {
-        ObjectId saleId FK
-        ObjectId productId FK
-        string email
-        string status
-        Date expiresAt
-    }
 ```
 
 **Lifecycle categories:**
@@ -412,7 +402,6 @@ erDiagram
 | --- | --- | --- |
 | Boot-seeded constants | `products`, `sales`, `saleproducts`, `inventories` | Upserted idempotently at boot from env config. Never written per order. `Inventory.initialQuantity` is seeded from `STOCK_QUANTITY` but never decremented — concurrency truth lives in Redis. |
 | Per-order writes | `users`, `orders`, `orderlines` | Written by the background worker after draining `queue:orders` (§3.6). `Order` has a compound unique index on `(saleId, email)` as defense-in-depth. `OrderLine` defaults to qty 1, unitPrice 0 (payment out of scope). |
-| Dormant | `reservations` | Schema ships but no code path writes it. Activates at the reserve-then-confirm payment trigger (a future milestone). |
 
 All schemas use `timestamps: true`. Unique indexes guard `users.identifier`,
 `products.sku`, `saleproducts(saleId, productId)`, and
