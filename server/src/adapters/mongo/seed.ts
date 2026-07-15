@@ -8,8 +8,9 @@ import { Inventory, Order, Product, Sale, SaleProduct } from "./models.ts";
 import type { AppConfig } from "../config.ts";
 import type { SaleRefs } from "./audit.ts";
 
-// Single-sale system: the sale keys on a constant slug and its window/stock
-// are $set from env each boot so the durable record mirrors current config.
+// Default identity values — kept as named exports so existing tests can import
+// them as fixture constants. The live seed() path reads from AppConfig, which
+// defaults to these strings when the env vars are unset.
 export const SALE_SLUG = "flash-sale";
 export const SALE_NAME = "Flash Sale";
 export const PRODUCT_SKU = "KEYCAP-ONE";
@@ -116,9 +117,9 @@ export interface DomainSeeder {
 export function createDomainSeeder(ops: SeedModelOps = mongoSeedModelOps): DomainSeeder {
   return {
     async seed(config: AppConfig): Promise<SaleRefs> {
-      const productId = await ops.upsertProduct(PRODUCT_SKU, PRODUCT_NAME);
-      const saleId = await ops.upsertSale(SALE_SLUG, {
-        name: SALE_NAME,
+      const productId = await ops.upsertProduct(config.productSku, config.productName);
+      const saleId = await ops.upsertSale(config.saleSlug, {
+        name: config.saleName,
         startTime: new Date(config.saleStartMs),
         endTime: new Date(config.saleEndMs),
         stockQuantity: config.stockQuantity,

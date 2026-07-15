@@ -19,7 +19,6 @@ import { createOrderQueueProducer, createQueueAuditAdapter } from "./adapters/re
 import {
   createDomainSeeder,
   mongoSeedModelOps,
-  SALE_SLUG,
   type SeedModelOps,
 } from "./adapters/mongo/seed.ts";
 import { createCatalogReader, mongoCatalogModelOps, type CatalogModelOps } from "./adapters/mongo/catalog.ts";
@@ -108,7 +107,7 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
   await connectRedis(redis);
 
   // 3. Mongo.
-  await (overrides.connectMongoDb ?? connectMongo)(config.mongodbUri);
+  await (overrides.connectMongoDb ?? ((uri: string) => connectMongo(uri, config.mongoSelectionTimeoutMs)))(config.mongodbUri);
 
   // Lua order script registration — SCRIPT LOAD + sha cache, strictly before
   // listen(); attempt() falls back to EVAL on NOSCRIPT.
@@ -173,10 +172,8 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
   const saleId = activeSale._id;
 
   // Sale resolution middleware — slug -> Sale doc with in-memory cache.
-  // Boot validation: the slug "active" is reserved for the discovery endpoint.
-  if ((SALE_SLUG as string) === "active") {
-    throw new ConfigError('The slug "active" is reserved for the discovery endpoint and cannot be used as a sale slug.');
-  }
+  // Note: the "active" slug guard now lives in loadConfig() so it is caught
+  // before any connection is established. This comment is kept for audit trail.
   // Single-sale ops derived from the boot-resolved active sale. A later
   // story will replace this with a Mongoose-backed implementation for true
   // multi-sale slug lookup (Story 4.3 added the Mongo-backed
@@ -196,6 +193,7 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
   const saleResolver = createSaleResolver({
     ops: overrides.saleLookupOps ?? defaultSaleLookupOps,
     clock,
+    cacheTtlMs: config.saleResolverCacheTtlMs,
   });
 
   // Story 4.6: one-time v1.0 -> v1.1 flat-key migration, strictly BEFORE
@@ -332,6 +330,7 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
     logger,
     apiRouter: createApiRouter({ saleStatus, saleEvents, orderService, saleResolver, catalog, stock: stockStore }),
     clientDistDir: env.CLIENT_DIST_DIR,
+    bodyLimit: config.httpBodyLimit,
   });
 
   const disconnectRedis =

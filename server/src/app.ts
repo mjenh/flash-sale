@@ -16,6 +16,8 @@ export interface AppDeps {
   apiRouter: Router;
   /** When set (container: /app/client/dist), the built SPA is served at /. */
   clientDistDir?: string | undefined;
+  /** Express JSON body size limit (default "8kb"). */
+  bodyLimit?: string | undefined;
 }
 
 interface HttpishError extends Error {
@@ -26,12 +28,12 @@ interface HttpishError extends Error {
   expose?: boolean;
 }
 
-export function createApp({ logger, apiRouter, clientDistDir }: AppDeps): Express {
+export function createApp({ logger, apiRouter, clientDistDir, bodyLimit }: AppDeps): Express {
   const app = express();
 
   app.use(helmet());
   app.use(pinoHttp({ logger }));
-  app.use(express.json({ limit: "8kb" }));
+  app.use(express.json({ limit: bodyLimit ?? "8kb" }));
 
   app.use("/api", apiRouter);
   app.use("/api", (_req: Request, res: Response) => {
