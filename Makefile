@@ -1,4 +1,4 @@
-.PHONY: install dev up-stores seed test typecheck lint build deploy up down restart logs worker-logs ps stress clean
+.PHONY: install dev up-stores seed test typecheck lint build deploy up down restart logs worker-logs ps stress stress-clean clean
 
 COMPOSE := docker compose
 
@@ -11,6 +11,12 @@ WORKER_PROFILE :=
 else
 WORKER_PROFILE := --profile worker
 endif
+
+# Stress runs in a fully isolated Docker project so the dev stack is never
+# touched. COMPOSE_PROJECT_NAME and COMPOSE_FILE are also exported to the
+# npm run stress process so that any `docker compose` calls inside run.ts
+# (stop/start api) automatically target the stress project.
+STRESS_COMPOSE := docker compose -p flash-sale-stress -f docker-compose.stress.yml
 
 ## ---- Local dev ----
 
@@ -69,15 +75,18 @@ ps:
 
 ## ---- Validation ----
 
-stress: ## 5000-vs-100 fairness proof: stop api -> reset -> start api -> k6 -> verifier -> window check
-	$(COMPOSE) up -d --wait redis mongo
+stress: ## fairness proof in an isolated Docker project — the dev stack keeps running
+	$(STRESS_COMPOSE) up -d --wait redis mongo
 	node db/scripts/seed-db.ts \
-	  --mongoUri mongodb://127.0.0.1:27017/flash-sale-stress \
+	  --mongoUri mongodb://127.0.0.1:27018/flash-sale-stress \
 	  --dataDir db/data/stress \
 	  --dynamic-times
-	COMPOSE_FILE=docker-compose.yml:docker-compose.stress.yml \
-	  $(COMPOSE) --profile worker up -d worker
-	COMPOSE_FILE=docker-compose.yml:docker-compose.stress.yml npm run stress
+	$(STRESS_COMPOSE) --profile worker up -d worker
+	COMPOSE_PROJECT_NAME=flash-sale-stress COMPOSE_FILE=docker-compose.stress.yml \
+	  npm run stress
+
+stress-clean: ## tear down the stress environment and remove its volumes + images
+	$(STRESS_COMPOSE) --profile worker down -v --rmi local
 
 clean: ## stop stack and remove volumes + images
 	$(COMPOSE) --profile worker down -v --rmi local

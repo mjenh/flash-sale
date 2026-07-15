@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Stress Report — 2026-07-15 19:49:04 UTC</title>
+  <style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #7d8590;
+    --green: #3fb950; --red: #f85149; --yellow: #d29922; --blue: #58a6ff;
+  }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; line-height: 1.6; padding: 32px 24px; }
+  h1 { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+  h2 { font-size: 16px; font-weight: 600; margin: 32px 0 12px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  h3 { font-size: 13px; font-weight: 600; margin: 20px 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  section { max-width: 960px; margin: 0 auto; }
+  header { max-width: 960px; margin: 0 auto 8px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .meta { color: var(--muted); font-size: 12px; margin-bottom: 24px; max-width: 960px; margin-left: auto; margin-right: auto; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+  th { text-align: left; padding: 6px 10px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); border-bottom: 1px solid var(--border); }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  .mono { font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace; font-size: 12px; }
+  .detail { color: var(--muted); font-size: 12px; max-width: 400px; }
+  .muted { color: var(--muted); }
+  .badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 4px; letter-spacing: .04em; }
+  .badge.pass { background: #1a3a24; color: var(--green); }
+  .badge.fail { background: #3a1a1a; color: var(--red); }
+  .badge.lg { font-size: 15px; padding: 3px 14px; border-radius: 6px; }
+  .cards { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 18px; min-width: 130px; }
+  .card-value { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.2; }
+  .card-label { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .green { color: var(--green); }
+  .red { color: var(--red); }
+  .yellow { color: var(--yellow); }
+  .blue { color: var(--blue); }
+  details summary { cursor: pointer; padding: 8px 0; font-size: 13px; color: var(--muted); user-select: none; }
+  details summary:hover { color: var(--text); }
+  pre.raw { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 16px; overflow: auto; font-size: 11px; font-family: ui-monospace, monospace; white-space: pre; color: var(--muted); margin-top: 8px; max-height: 500px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Stress Test Report</h1>
+    <span class="badge pass lg">PASS</span>
+  </header>
+  <p class="meta">
+    2026-07-15 19:49:04 UTC &nbsp;·&nbsp;
+    5,000 attempts &nbsp;·&nbsp;
+    500 VUs &nbsp;·&nbsp;
+    STOCK_QUANTITY=100 &nbsp;·&nbsp;
+    http://localhost:3001
+  </p>
+
+  
+  <section>
+    <h2>Phases</h2>
+    <table>
+      <thead><tr><th></th><th>Phase</th><th>Detail</th></tr></thead>
+      <tbody>
+      <tr>
+        <td><span class="badge pass sm">PASS</span></td>
+        <td class="mono">stop API</td>
+        <td class="detail"></td>
+      </tr>
+      <tr>
+        <td><span class="badge pass sm">PASS</span></td>
+        <td class="mono">reset</td>
+        <td class="detail"></td>
+      </tr>
+      <tr>
+        <td><span class="badge pass sm">PASS</span></td>
+        <td class="mono">start API</td>
+        <td class="detail"></td>
+      </tr>
+      <tr>
+        <td><span class="badge pass sm">PASS</span></td>
+        <td class="mono">k6 thresholds</td>
+        <td class="detail"></td>
+      </tr>
+      <tr>
+        <td><span class="badge pass sm">PASS</span></td>
+        <td class="mono">verifier</td>
+        <td class="detail"></td>
+      </tr>
+      <tr>
+        <td><span class="badge pass sm">PASS</span></td>
+        <td class="mono">window phase</td>
+        <td class="detail"></td>
+      </tr>
+      <tr>
+        <td><span class="badge pass sm">PASS</span></td>
+        <td class="mono">window restore</td>
+        <td class="detail"></td>
+      </tr></tbody>
+    </table>
+  </section>
+  
+  <section>
+    <h2>k6 Metrics</h2>
+    <div class="cards">
+      <div class="card">
+        <div class="card-value green">100</div>
+        <div class="card-label">202 Accepted</div>
+      </div>
+      <div class="card">
+        <div class="card-value yellow">4901</div>
+        <div class="card-label">409 Rejected</div>
+      </div>
+      <div class="card">
+        <div class="card-value blue">19</div>
+        <div class="card-label">200 Idempotent</div>
+      </div>
+      <div class="card">
+        <div class="card-value muted">0</div>
+        <div class="card-label">5xx Errors</div>
+      </div>
+      <div class="card">
+        <div class="card-value ">5020</div>
+        <div class="card-label">Total Requests</div>
+      </div>
+      <div class="card">
+        <div class="card-value ">454 ms</div>
+        <div class="card-label">p95 Latency</div>
+      </div>
+      <div class="card">
+        <div class="card-value ">— ms</div>
+        <div class="card-label">p99 Latency</div>
+      </div>
+      <div class="card">
+        <div class="card-value muted">1</div>
+        <div class="card-label">Spam Wins (≤1)</div>
+      </div></div>
+    
+  </section>
+  
+  <section>
+    <h2>Verifier <span class="badge pass sm">PASS</span></h2>
+    <h3>Observed values</h3>
+    <table>
+      <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+      <tbody>
+      <tr><td>SCARD orders:{saleId}:users (accepted)</td><td class="mono">100</td></tr>
+      <tr><td>stock:{saleId}:remaining</td><td class="mono">0</td></tr>
+      <tr><td>Mongo confirmed orders</td><td class="mono">100</td></tr>
+      <tr><td>Mongo distinct emails</td><td class="mono">100</td></tr>
+      <tr><td>API seeded stockQuantity</td><td class="mono">100</td></tr></tbody>
+    </table>
+    <h3>Assertions</h3>
+    <table>
+      <thead><tr><th></th><th>Check</th><th>Expected</th><th>Actual</th><th>Note</th></tr></thead>
+      <tbody>
+      <tr>
+        <td><span class="badge pass sm">PASS</span></td>
+        <td>accepted orders (SCARD) == min(API stockQuantity, attempts)</td>
+        <td class="mono">100</td>
+        <td class="mono">100</td>
+        <td class="detail"></td>
+      </tr>
+      <tr>
+        <td><span class="badge pass sm">PASS</span></td>
+        <td>distinct emails == confirmed (Mongo) orders</td>
+        <td class="mono">100</td>
+        <td class="mono">100</td>
+        <td class="detail"></td>
+      </tr>
+      <tr>
+        <td><span class="badge pass sm">PASS</span></td>
+        <td>      Mongo audit orders vs SCARD orders:{saleId}:users (undercount tolerance 1)</td>
+        <td class="mono">100 (undercount up to 1 accepted; overcount forbidden)</td>
+        <td class="mono">100</td>
+        <td class="detail"></td>
+      </tr>
+      <tr>
+        <td><span class="badge pass sm">PASS</span></td>
+        <td>      stock:{saleId}:remaining == API stockQuantity - accepted (SCARD)</td>
+        <td class="mono">0</td>
+        <td class="mono">0</td>
+        <td class="detail"></td>
+      </tr>
+      <tr>
+        <td><span class="badge pass sm">PASS</span></td>
+        <td>harness STOCK_QUANTITY == API seeded sales.stockQuantity</td>
+        <td class="mono">100</td>
+        <td class="mono">100</td>
+        <td class="detail"></td>
+      </tr></tbody>
+    </table>
+  </section>
+  
+  <section>
+    <details>
+      <summary>Raw k6-summary.json</summary>
+      <pre class="raw">{
+  &quot;root_group&quot;: {
+    &quot;path&quot;: &quot;&quot;,
+    &quot;id&quot;: &quot;d41d8cd98f00b204e9800998ecf8427e&quot;,
+    &quot;groups&quot;: [],
+    &quot;checks&quot;: [],
+    &quot;name&quot;: &quot;&quot;
+  },
+  &quot;options&quot;: {
+    &quot;summaryTrendStats&quot;: [
+      &quot;avg&quot;,
+      &quot;min&quot;,
+      &quot;med&quot;,
+      &quot;max&quot;,
+      &quot;p(90)&quot;,
+      &quot;p(95)&quot;
+    ],
+    &quot;summaryTimeUnit&quot;: &quot;&quot;,
+    &quot;noColor&quot;: false
+  },
+  &quot;state&quot;: {
+    &quot;isStdErrTTY&quot;: false,
+    &quot;testRunDurationMs&quot;: 603.065292,
+    &quot;isStdOutTTY&quot;: false
+  },
+  &quot;metrics&quot;: {
+    &quot;order_created_202&quot;: {
+      &quot;type&quot;: &quot;counter&quot;,
+      &quot;contains&quot;: &quot;default&quot;,
+      &quot;values&quot;: {
+        &quot;count&quot;: 100,
+        &quot;rate&quot;: 165.81952456318774
+      }
+    },
+    &quot;http_req_duration{expected_response:true}&quot;: {
+      &quot;values&quot;: {
+        &quot;p(95)&quot;: 453.88288750000004,
+        &quot;avg&quot;: 45.58586723227088,
+        &quot;min&quot;: 5.311833,
+        &quot;med&quot;: 13.5475,
+        &quot;max&quot;: 526.552625,
+        &quot;p(90)&quot;: 25.774400000000004
+      },
+      &quot;type&quot;: &quot;trend&quot;,
+      &quot;contains&quot;: &quot;time&quot;
+    },
+    &quot;http_req_sending&quot;: {
+      &quot;values&quot;: {
+        &quot;min&quot;: 0.001166,
+        &quot;med&quot;: 0.00225,
+        &quot;max&quot;: 16.715834,
+        &quot;p(90)&quot;: 0.016917,
+        &quot;p(95)&quot;: 0.07840414999999987,
+        &quot;avg&quot;: 0.05492668207171292
+      },
+      &quot;type&quot;: &quot;trend&quot;,
+      &quot;contains&quot;: &quot;time&quot;
+    },
+    &quot;http_req_failed&quot;: {
+      &quot;contains&quot;: &quot;default&quot;,
+      &quot;values&quot;: {
+        &quot;rate&quot;: 0,
+        &quot;passes&quot;: 0,
+        &quot;fails&quot;: 5020
+      },
+      &quot;thresholds&quot;: {
+        &quot;rate==0&quot;: {
+          &quot;ok&quot;: true
+        }
+      },
+      &quot;type&quot;: &quot;rate&quot;
+    },
+    &quot;spam_wins_202&quot;: {
+      &quot;type&quot;: &quot;counter&quot;,
+      &quot;contains&quot;: &quot;default&quot;,
+      &quot;values&quot;: {
+        &quot;count&quot;: 1,
+        &quot;rate&quot;: 1.6581952456318776
+      },
+      &quot;thresholds&quot;: {
+        &quot;count&lt;=1&quot;: {
+          &quot;ok&quot;: true
+        }
+      }
+    },
+    &quot;http_req_waiting&quot;: {
+      &quot;type&quot;: &quot;trend&quot;,
+      &quot;contains&quot;: &quot;time&quot;,
+      &quot;values&quot;: {
+        &quot;max&quot;: 524.888417,
+        &quot;p(90)&quot;: 25.6835209,
+        &quot;p(95)&quot;: 453.8450066,
+        &quot;avg&quot;: 45.51649659820723,
+        &quot;min&quot;: 5.298084,
+        &quot;med&quot;: 13.532833499999999
+      }
+    },
+    &quot;iterations&quot;: {
+      &quot;values&quot;: {
+        &quot;rate&quot;: 8324.140133072025,
+        &quot;count&quot;: 5020
+      },
+      &quot;type&quot;: &quot;counter&quot;,
+      &quot;contains&quot;: &quot;default&quot;
+    },
+    &quot;order_already_200&quot;: {
+      &quot;type&quot;: &quot;counter&quot;,
+      &quot;contains&quot;: &quot;default&quot;,
+      &quot;values&quot;: {
+        &quot;rate&quot;: 31.50570966700567,
+        &quot;count&quot;: 19
+      }
+    },
+    &quot;http_reqs&quot;: {
+      &quot;values&quot;: {
+        &quot;count&quot;: 5020,
+        &quot;rate&quot;: 8324.140133072025
+      },
+      &quot;type&quot;: &quot;counter&quot;,
+      &quot;contains&quot;: &quot;default&quot;
+    },
+    &quot;http_req_duration&quot;: {
+      &quot;type&quot;: &quot;trend&quot;,
+      &quot;contains&quot;: &quot;time&quot;,
+      &quot;values&quot;: {
+        &quot;max&quot;: 526.552625,
+        &quot;p(90)&quot;: 25.774400000000004,
+        &quot;p(95)&quot;: 453.88288750000004,
+        &quot;avg&quot;: 45.58586723227088,
+        &quot;min&quot;: 5.311833,
+        &quot;med&quot;: 13.5475
+      }
+    },
+    &quot;order_rejected_409&quot;: {
+      &quot;type&quot;: &quot;counter&quot;,
+      &quot;contains&quot;: &quot;default&quot;,
+      &quot;values&quot;: {
+        &quot;count&quot;: 4901,
+        &quot;rate&quot;: 8126.814898841832
+      }
+    },
+    &quot;http_req_tls_handshaking&quot;: {
+      &quot;type&quot;: &quot;trend&quot;,
+      &quot;contains&quot;: &quot;time&quot;,
+      &quot;values&quot;: {
+        &quot;avg&quot;: 0,
+        &quot;min&quot;: 0,
+        &quot;med&quot;: 0,
+        &quot;max&quot;: 0,
+        &quot;p(90)&quot;: 0,
+        &quot;p(95)&quot;: 0
+      }
+    },
+    &quot;unexpected_status&quot;: {
+      &quot;thresholds&quot;: {
+        &quot;rate==0&quot;: {
+          &quot;ok&quot;: true
+        }
+      },
+      &quot;type&quot;: &quot;rate&quot;,
+      &quot;contains&quot;: &quot;default&quot;,
+      &quot;values&quot;: {
+        &quot;rate&quot;: 0,
+        &quot;passes&quot;: 0,
+        &quot;fails&quot;: 5020
+      }
+    },
+    &quot;http_req_blocked&quot;: {
+      &quot;type&quot;: &quot;trend&quot;,
+      &quot;contains&quot;: &quot;time&quot;,
+      &quot;values&quot;: {
+        &quot;min&quot;: 0.000333,
+        &quot;med&quot;: 0.000625,
+        &quot;max&quot;: 72.474458,
+        &quot;p(90)&quot;: 3.795675300000003,
+        &quot;p(95)&quot;: 18.54181664999999,
+        &quot;avg&quot;: 2.2336738328685097
+      }
+    },
+    &quot;http_req_receiving&quot;: {
+      &quot;type&quot;: &quot;trend&quot;,
+      &quot;contains&quot;: &quot;time&quot;,
+      &quot;values&quot;: {
+        &quot;p(90)&quot;: 0.02346630000000001,
+        &quot;p(95)&quot;: 0.03820805,
+        &quot;avg&quot;: 0.014443951992031896,
+        &quot;min&quot;: 0.005333,
+        &quot;med&quot;: 0.009,
+        &quot;max&quot;: 1.080792
+      }
+    },
+    &quot;http_req_duration{name:'POST /api/sales/:slug/order'}&quot;: {
+      &quot;thresholds&quot;: {
+        &quot;p(95)&lt;500&quot;: {
+          &quot;ok&quot;: true
+        },
+        &quot;p(99)&lt;2000&quot;: {
+          &quot;ok&quot;: true
+        }
+      },
+      &quot;type&quot;: &quot;trend&quot;,
+      &quot;contains&quot;: &quot;time&quot;,
+      &quot;values&quot;: {
+        &quot;avg&quot;: 45.58586723227088,
+        &quot;min&quot;: 5.311833,
+        &quot;med&quot;: 13.5475,
+        &quot;max&quot;: 526.552625,
+        &quot;p(90)&quot;: 25.774400000000004,
+        &quot;p(95)&quot;: 453.88288750000004
+      }
+    },
+    &quot;data_sent&quot;: {
+      &quot;contains&quot;: &quot;data&quot;,
+      &quot;values&quot;: {
+        &quot;count&quot;: 1047930,
+        &quot;rate&quot;: 1737672.5437550135
+      },
+      &quot;type&quot;: &quot;counter&quot;
+    },
+    &quot;http_req_connecting&quot;: {
+      &quot;contains&quot;: &quot;time&quot;,
+      &quot;values&quot;: {
+        &quot;p(90)&quot;: 3.7551708000000024,
+        &quot;p(95)&quot;: 18.49234165,
+        &quot;avg&quot;: 2.208107628286854,
+        &quot;min&quot;: 0,
+        &quot;med&quot;: 0,
+        &quot;max&quot;: 72.464917
+      },
+      &quot;type&quot;: &quot;trend&quot;
+    },
+    &quot;data_received&quot;: {
+      &quot;type&quot;: &quot;counter&quot;,
+      &quot;contains&quot;: &quot;data&quot;,
+      &quot;values&quot;: {
+        &quot;count&quot;: 4654058,
+        &quot;rate&quot;: 7717336.848495005
+      }
+    },
+    &quot;iteration_duration&quot;: {
+      &quot;values&quot;: {
+        &quot;avg&quot;: 47.89194552868525,
+        &quot;min&quot;: 5.380917,
+        &quot;med&quot;: 13.6095835,
+        &quot;max&quot;: 552.857,
+        &quot;p(90)&quot;: 57.27479230000001,
+        &quot;p(95)&quot;: 465.93269309999994
+      },
+      &quot;type&quot;: &quot;trend&quot;,
+      &quot;contains&quot;: &quot;time&quot;
+    }
+  }
+}</pre>
+    </details>
+  </section>
+</body>
+</html>

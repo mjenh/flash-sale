@@ -1,14 +1,88 @@
-# Compose override for stress runs — layered on top of docker-compose.yml by
-# `make stress`. Redirects the api and worker containers to the isolated stress
-# database so a stress run never touches the flash-sale dev/prod database.
-# REDIS_URL points both containers at DB 1 so the stress run's Redis state is
-# fully isolated from DB 0 (the real server's database).
+# Self-contained stress environment — runs as an independent Docker project
+# (`make stress` sets COMPOSE_PROJECT_NAME=flash-sale-stress) so a stress run
+# never touches the dev stack. The dev stack keeps running throughout.
+#
+# Stores are published on loopback-only alternative ports so both stacks
+# coexist without port conflicts:
+#   Redis  → 127.0.0.1:6380  (dev: 6379)
+#   Mongo  → 127.0.0.1:27018 (dev: 27017)
+#   API    → 3001             (dev: 3000)
+#
+# The API's internal port stays 3000; host-side mapping to 3001 is the only
+# change. Internal service names (redis, mongo) are unchanged — containers
+# address each other over the project's own Docker network.
+#
+# Use `make stress-clean` to tear down and remove volumes when done.
 services:
   api:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    restart: unless-stopped
+    init: true
     environment:
+      PORT: "3000"
+      REDIS_URL: redis://redis:6379
       MONGODB_URI: mongodb://mongo:27017/flash-sale-stress
-      REDIS_URL: redis://redis:6379/1
+      WORKER_COLOCATED: "false"
+    ports:
+      - "3001:3000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
   worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    command: ["node", "src/worker/index.ts"]
+    restart: unless-stopped
+    init: true
     environment:
+      REDIS_URL: redis://redis:6379
       MONGODB_URI: mongodb://mongo:27017/flash-sale-stress
-      REDIS_URL: redis://redis:6379/1
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    profiles: ["worker"]
+
+  redis:
+    image: redis:8-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    # Loopback only — same reasoning as the dev stack.
+    ports:
+      - "127.0.0.1:6380:6379"
+    volumes:
+      - stress-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  mongo:
+    image: mongo:8
+    # Loopback only — same reasoning as the dev stack.
+    ports:
+      - "127.0.0.1:27018:27017"
+    volumes:
+      - stress-mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  stress-redis-data:
+  stress-mongo-data:
