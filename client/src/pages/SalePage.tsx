@@ -159,7 +159,7 @@ export function SalePage({ slug }: SalePageProps) {
     <>
       <MarqueeBand />
       <div className="frame">
-        <Masthead startTime={body?.startTime} />
+        <Masthead startTime={body?.startTime} endTime={body?.endTime} />
 
         <main className="poster">
           <div className="poster__hero">
