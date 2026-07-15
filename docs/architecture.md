@@ -18,6 +18,7 @@ invariants:
 ```mermaid
 flowchart LR
     Browser["Browser<br/>React 19 SPA (Vite)"]
+    Nginx["nginx · :80<br/>static SPA + /api proxy"]
 
     subgraph API["Express 5 API · node:24-alpine (native TS)"]
         Routes["routes/<br/>HTTP translation"]
@@ -28,32 +29,39 @@ flowchart LR
     subgraph Redis["Redis 8 · AOF"]
         Decision["DECISION STATE<br/>stock:{saleId}:remaining (int)<br/>orders:{saleId}:users (set)"]
         Channel["PUB/SUB · sale:{saleId}:events"]
+        Queue["STREAM · queue:orders<br/>(write-behind audit queue)"]
     end
 
+    Worker["Write-Behind Worker<br/>order-worker.ts<br/>XREADGROUP · at-least-once · exp. backoff"]
     Mongo[("MongoDB 8 · AUDIT<br/>users · orders · orderlines · …")]
 
-    Browser -- "GET /api/sales/active" --> Routes
-    Browser -- "POST /api/sales/:slug/order" --> Routes
-    Browser -- "GET /api/sales/:slug/status" --> Routes
-    Browser -- "GET /api/sales/:slug/order/:email" --> Routes
+    Browser -- "SPA + /api" --> Nginx
+    Nginx --> Routes
     Browser == "SSE GET /api/sales/:slug/events" ==> Broadcaster
     Routes --> Services
     Services -- "EVALSHA order.lua (atomic)" --> Decision
-    Services -. "async audit write" .-> Mongo
+    Services -. "XADD (enqueue on OK)" .-> Queue
+    Queue -- "XREADGROUP" --> Worker
+    Worker -. "bulkWrite (idempotent)" .-> Mongo
+    Worker -- "XACK after confirmed write" --> Queue
     Services -- "PUBLISH sale:{saleId}:events" --> Channel
     Channel -- "SUBSCRIBE (dedicated connection)" --> Broadcaster
     Broadcaster -- "fresh status read at emit" --> Decision
     Mongo -. "cold start only: rebuild" .-> Decision
 ```
 
-Three roles are kept strictly separate:
+Four roles are kept strictly separate:
 
 - **Redis is the decision layer.** It holds the only state a request reads or
   writes: remaining stock and the set of buyers. A single Lua script is the sole
   writer of that state while the API serves.
-- **MongoDB is the audit layer.** It is written asynchronously after a decision
-  and is never read on a request path. Its only runtime read is at cold start, to
-  rebuild Redis.
+- **The Redis Stream (`queue:orders`) is the write-behind queue.** After the Lua
+  script returns `OK`, the route enqueues the order payload via `XADD` and returns
+  HTTP 202/201 immediately. The worker drains the stream into MongoDB
+  asynchronously, decoupling order-acceptance latency from MongoDB write latency.
+- **MongoDB is the audit layer.** It is written by the background worker after it
+  drains the queue, and is never read on a request path. Its only runtime read is
+  at cold start, to rebuild Redis.
 - **The clock is the API server's `Date.now()`.** Client clocks are never
   consulted; the sale window is the server's UTC time alone.
 
@@ -97,6 +105,13 @@ integration tests. Its order is fixed:
 
 `bootstrap()` returns `teardown()`, which unwinds in reverse (timers, broadcaster,
 subscriber, Mongo, Redis).
+
+After `bootstrap()` resolves, `index.ts` optionally starts the write-behind
+worker in the same process when `WORKER_COLOCATED=true`. Worker teardown
+(finishing the current batch) runs before `teardown()` on SIGTERM/SIGINT.
+When `WORKER_COLOCATED` is false or unset, the worker runs as a separate process
+(`src/worker/index.ts`) — either as a standalone node invocation or the `worker`
+Docker Compose service.
 
 ### 3.2 App assembly (`src/app.ts`)
 
@@ -160,10 +175,11 @@ Full response set:
   membership check yields `already` for an order holder, otherwise `inactive`.
   Inside the window, the decision is delegated to the Lua script and the verdict is
   mapped: `OK → created`, `ALREADY → already`, `SOLD_OUT → sold_out`. After an
-  `OK` only, three side effects fire-and-forget: the Mongo audit write, the payment
-  charge, and event publishes (`order.accepted` always; `sale.sold_out` once, from
-  the request whose `DECR` reached zero). None is awaited, none affects the HTTP
-  outcome, and none is rolled back — no compensating `INCR`/`SREM` exists.
+  `OK` only, three side effects fire-and-forget: the write-behind enqueue (`XADD`
+  to `queue:orders`), the payment charge, and event publishes (`order.accepted`
+  always; `sale.sold_out` once, from the request whose `DECR` reached zero). None
+  is awaited, none affects the HTTP outcome, and none is rolled back — no
+  compensating `INCR`/`SREM` exists.
 
 - **`sale-events.ts`** — owns the realtime rules: a single serialized writer that
   composes each frame once through the status service (a fresh read at emit time);
@@ -208,6 +224,16 @@ timeout so a hang becomes a failure.
   main client; `SUBSCRIBE` runs on a dedicated duplicated connection. Payloads are
   type-only: the event string is the message, and consumers recompute truth from a
   fresh read.
+- **`order-queue.ts`** — the write-behind Redis Stream producer and consumer.
+  `createOrderQueueProducer` exposes `enqueue(saleId, productId, email)` which
+  `XADD`s a JSON payload to `queue:orders` and returns a UUID correlation id.
+  `createQueueAuditAdapter` wraps the producer as an `OrderAuditPort` drop-in for
+  bootstrap. `createOrderQueueConsumer` is used exclusively by the worker: it
+  exposes `ensureGroup()` (idempotent `XGROUP CREATE`), `readPending()` (`id="0"`,
+  re-delivers unACKed PEL entries), `readBatch()` (`id=">"`, new messages, with
+  `BLOCK`), and `ack()` (`XACK` after confirmed MongoDB write). Every iteration of
+  the worker loop calls `readPending()` first; only when the PEL is empty does it
+  call `readBatch()`, ensuring failed batches are retried without skipping entries.
 - **`reconcile.ts`** — the boot rebuild. `hasStockKey(saleId)` is the warm/cold
   sentinel; `rebuild(emails, remaining, saleId)` writes membership first and the
   stock sentinel last (`DEL → SADD → SET`), so a crash mid-rebuild re-runs the cold
@@ -228,9 +254,15 @@ timeout so a hang becomes a failure.
   `products.sku`, `(saleId, productId)`, and `(saleId, email)` on orders as
   defense-in-depth. `Inventory` is seeded once and never decremented per order;
   concurrency truth lives in Redis.
-- **`audit.ts`** — the async writer, invoked only after an `OK`: upsert the user,
-  insert a confirmed order, insert its order line. A duplicate-key error on
-  `(saleId, email)` is swallowed as already-recorded.
+- **`audit.ts`** — the single-order async writer (used by tests that need immediate
+  Mongo writes via `BootstrapOverrides.createOrderAudit`). Not on the production
+  hot path; the queue adapter is the default.
+- **`bulk-audit.ts`** — the worker's write surface. `mongoBulkAudit.bulkRecordOrders`
+  receives a batch of `QueueOrderPayload` entries and writes them to MongoDB in five
+  idempotent phases: (1) bulk upsert Users, (2) resolve User `_id`s, (3) bulk
+  upsert Orders, (4) resolve Order `_id`s, (5) bulk upsert OrderLines. All three
+  `bulkWrite` calls use `ordered: false` so a duplicate-key skip does not abort the
+  rest of the batch. Safe under at-least-once re-delivery.
 - **`seed.ts`** — idempotent boot seed of the domain documents from env config;
   exposes `listConfirmedOrderEmails(saleId)`, the cold-rebuild source, and
   `listAllSales()`, used at boot to validate multi-sale overlap.
@@ -242,6 +274,22 @@ timeout so a hang becomes a failure.
 
 **Payment (`adapters/payment/noop.ts`)** — the instant-approve provider.
 
+### 3.6 Write-behind worker (`src/worker/`)
+
+The worker is a standalone process that drains `queue:orders` into MongoDB. It
+runs separately from the API by default and can also run co-located (§3.1).
+
+- **`order-worker.ts`** — polling loop using XREADGROUP consumer group
+  `workers/worker-1`. Every iteration calls `readPending()` (`id="0"`, re-delivers
+  unACKed PEL entries) first, then `readBatch()` (`id=">"`, new messages) only when
+  the PEL is empty. This ensures failed batches are retried after a MongoDB outage
+  without losing messages. `XACK` fires only after `bulkRecordOrders` confirms.
+  Exponential backoff: 500 ms initial, 30 s cap.
+- **`index.ts`** — standalone entrypoint; connects Redis + MongoDB, starts worker,
+  handles SIGTERM/SIGINT with ordered teardown (worker stop → disconnectMongo →
+  redis.close). Calls `loadWorkerConfig()` (not `loadConfig()`), so sale-window env
+  vars are not needed for the worker process — only `REDIS_URL` and `MONGODB_URI`.
+
 ## 4. Request flows
 
 ### 4.1 `POST /api/sales/:slug/order` inside the window
@@ -251,10 +299,16 @@ route validates email (400 on empty/oversized — Redis untouched)
   └─ order service: now ∈ [start, end)? yes
        └─ orders.attempt(email) → EVALSHA order.lua  (atomic)
             ├─ OK        → 201 "Order successful."
-            │              async: audit write · payment charge
-            │                     publish order.accepted (+ sale.sold_out if remaining == 0)
+            │              async fire-and-forget:
+            │                XADD queue:orders  (write-behind enqueue)
+            │                payment charge
+            │                PUBLISH order.accepted (+ sale.sold_out if remaining == 0)
             ├─ ALREADY   → 200 "You have already ordered this item."
             └─ SOLD_OUT  → 409 "Item is sold out."
+
+  [background] worker: XREADGROUP queue:orders
+       └─ bulkRecordOrders → MongoDB (User · Order · OrderLine)
+       └─ XACK (only after confirmed write)
 ```
 
 Outside the window the script never runs: a single `SISMEMBER` distinguishes an
@@ -278,6 +332,8 @@ via `useActiveSaleRedirect` (which calls `GET /api/sales/active`); `/sale/:slug`
 the main sale page; and `*` is a 404 page. All client API functions
 (`fetchSaleStatus`, `fetchSaleDetails`, `placeOrder`, `checkOrder`, `saleEventsUrl`)
 are slug-parameterized and call the v1.1 `/api/sales/:slug/…` paths exclusively.
+The SPA is served by nginx (port 80); nginx proxies `/api/` requests to the API
+server (port 3000) on the same Docker network.
 
 `useSaleStatus(slug)` treats an open SSE stream as the sole writer of the status
 view. Polling is a fallback whose writes are discarded while the stream is live. A
@@ -355,7 +411,7 @@ erDiagram
 | Category | Collections | Behavior |
 | --- | --- | --- |
 | Boot-seeded constants | `products`, `sales`, `saleproducts`, `inventories` | Upserted idempotently at boot from env config. Never written per order. `Inventory.initialQuantity` is seeded from `STOCK_QUANTITY` but never decremented — concurrency truth lives in Redis. |
-| Per-order writes | `users`, `orders`, `orderlines` | Written asynchronously after a Redis `OK` (§4.1). `Order` has a compound unique index on `(saleId, email)` as defense-in-depth. `OrderLine` defaults to qty 1, unitPrice 0 (payment out of scope). |
+| Per-order writes | `users`, `orders`, `orderlines` | Written by the background worker after draining `queue:orders` (§3.6). `Order` has a compound unique index on `(saleId, email)` as defense-in-depth. `OrderLine` defaults to qty 1, unitPrice 0 (payment out of scope). |
 | Dormant | `reservations` | Schema ships but no code path writes it. Activates at the reserve-then-confirm payment trigger (a future milestone). |
 
 All schemas use `timestamps: true`. Unique indexes guard `users.identifier`,
@@ -370,21 +426,28 @@ Keys are namespaced by the MongoDB `ObjectId` of the active sale document
 - `stock:{saleId}:remaining` — integer unit count; also the warm/cold sentinel.
 - `orders:{saleId}:users` — set of buyer emails holding a confirmed order.
 - `sale:{saleId}:events` — pub/sub channel of type-only event strings.
+- `queue:orders` — Redis Stream; the write-behind audit queue. Consumer group
+  `workers/worker-1` reads it; entries remain in the PEL until `XACK` confirms
+  MongoDB receipt. Not namespaced by `saleId` — the payload carries `saleId`.
 
-Permitted writers of the two state keys are exactly three: the Lua script while
-serving, the boot rebuild before `listen()`, and the offline reset script.
+Permitted writers of the two state keys (`stock:*`, `orders:*`) are exactly three:
+the Lua script while serving, the boot rebuild before `listen()`, and the offline
+reset script.
 
 ### 5.3 Key interfaces
 
 | Type | Location | Purpose |
 | --- | --- | --- |
 | `AppConfig` | `adapters/config.ts` | Boot-parsed env: port, store URLs, stock, sale window (epoch ms + ISO strings), Redis timeouts. |
+| `WorkerConfig` | `adapters/config.ts` | Minimal config for the standalone worker: `REDIS_URL`, `MONGODB_URI`, Redis timeouts. Sale-window vars not needed. |
 | `OrderVerdict` | `adapters/redis/orders.ts` | `"OK" \| "ALREADY" \| "SOLD_OUT"` — the Lua script's three outcomes. |
 | `SaleStatus` | `services/sale-status.ts` | `"upcoming" \| "active" \| "ended" \| "sold_out"` — the four lifecycle states. |
 | `OrderOutcome` | `services/order.ts` | `created \| already \| sold_out \| inactive` — the service-level verdicts mapped to HTTP. |
 | `PaymentProvider` | `services/payment.ts` | Charge port; `noop.ts` is the sole v1 impl (instant-approve, cannot fail). |
 | `Clock` | `services/clock.ts` | `() => number` — injected into services so routes/adapters never call `Date.now()`. |
 | `SaleSummary` | `adapters/mongo/seed.ts` | Boot-resolved sale context: `{ _id, slug, name, startTime, endTime, stockQuantity }`. Attached to `req.sale` by the `SaleResolver` middleware; passed to service calls as `saleId` and window bounds. |
+| `QueueOrderPayload` | `adapters/redis/order-queue.ts` | `{ orderId, saleId, productId, email, enqueuedAt }` — the stream entry payload; `orderId` is a UUID correlation id, not the Mongo PK. |
+| `BulkAuditPort` | `adapters/mongo/bulk-audit.ts` | `bulkRecordOrders(payloads)` — the worker's MongoDB write surface. |
 | `SaleNotFoundError` | `client/src/api/sale.ts` | Thrown on a `404` from `GET /api/sales/:slug`. Signals `useSaleStatus` to set `notFound: true` and stop all reconnect attempts. |
 
 **MongoDB (durable audit)** — the domain documents above. It records outcomes;
@@ -407,6 +470,13 @@ checks whether `stock:{saleId}:remaining` exists.
 Because the rebuild writes the sentinel last, a crash mid-rebuild is safe: the next
 boot sees no sentinel and re-runs the cold path.
 
+Note: `queue:orders` entries that have not yet been drained (PEL entries in the
+worker's consumer group) survive across API restarts because the stream key
+persists in Redis. A cold-start rebuild queries Mongo for confirmed order emails,
+which only includes entries already written by the worker — so any in-flight PEL
+entries are correctly excluded from the rebuild count and will be ACKed once the
+worker restarts and processes them.
+
 ## 7. Failure behavior
 
 The system deliberately trades availability for correctness.
@@ -414,12 +484,22 @@ The system deliberately trades availability for correctness.
 - **Redis unreachable or command timeout.** Any request needing Redis returns
   `503`; open SSE streams are closed and new ones refused. A command timeout counts
   as unreachable. There is no fallback store.
-- **Crash between the Redis accept and the Mongo write.** The buyer keeps their
-  order (Redis is correct; a retry returns `200`); the audit trail under-counts that
-  row permanently. This is the accepted cost of an atomic, async decision path. The
-  outbox pattern would close it; it is not implemented.
-- **Side-effect failure (audit, payment, publish).** Logged and dropped; never
-  rolled back, never able to change the HTTP outcome.
+- **Crash between the Redis accept and the XADD.** The buyer keeps their order
+  (Redis is correct; a retry returns `200`); the order is never enqueued and the
+  audit trail under-counts that row permanently. This is the accepted cost of the
+  fire-and-forget enqueue path. It is the sole remaining under-count scenario; once
+  an entry reaches `queue:orders`, at-least-once delivery guarantees eventual
+  MongoDB persistence.
+- **Worker MongoDB write failure.** The batch is not ACKed — entries remain in the
+  PEL. The worker backs off exponentially (500 ms → 30 s cap) and retries on the
+  next iteration via `readPending()`. No audit data is lost; the write eventually
+  succeeds when MongoDB recovers. `bulkRecordOrders` is idempotent (unique-index
+  upserts), so re-delivery is safe.
+- **Worker process crash.** PEL entries persist in the Redis Stream. When the
+  worker restarts, `readPending()` re-delivers them before reading new entries.
+  No messages are skipped or lost.
+- **Side-effect failure (payment, publish).** Logged and dropped; never rolled
+  back, never able to change the HTTP outcome.
 - **Script cache lost.** `attempt()` falls back to `EVAL` and re-caches the SHA.
 
 Known gap present in the code: a Redis command timeout can `503` an order that
@@ -441,6 +521,10 @@ must be strictly after start; both are parsed to UTC epoch ms once. `STOCK_QUANT
 local. The Redis timeouts (2 s connect, 1 s per command) are fixed constants, not
 tunables.
 
+`WORKER_COLOCATED` (`true` / `false`) controls whether the write-behind worker
+runs inside the API process. The standalone worker process reads only
+`REDIS_URL` and `MONGODB_URI` via `loadWorkerConfig()`.
+
 ## 9. Testing and the stress proof
 
 Tests follow the layering, across 33 test files in three workspaces. Unit tests
@@ -448,6 +532,12 @@ exercise services against fake adapters and an injected clock, with no I/O.
 Integration tests boot through the same `bootstrap()` the server uses and drive the
 app with supertest. The client is tested in jsdom with React Testing Library. Gates
 are `npm test` (vitest) and a strict `tsc --noEmit` typecheck.
+
+Tests that need immediate MongoDB writes (audit and cold-restart tests) use
+`BootstrapOverrides.createOrderAudit` to inject `createOrderRecorder` directly,
+bypassing the write-behind queue. The default bootstrap wires `createQueueAuditAdapter`
+(the stream producer); tests relying on the default do not write to MongoDB on the
+request path by design.
 
 The `stress/` workspace is an independent observer: it imports no server code and
 speaks only the wire and store contracts. `run.ts` orchestrates the protocol — stop
@@ -464,16 +554,42 @@ code is the pass/fail signal.
 
 ## 10. Deployment
 
-A multi-stage `Dockerfile` builds the client bundle, then runs the server on
-`node:24-alpine` via native TypeScript type stripping — no server build step, no
-bundler. The `CLIENT_DIST_DIR` environment variable is set to `/app/client/dist`
-in the image so the API serves the built SPA as static files at `/`. In
-development, Vite serves the SPA separately; `CLIENT_DIST_DIR` is unset.
-`docker-compose.yml` runs the API alongside `redis:8-alpine` (AOF enabled) and
-`mongo:8`, both health-gated, with an API healthcheck polling `GET /api/sale/status`
-(the v1.0 alias) so dependents and the stress harness have a truthful boot-complete
-signal. `docker compose up` serves SPA and API on port 3000. The `Makefile` wraps
-the common flows (`make deploy`, `make stress`, `make clean`).
+Two separate Dockerfiles build independent images:
+
+- **`Dockerfile.server`** — `node:24-alpine`. Installs only server workspace
+  dependencies, copies `server/src`, and runs `node src/index.ts` via native
+  TypeScript type stripping — no server build step, no bundler. `CLIENT_DIST_DIR`
+  is intentionally absent; the API does not serve static files in production.
+  The same image is used for both the `api` service and the `worker` service
+  (differentiated by the Compose `command` override).
+- **`Dockerfile.client`** — multi-stage: `node:24-alpine` runs `npm run build -w
+  client` (Vite), then the bundle is copied into `nginx:alpine`. `nginx.conf`
+  serves the SPA at `/` and reverse-proxies `/api/` to the API container, with
+  `proxy_buffering off` for SSE streams.
+
+`docker-compose.yml` runs five services:
+
+| Service | Image | Port | Profile |
+| --- | --- | --- | --- |
+| `api` | `Dockerfile.server` | 3000 | (always) |
+| `worker` | `Dockerfile.server` | — | `worker` |
+| `client` | `Dockerfile.client` | 80 | (always) |
+| `redis` | `redis:8-alpine` (AOF) | 127.0.0.1:6379 | (always) |
+| `mongo` | `mongo:8` | 127.0.0.1:27017 | (always) |
+
+The `worker` service is gated behind the `worker` Compose profile so it does not
+start on a plain `docker compose up`. `make deploy` activates `--profile worker`
+by default; set `WORKER_COLOCATED=true` to omit the profile and run the worker
+inside the API process instead (the `api` service reads the env var). The API
+healthcheck polls `GET /api/sale/status` (v1.0 alias) so dependents and the
+stress harness have a truthful boot-complete signal. `docker compose up` serves
+the SPA at <http://localhost> and the raw API at <http://localhost:3000>. The
+`Makefile` wraps the common flows (`make deploy`, `make stress`, `make clean`,
+`make worker-logs`).
+
+In development, Vite serves the SPA separately on `:5173` (with `/api` proxied);
+`npm run dev` starts the API server, the write-behind worker, and Vite
+concurrently.
 
 ## 11. Trade-offs
 
@@ -516,35 +632,39 @@ per-tier stock, multiple SKUs, or fraud scoring. At that point the logic outgrow
 a script that must stay small enough to reason about, and a dedicated single-
 writer service (still the same principle) becomes the better home.
 
-### 11.2 Redis decides, Mongo records
+### 11.2 Redis decides, write-behind worker records
 
-**Decision.** Redis holds the only state a request reads or writes. MongoDB is an
-audit trail, written *asynchronously after* the decision (`§4.1`) and never read
-on a request path except the cold-start rebuild (`§6`).
+**Decision.** Redis holds the only state a request reads or writes. After the Lua
+script returns `OK`, the route `XADD`s the order to `queue:orders` and returns to
+the caller. A background worker (`§3.6`) drains the stream to MongoDB via
+`XREADGROUP` / `XACK`, with at-least-once delivery and exponential backoff. MongoDB
+is an audit trail, never read on a request path except the cold-start rebuild (`§6`).
 
 **Why.** The request path touches exactly one in-memory store and returns. The
 durable, queryable history the business wants (who ordered, when, payment
-references) is kept out of the latency budget entirely. It also gives a clean
-recovery story: Mongo is the source of truth from which Redis is rebuilt.
+references) is kept out of the latency budget entirely. The Redis Stream's
+at-least-once delivery model (`XACK` only after MongoDB confirms) closes the gap
+that a plain fire-and-forget async write would leave open: a MongoDB outage
+accumulates entries in the PEL rather than losing them.
 
-**Cost.** A crash in the window between "Redis accepted" and "Mongo recorded"
-loses the audit row for an order that genuinely succeeded — an audit *under*-count.
-This is deliberate: the buyer was honestly told yes, stock was honestly
-decremented, and the missing row never causes an oversell. There is intentionally
-**no** compensating `INCR`/`SREM` anywhere (`§7`); rolling back a promised order
-would be worse than a gap in the log.
+**Cost.** A crash in the tiny window between "Lua script returns OK" and "XADD
+fires" loses the audit row for an order that genuinely succeeded — an audit
+*under*-count. There is intentionally **no** compensating `INCR`/`SREM` anywhere
+(`§7`); rolling back a promised order would be worse than a gap in the log. A
+worker crash or MongoDB outage does not lose messages — PEL entries are re-delivered
+on restart. The accepted residual risk is the sub-millisecond EVALSHA → XADD gap.
 
 **Alternatives considered.** (a) Synchronous Mongo write before the 201 —
 rejected: puts a disk-backed store on the hot path and makes availability depend
 on two stores instead of one. (b) A single store for both roles — rejected: no
 one store is both the ideal concurrency primitive and the ideal audit database.
-(c) An event log / outbox with a durable queue — a strictly better version of
-this trade-off; deferred as out of scope (see 11.4).
+(c) The Lua script also enqueuing (closing the gap entirely) — deferred: it would
+push JSON serialization into the Lua layer and make the script larger and harder
+to reason about; the residual gap is sub-millisecond and accepted.
 
 **Revisit when.** The audit under-count becomes unacceptable (e.g. finance needs
-an exact ledger). The fix is an outbox: the accepting script also pushes an event
-Redis-side, drained to Mongo by a worker — closing the gap without putting Mongo
-back on the hot path.
+an exact ledger with zero tolerance). The fix is to move the enqueue into the Lua
+script itself so the decision and the durable record are a single atomic unit.
 
 ### 11.3 Fail closed on Redis loss
 
@@ -572,10 +692,11 @@ closed."
 **Revisit when.** A read replica or Redis Cluster is introduced for scale (11.6);
 the fail-closed rule stays, but reads can then survive a primary blip.
 
-### 11.4 Synchronous order flow, no queue
+### 11.4 Synchronous order decision, no decision queue
 
-**Decision.** A purchase is decided inline and answered on the same request. There
-is no message queue absorbing the burst ahead of the decision.
+**Decision.** A purchase decision is made inline and answered on the same request.
+There is no message queue absorbing the burst ahead of the *decision* — the
+write-behind queue is for the audit trail, not for the order verdict.
 
 **Why.** The buyer gets an immediate, interpretable verdict — `created`,
 `already`, `sold_out`, `inactive` — with no "your request is being processed"
@@ -583,21 +704,19 @@ limbo. Because the atomic script (11.1) is O(1) and in-memory, the decision is
 fast enough that a queue would add latency and a moving part without buying
 correctness.
 
-**Cost.** There is no shock absorber. The API tier must be scaled to meet peak
-concurrency head-on (11.6); a queue would let a fixed pool drain a spike at its
-own pace. Under a truly extreme burst, back-pressure shows up as connection
-saturation rather than a growing queue.
+**Cost.** There is no shock absorber for the decision path. The API tier must be
+scaled to meet peak concurrency head-on (11.6); a queue would let a fixed pool
+drain a spike at its own pace. Under a truly extreme burst, back-pressure shows
+up as connection saturation rather than a growing queue.
 
 **Alternatives considered.** (a) Enqueue every attempt, decide in a worker,
 notify asynchronously — rejected for this scope: it trades a simple synchronous
 verdict for eventual consistency and a notification channel, and the atomic
-decision is not the bottleneck a queue would relieve. The queue's real value is
-smoothing *write* pressure on a slow store, which we do not have.
+decision is not the bottleneck a queue would relieve.
 
 **Revisit when.** The decision stops being O(1) and cheap (e.g. it grows payment
 authorization or inventory reservation inline), or the API tier cannot be scaled
-wide enough to meet peak concurrency. Then an ingress queue in front of the
-decision becomes worthwhile.
+wide enough to meet peak concurrency.
 
 ### 11.5 Email as the idempotency key
 
