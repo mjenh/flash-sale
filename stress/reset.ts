@@ -105,15 +105,16 @@ export function isConnectionRefused(err: unknown): boolean {
   return typeof cause === "object" && cause !== null && (cause as { code?: unknown }).code === "ECONNREFUSED";
 }
 
-/** GET /api/sale/status with a short timeout. Any HTTP answer means serving —
- *  and so does a TIMEOUT (a wedged-but-alive API). Only a genuine ECONNREFUSED
- *  is the green light. */
-export async function probeApiUrl(apiUrl: string, timeoutMs = 2000): Promise<string | null> {
+/** GET /api/sales/:slug/status with a short timeout. Any HTTP answer means
+ *  serving — and so does a TIMEOUT (a wedged-but-alive API). Only a genuine
+ *  ECONNREFUSED is the green light. */
+async function probeApiUrl(apiUrl: string, timeoutMs = 2000): Promise<string | null> {
+  const probeUrl = `${apiUrl}/api/sales/${SALE_SLUG}/status`;
   try {
-    const res = await fetch(`${apiUrl}/api/sale/status`, {
+    const res = await fetch(probeUrl, {
       signal: AbortSignal.timeout(timeoutMs),
     });
-    return `HTTP ${res.status} from ${apiUrl}/api/sale/status`;
+    return `HTTP ${res.status} from ${probeUrl}`;
   } catch (err) {
     if (isConnectionRefused(err)) {
       // Genuine ECONNREFUSED — nothing is listening on that address. Safe to proceed.
@@ -122,7 +123,7 @@ export async function probeApiUrl(apiUrl: string, timeoutMs = 2000): Promise<str
     // Timeout / abort / DNS / anything else: the API may still be alive but
     // slow. NOT safe to reset — treat it as still serving.
     const detail = err instanceof Error ? err.name || err.message : String(err);
-    return `no clean refusal from ${apiUrl}/api/sale/status (${detail})`;
+    return `no clean refusal from ${probeUrl} (${detail})`;
   }
 }
 

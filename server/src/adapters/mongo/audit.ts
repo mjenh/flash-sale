@@ -13,14 +13,6 @@
 import { Order, OrderLine, User } from "./models.ts";
 import type { OrderAuditPort } from "../../services/order.ts";
 
-/** Boot-seeded document ids (strings — mongoose casts back to ObjectId). */
-export interface SaleRefs {
-  saleId: string;
-  productId: string;
-  /** The active flash-sale price at boot — snapshotted into every order line. */
-  flashSalePrice: number;
-}
-
 /** Narrow model surface — one mongoose query per op. */
 export interface AuditModelOps {
   upsertUser(identifier: string): Promise<string>;

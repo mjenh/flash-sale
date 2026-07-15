@@ -6,10 +6,6 @@ import type { SaleStatusBody } from "../api/sale.ts";
 import { localTime } from "../utils/formatSaleTime.ts";
 import "./StatusChip.css";
 
-// Re-exported so tests and sibling components that import `localTime` from
-// this module continue to work unchanged.
-export { localTime };
-
 /** The sole composer of the four status strings. */
 export function statusString(body: SaleStatusBody): string {
   switch (body.status) {

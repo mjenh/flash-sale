@@ -25,7 +25,7 @@ import {
 } from "../../src/adapters/mongo/seed.ts";
 import { START_MS, END_MS } from "./time-fixtures.ts";
 
-export interface FakeOrderDoc {
+interface FakeOrderDoc {
   id: string;
   saleId: string;
   email: string;
@@ -33,14 +33,14 @@ export interface FakeOrderDoc {
   status: string;
 }
 
-export interface FakeOrderLineDoc {
+interface FakeOrderLineDoc {
   orderId: string;
   productId: string;
   quantity: number;
   unitPrice: number; // snapshot of flashSalePrice at acceptance time
 }
 
-export interface FakeSaleDoc {
+interface FakeSaleDoc {
   id: string;
   name: string;
   startTime: Date;

@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve as resolvePath } from "node:path";
 import mongoose from "mongoose";
 import { loadStressConfig, SALE_SLUG, type StressConfig } from "./config.ts";
-import { runReset, stockKeyFor } from "./reset.ts";
+import { runReset, stockKeyFor, isConnectionRefused } from "./reset.ts";
 import { runVerify } from "./verify.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -58,15 +58,6 @@ const phases: Phase[] = [];
 /** k6's corroborating counters, folded in from .out/k6-summary.json for the
  *  finish() report. Undefined until the burst has run. */
 let k6Summary: string | undefined;
-
-/** A Node fetch() connection refusal surfaces as a TypeError whose `cause`
- *  carries `code: "ECONNREFUSED"`. A TimeoutError/AbortError (a wedged but
- *  still-bound API) is NOT a refusal — only a genuine refusal proves nothing is
- *  listening. */
-function isConnectionRefused(err: unknown): boolean {
-  const cause = (err as { cause?: { code?: unknown } } | null)?.cause;
-  return typeof cause === "object" && cause !== null && (cause as { code?: unknown }).code === "ECONNREFUSED";
-}
 
 function announce(name: string): void {
   console.log(`\n=== ${name} ===`);
