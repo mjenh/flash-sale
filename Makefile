@@ -28,7 +28,8 @@ build: ## build the api image
 
 deploy: build ## build and start the full stack
 	$(COMPOSE) up -d
-	@echo "app + api: http://localhost:3000"
+	@echo "  app (nginx): http://localhost:80"
+	@echo "  api (direct): http://localhost:3000"
 
 up: ## start the stack (no rebuild)
 	$(COMPOSE) up -d

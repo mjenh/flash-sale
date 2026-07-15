@@ -1,0 +1,29 @@
+# Server-only image. No client build happens here — static serving is
+# delegated to the nginx client service (Dockerfile.client).
+# CLIENT_DIST_DIR is intentionally absent; app.ts skips express.static when
+# the variable is undefined, so the API runs cleanly without it.
+#
+# Node 24 native type stripping: `node src/index.ts` runs TS directly.
+# erasableSyntaxOnly: true in server/tsconfig.json enforces no runtime TS
+# features (enum, namespace), so no server build step is needed.
+
+FROM node:24-alpine AS server-deps
+WORKDIR /app
+# All workspace package.json files are needed so `npm ci --workspace server`
+# can resolve the monorepo graph without downloading the full dep tree.
+COPY package.json package-lock.json ./
+COPY server/package.json server/
+COPY client/package.json client/
+COPY stress/package.json stress/
+RUN npm ci --omit=dev --workspace server
+
+FROM node:24-alpine
+ENV NODE_ENV=production
+WORKDIR /app
+COPY --from=server-deps /app/node_modules ./node_modules
+COPY server/package.json server/
+COPY server/src server/src
+EXPOSE 3000
+USER node
+WORKDIR /app/server
+CMD ["node", "src/index.ts"]

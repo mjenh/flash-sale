@@ -1,6 +1,8 @@
 services:
   api:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.server
     # The app fail-fasts (exits non-zero) on any boot hiccup — a Redis blip after
     # healthchecks pass, a slow Mongo election — so without a restarter compose
     # would leave the one-command stack permanently dead. `init: true` reaps
@@ -32,6 +34,17 @@ services:
       timeout: 3s
       retries: 5
       start_period: 10s
+
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      api:
+        condition: service_healthy
 
   redis:
     image: redis:8-alpine
