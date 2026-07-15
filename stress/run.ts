@@ -16,7 +16,8 @@ import { dirname, resolve as resolvePath } from "node:path";
 import mongoose from "mongoose";
 import { loadStressConfig, SALE_SLUG, type StressConfig } from "./config.ts";
 import { runReset, stockKeyFor, isConnectionRefused } from "./reset.ts";
-import { runVerify } from "./verify.ts";
+import { runVerify, type VerifyReport } from "./verify.ts";
+import { generateReport } from "./report.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolvePath(HERE, "..");
@@ -58,6 +59,12 @@ const phases: Phase[] = [];
 /** k6's corroborating counters, folded in from .out/k6-summary.json for the
  *  finish() report. Undefined until the burst has run. */
 let k6Summary: string | undefined;
+
+/** Full parsed k6-summary.json for the HTML report. */
+let k6SummaryRaw: Record<string, unknown> | undefined;
+
+/** Structured verifier output for the HTML report. */
+let verifyReport: VerifyReport | undefined;
 
 function announce(name: string): void {
   console.log(`\n=== ${name} ===`);
@@ -222,6 +229,17 @@ function readK6Summary(): string | undefined {
     const data = JSON.parse(raw) as { metrics?: Record<string, { values?: { count?: number } }> };
     const count = (metric: string): number => data.metrics?.[metric]?.values?.count ?? 0;
     return `k6 counters — 202=${count("order_created_202")} · 409=${count("order_rejected_409")} · 200=${count("order_already_200")} · 5xx=${count("order_5xx")}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Full parsed k6-summary.json for the HTML report — returns undefined on any
+ *  parse error so the report generator can degrade gracefully. */
+function readK6SummaryRaw(): Record<string, unknown> | undefined {
+  try {
+    const raw = readFileSync(resolvePath(HERE, ".out", "k6-summary.json"), "utf8");
+    return JSON.parse(raw) as Record<string, unknown>;
   } catch {
     return undefined;
   }
@@ -423,6 +441,7 @@ async function main(): Promise<void> {
   const k6 = runK6(config);
   console.log(`runner: ${k6.runner}`);
   k6Summary = readK6Summary();
+  k6SummaryRaw = readK6SummaryRaw();
   if (k6Summary !== undefined) {
     console.log(k6Summary);
   }
@@ -438,7 +457,8 @@ async function main(): Promise<void> {
 
   announce("5/6 verifier");
   try {
-    record("verifier", await runVerify(config));
+    verifyReport = await runVerify(config);
+    record("verifier", verifyReport.passed);
   } catch (err) {
     record("verifier", false, err instanceof Error ? err.message : String(err));
   }
@@ -459,6 +479,23 @@ function finish(): void {
     console.log(k6Summary);
   }
   console.log(failed.length === 0 ? "\nPASS — the fairness claim holds.\n" : `\nFAIL — ${failed.length} phase(s) failed.\n`);
+
+  const config = loadStressConfig();
+  const reportPath = generateReport({
+    phases,
+    k6Raw: k6SummaryRaw,
+    verifyReport,
+    config: {
+      attempts: config.attempts,
+      vus: config.vus,
+      stockQuantity: config.stockQuantity,
+      apiUrl: config.apiUrl,
+    },
+  });
+  if (reportPath !== undefined) {
+    console.log(`Report: file://${reportPath}\n`);
+  }
+
   process.exit(failed.length === 0 ? 0 : 1);
 }
 

@@ -266,7 +266,13 @@ export async function observe(config: StressConfig): Promise<Observed> {
   }
 }
 
-export async function runVerify(config: StressConfig = loadStressConfig()): Promise<boolean> {
+export interface VerifyReport {
+  observed: Observed;
+  results: CheckResult[];
+  passed: boolean;
+}
+
+export async function runVerify(config: StressConfig = loadStressConfig()): Promise<VerifyReport> {
   const observed = await observe(config);
   const results = evaluate(observed, {
     stockQuantity: config.stockQuantity,
@@ -279,14 +285,14 @@ export async function runVerify(config: StressConfig = loadStressConfig()): Prom
   console.log(formatResults(results));
   const ok = passed(results);
   console.log(`\n${ok ? "VERIFIER PASSED" : "VERIFIER FAILED"}\n`);
-  return ok;
+  return { observed, results, passed: ok };
 }
 
 /** `node verify.ts` entry point (also invoked in-process by run.ts). */
 if (process.argv[1] !== undefined && import.meta.url === `file://${process.argv[1]}`) {
   try {
-    const ok = await runVerify();
-    process.exit(ok ? 0 : 1);
+    const report = await runVerify();
+    process.exit(report.passed ? 0 : 1);
   } catch (err) {
     console.error(`verifier FAILED: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
