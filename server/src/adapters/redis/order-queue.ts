@@ -50,6 +50,20 @@ export interface OrderQueueProducer {
   enqueue(saleId: string, productId: string, email: string): Promise<string>;
 }
 
+export interface ConsumerOptions {
+  /** Consumer name used in XREADGROUP calls.
+   *  Each running worker instance must have a unique name so PEL re-delivery
+   *  is scoped to that instance and two simultaneous workers never share the
+   *  same PEL namespace. Defaults to WORKER_CONSUMER_ID for backward
+   *  compatibility, but callers should pass a hostname-derived value. */
+  consumerId?: string;
+  /** Consumer group name. All workers that collaborate on the same stream
+   *  must share this value. Override when running independent consumer groups
+   *  against the same stream (e.g. analytics vs. audit). Defaults to
+   *  WORKER_GROUP ("workers"). */
+  groupId?: string;
+}
+
 export interface OrderQueueConsumer {
   /** Idempotently creates the consumer group (MKSTREAM on first call). */
   ensureGroup(): Promise<void>;
@@ -114,13 +128,16 @@ function parseStreamResult(result: Awaited<ReturnType<RedisClient["xReadGroup"]>
   return messages;
 }
 
-export function createOrderQueueConsumer(redis: RedisClient): OrderQueueConsumer {
+export function createOrderQueueConsumer(
+  redis: RedisClient,
+  { consumerId = WORKER_CONSUMER_ID, groupId = WORKER_GROUP }: ConsumerOptions = {},
+): OrderQueueConsumer {
   return {
     async ensureGroup(): Promise<void> {
       try {
         // "0" so a restarted worker re-reads its own PEL before new entries.
         // MKSTREAM creates the stream key if it doesn't exist yet.
-        await redis.xGroupCreate(QUEUE_STREAM_KEY, WORKER_GROUP, "0", { MKSTREAM: true });
+        await redis.xGroupCreate(QUEUE_STREAM_KEY, groupId, "0", { MKSTREAM: true });
       } catch (err) {
         // BUSYGROUP: group already exists — idempotent, not an error.
         if (err instanceof Error && err.message.includes("BUSYGROUP")) {
@@ -134,8 +151,8 @@ export function createOrderQueueConsumer(redis: RedisClient): OrderQueueConsumer
       // id="0" re-delivers messages already claimed by this consumer (unACKed).
       // Returns empty when the PEL is clear — caller then switches to readBatch.
       const result = await redis.xReadGroup(
-        WORKER_GROUP,
-        WORKER_CONSUMER_ID,
+        groupId,
+        consumerId,
         [{ key: QUEUE_STREAM_KEY, id: "0" }],
         { COUNT: count },
       );
@@ -145,8 +162,8 @@ export function createOrderQueueConsumer(redis: RedisClient): OrderQueueConsumer
     async readBatch(count: number, blockMs: number): Promise<QueueMessage[]> {
       // id=">" delivers only new, never-delivered-to-this-group messages.
       const result = await redis.xReadGroup(
-        WORKER_GROUP,
-        WORKER_CONSUMER_ID,
+        groupId,
+        consumerId,
         [{ key: QUEUE_STREAM_KEY, id: ">" }],
         { COUNT: count, BLOCK: blockMs },
       );
@@ -157,7 +174,7 @@ export function createOrderQueueConsumer(redis: RedisClient): OrderQueueConsumer
       if (streamIds.length === 0) {
         return;
       }
-      await redis.xAck(QUEUE_STREAM_KEY, WORKER_GROUP, streamIds);
+      await redis.xAck(QUEUE_STREAM_KEY, groupId, streamIds);
     },
   };
 }

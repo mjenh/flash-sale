@@ -23,11 +23,22 @@ async function main(): Promise<void> {
   // MongoDB — must be connected before the worker loop starts draining the stream.
   await connectMongo(config.mongodbUri);
 
-  const worker = createOrderWorker({ redis, bulkAudit: mongoBulkAudit, logger });
+  const worker = createOrderWorker({
+    redis,
+    bulkAudit: mongoBulkAudit,
+    logger,
+    consumerId: config.workerConsumerId,
+    groupId: config.workerGroup,
+  });
   worker.start();
 
   logger.info(
-    { redisUrl: config.redisUrl, mongodbUri: config.mongodbUri },
+    {
+      redisUrl: config.redisUrl,
+      mongodbUri: config.mongodbUri,
+      consumerId: config.workerConsumerId,
+      groupId: config.workerGroup,
+    },
     "order worker started",
   );
 

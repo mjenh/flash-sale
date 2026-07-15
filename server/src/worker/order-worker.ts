@@ -27,6 +27,14 @@ export interface WorkerOptions {
   batchSize?: number;
   /** BLOCK wait on XREADGROUP in ms — avoids busy-polling (default: 500). */
   blockMs?: number;
+  /** Consumer name in the XREADGROUP call. Each pod must use a unique name
+   *  so PEL re-delivery is scoped per-instance. Defaults to WORKER_CONSUMER_ID
+   *  ("worker-1") for single-instance deploys; set via WORKER_CONSUMER_ID env
+   *  var or hostname() in multi-replica deployments (finding #7). */
+  consumerId?: string;
+  /** Consumer group name. All workers draining the same stream must share
+   *  this value. Defaults to WORKER_GROUP ("workers"). */
+  groupId?: string;
 }
 
 export interface OrderWorker {
@@ -49,8 +57,10 @@ export function createOrderWorker({
   logger,
   batchSize = 50,
   blockMs = 500,
+  consumerId,
+  groupId,
 }: WorkerOptions): OrderWorker {
-  const consumer = createOrderQueueConsumer(redis);
+  const consumer = createOrderQueueConsumer(redis, { consumerId, groupId });
   let running = false;
   let backoffMs = INITIAL_BACKOFF_MS;
   // Kept so stop() can await the loop settling cleanly.

@@ -1,5 +1,6 @@
 // Env parse + fail-fast validation.
 // SALE_START_TIME / SALE_END_TIME are parsed to UTC epoch ms exactly once, here.
+import { hostname } from "node:os";
 
 export class ConfigError extends Error {
   override name = "ConfigError";
@@ -80,6 +81,14 @@ export interface WorkerConfig {
   redisConnectTimeoutMs: number;
   redisCommandTimeoutMs: number;
   redisReconnectMaxMs: number;
+  /** Unique consumer name for XREADGROUP. Each replica must use a distinct
+   *  value so PEL re-delivery is scoped per-instance (finding #7).
+   *  Defaults to WORKER_CONSUMER_ID env var, or "worker-<hostname>" if unset. */
+  workerConsumerId: string;
+  /** Consumer group name shared by all workers draining the same stream.
+   *  Override when running independent consumer groups against the same
+   *  stream. Defaults to WORKER_GROUP ("workers"). */
+  workerGroup: string;
 }
 
 export function loadWorkerConfig(env: Env = process.env): WorkerConfig {
@@ -89,6 +98,8 @@ export function loadWorkerConfig(env: Env = process.env): WorkerConfig {
     redisConnectTimeoutMs: positiveInt(env, "REDIS_CONNECT_TIMEOUT_MS", 2000),
     redisCommandTimeoutMs: positiveInt(env, "REDIS_COMMAND_TIMEOUT_MS", 1000),
     redisReconnectMaxMs: positiveInt(env, "REDIS_RECONNECT_MAX_MS", 2000),
+    workerConsumerId: env["WORKER_CONSUMER_ID"]?.trim() || `worker-${hostname()}`,
+    workerGroup: env["WORKER_GROUP"]?.trim() || "workers",
   };
 }
 
