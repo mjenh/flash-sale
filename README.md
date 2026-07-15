@@ -3,6 +3,8 @@
 A configurable limited-stock flash sale that never oversells, always honors an
 order it accepted, and keeps the page truthful the whole way through.
 
+→ See **[SHOWCASE.md](SHOWCASE.md)** for a walkthrough of the UI states and real-time behavior.
+
 ## Tech stack
 
 | Layer | Technology |
