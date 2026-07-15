@@ -5,17 +5,21 @@
 // side effects), and the publishes (order.accepted on every OK;
 // sale.sold_out exactly once, by the draining request; SOLD_OUT verdicts
 // never publish; publish failures never alter the outcome).
+//
+// Story 4.4: attempt() takes a SaleContext ({ saleId, window }) as its first
+// argument instead of window living in the service's deps — SALE_ID/ctx
+// below are threaded through every attempt() call, and the saleId-
+// parameterized ports (orders.attempt/hasOrdered, audit.recordOrder,
+// events.publish) are asserted against the exact saleId passed through.
 import { describe, expect, it, vi } from "vitest";
-import { createOrderService, type OrderAttemptPort } from "../src/services/order.ts";
+import { createOrderService, type OrderAttemptPort, type SaleContext } from "../src/services/order.ts";
+import { START_MS, END_MS, WINDOW } from "./helpers/time-fixtures.ts";
 
-const startMs = Date.parse("2026-07-10T04:00:00Z");
-const endMs = Date.parse("2026-07-10T05:00:00Z");
-const window = {
-  startMs,
-  endMs,
-  startIso: "2026-07-10T04:00:00.000Z",
-  endIso: "2026-07-10T05:00:00.000Z",
-};
+const SALE_ID = "sale-1";
+const startMs = START_MS;
+const endMs = END_MS;
+const window = WINDOW;
+const ctx: SaleContext = { saleId: SALE_ID, window };
 
 /** Drain the microtask/immediate queue so fire-and-forget effects settle. */
 const drain = () => new Promise((resolve) => setImmediate(resolve));
@@ -24,9 +28,9 @@ function build(
   nowMs: number,
   opts: {
     port?: Partial<OrderAttemptPort>;
-    recordOrder?: (email: string) => Promise<void>;
+    recordOrder?: (saleId: string, email: string) => Promise<void>;
     charge?: (email: string) => Promise<{ approved: boolean; reference: string }>;
-    publish?: (event: "order.accepted" | "sale.sold_out") => Promise<void>;
+    publish?: (event: "order.accepted" | "sale.sold_out", saleId: string) => Promise<void>;
   } = {},
 ) {
   const orders = {
@@ -50,7 +54,6 @@ function build(
     report,
     service: createOrderService({
       clock: () => nowMs,
-      window,
       orders,
       audit,
       payment,
@@ -71,14 +74,14 @@ describe("order service — precedence on the injected clock", () => {
     for (const [label, now] of instants) {
       it(`${label}, no prior order -> inactive via one SISMEMBER`, async () => {
         const { orders, service } = build(now);
-        expect(await service.attempt("new@x.com")).toEqual({ outcome: "inactive" });
-        expect(orders.hasOrdered).toHaveBeenCalledExactlyOnceWith("new@x.com");
+        expect(await service.attempt(ctx, "new@x.com")).toEqual({ outcome: "inactive" });
+        expect(orders.hasOrdered).toHaveBeenCalledExactlyOnceWith(SALE_ID, "new@x.com");
         expect(orders.attempt).not.toHaveBeenCalled();
       });
 
       it(`${label}, prior order -> already (order holder always wins)`, async () => {
         const { orders, service } = build(now, { port: { hasOrdered: vi.fn(async () => true) } });
-        expect(await service.attempt("held@x.com")).toEqual({ outcome: "already" });
+        expect(await service.attempt(ctx, "held@x.com")).toEqual({ outcome: "already" });
         expect(orders.attempt).not.toHaveBeenCalled();
       });
     }
@@ -87,8 +90,8 @@ describe("order service — precedence on the injected clock", () => {
   describe("inside the window the script decides", () => {
     it("exactly startMs (boundary — inside) runs the script, no SISMEMBER probe", async () => {
       const { orders, service } = build(startMs);
-      expect(await service.attempt("a@x.com")).toEqual({ outcome: "created", remaining: 99 });
-      expect(orders.attempt).toHaveBeenCalledExactlyOnceWith("a@x.com");
+      expect(await service.attempt(ctx, "a@x.com")).toEqual({ outcome: "created", remaining: 99 });
+      expect(orders.attempt).toHaveBeenCalledExactlyOnceWith(SALE_ID, "a@x.com");
       expect(orders.hasOrdered).not.toHaveBeenCalled();
     });
 
@@ -96,21 +99,21 @@ describe("order service — precedence on the injected clock", () => {
       const { service } = build(startMs + 1000, {
         port: { attempt: vi.fn(async () => ({ verdict: "OK" as const, remaining: 0 })) },
       });
-      expect(await service.attempt("last@x.com")).toEqual({ outcome: "created", remaining: 0 });
+      expect(await service.attempt(ctx, "last@x.com")).toEqual({ outcome: "created", remaining: 0 });
     });
 
     it("maps ALREADY -> already", async () => {
       const { service } = build(startMs + 1000, {
         port: { attempt: vi.fn(async () => ({ verdict: "ALREADY" as const, remaining: 42 })) },
       });
-      expect(await service.attempt("dup@x.com")).toEqual({ outcome: "already", remaining: 42 });
+      expect(await service.attempt(ctx, "dup@x.com")).toEqual({ outcome: "already", remaining: 42 });
     });
 
     it("maps SOLD_OUT -> sold_out", async () => {
       const { service } = build(startMs + 1000, {
         port: { attempt: vi.fn(async () => ({ verdict: "SOLD_OUT" as const, remaining: 0 })) },
       });
-      expect(await service.attempt("late@x.com")).toEqual({ outcome: "sold_out", remaining: 0 });
+      expect(await service.attempt(ctx, "late@x.com")).toEqual({ outcome: "sold_out", remaining: 0 });
     });
   });
 
@@ -123,16 +126,16 @@ describe("order service — precedence on the injected clock", () => {
         }),
       },
     });
-    await expect(service.attempt("a@x.com")).rejects.toBe(boom);
+    await expect(service.attempt(ctx, "a@x.com")).rejects.toBe(boom);
   });
 });
 
 describe("order service — post-accept side effects", () => {
-  it("OK -> audit.recordOrder and payment.charge each fire once with the email", async () => {
+  it("OK -> audit.recordOrder and payment.charge each fire once with the saleId + email", async () => {
     const { audit, payment, report, service } = build(startMs + 1000);
-    await service.attempt("winner@x.com");
+    await service.attempt(ctx, "winner@x.com");
     await drain();
-    expect(audit.recordOrder).toHaveBeenCalledExactlyOnceWith("winner@x.com");
+    expect(audit.recordOrder).toHaveBeenCalledExactlyOnceWith(SALE_ID, "winner@x.com");
     expect(payment.charge).toHaveBeenCalledExactlyOnceWith("winner@x.com");
     expect(report).not.toHaveBeenCalled();
   });
@@ -144,7 +147,7 @@ describe("order service — post-accept side effects", () => {
         throw boom;
       }),
     });
-    expect(await service.attempt("winner@x.com")).toEqual({ outcome: "created", remaining: 99 });
+    expect(await service.attempt(ctx, "winner@x.com")).toEqual({ outcome: "created", remaining: 99 });
     await drain();
     expect(report).toHaveBeenCalledExactlyOnceWith("audit", boom);
   });
@@ -156,7 +159,7 @@ describe("order service — post-accept side effects", () => {
         throw boom;
       }),
     });
-    expect(await service.attempt("winner@x.com")).toEqual({ outcome: "created", remaining: 99 });
+    expect(await service.attempt(ctx, "winner@x.com")).toEqual({ outcome: "created", remaining: 99 });
     await drain();
     expect(report).toHaveBeenCalledExactlyOnceWith("payment", boom);
   });
@@ -165,7 +168,7 @@ describe("order service — post-accept side effects", () => {
     const { report, service } = build(startMs + 1000, {
       charge: vi.fn(async () => ({ approved: false, reference: "declined:x" })),
     });
-    expect(await service.attempt("winner@x.com")).toEqual({ outcome: "created", remaining: 99 });
+    expect(await service.attempt(ctx, "winner@x.com")).toEqual({ outcome: "created", remaining: 99 });
     await drain();
     expect(report).toHaveBeenCalledTimes(1);
     expect(report.mock.calls[0]?.[0]).toBe("payment");
@@ -176,7 +179,7 @@ describe("order service — post-accept side effects", () => {
       recordOrder: vi.fn(() => new Promise<void>(() => {})),
     });
     // If the service awaited the audit promise this would time out.
-    expect(await service.attempt("winner@x.com")).toEqual({ outcome: "created", remaining: 99 });
+    expect(await service.attempt(ctx, "winner@x.com")).toEqual({ outcome: "created", remaining: 99 });
   });
 
   it("ALREADY and SOLD_OUT verdicts never touch audit or payment (negative space)", async () => {
@@ -184,7 +187,7 @@ describe("order service — post-accept side effects", () => {
       const { audit, payment, service } = build(startMs + 1000, {
         port: { attempt: vi.fn(async () => ({ verdict, remaining: 0 })) },
       });
-      await service.attempt("x@x.com");
+      await service.attempt(ctx, "x@x.com");
       await drain();
       expect(audit.recordOrder).not.toHaveBeenCalled();
       expect(payment.charge).not.toHaveBeenCalled();
@@ -196,7 +199,7 @@ describe("order service — post-accept side effects", () => {
       const { audit, payment, service } = build(endMs + 1, {
         port: { hasOrdered: vi.fn(async () => hasOrdered) },
       });
-      await service.attempt("x@x.com");
+      await service.attempt(ctx, "x@x.com");
       await drain();
       expect(audit.recordOrder).not.toHaveBeenCalled();
       expect(payment.charge).not.toHaveBeenCalled();
@@ -205,11 +208,11 @@ describe("order service — post-accept side effects", () => {
 });
 
 describe("order service — publishes on accept", () => {
-  it("OK with remaining > 0 -> exactly one publish('order.accepted'), zero sale.sold_out", async () => {
+  it("OK with remaining > 0 -> exactly one publish('order.accepted', saleId), zero sale.sold_out", async () => {
     const { events, report, service } = build(startMs + 1000);
-    expect(await service.attempt("winner@x.com")).toEqual({ outcome: "created", remaining: 99 });
+    expect(await service.attempt(ctx, "winner@x.com")).toEqual({ outcome: "created", remaining: 99 });
     await drain();
-    expect(events.publish).toHaveBeenCalledExactlyOnceWith("order.accepted");
+    expect(events.publish).toHaveBeenCalledExactlyOnceWith("order.accepted", SALE_ID);
     expect(report).not.toHaveBeenCalled();
   });
 
@@ -217,9 +220,30 @@ describe("order service — publishes on accept", () => {
     const { events, service } = build(startMs + 1000, {
       port: { attempt: vi.fn(async () => ({ verdict: "OK" as const, remaining: 0 })) },
     });
-    expect(await service.attempt("last@x.com")).toEqual({ outcome: "created", remaining: 0 });
+    expect(await service.attempt(ctx, "last@x.com")).toEqual({ outcome: "created", remaining: 0 });
     await drain();
-    expect(events.publish.mock.calls).toEqual([["order.accepted"], ["sale.sold_out"]]);
+    expect(events.publish.mock.calls).toEqual([
+      ["order.accepted", SALE_ID],
+      ["sale.sold_out", SALE_ID],
+    ]);
+  });
+
+  it("Scenario D: stock exactly 1 → first buyer succeeds AND triggers sale.sold_out (remaining === 0)", async () => {
+    // The draining request is the most critical happy-path edge case: the
+    // single unit remaining is claimed, remaining drops to 0, and the
+    // sold_out event fires exactly once — no more, no less.
+    const { events, service } = build(startMs + 1000, {
+      port: { attempt: vi.fn(async () => ({ verdict: "OK" as const, remaining: 0 })) },
+    });
+
+    const result = await service.attempt(ctx, "last-buyer@x.com");
+    await drain();
+
+    expect(result).toEqual({ outcome: "created", remaining: 0 });
+    expect(events.publish.mock.calls).toEqual([
+      ["order.accepted", SALE_ID],
+      ["sale.sold_out", SALE_ID],
+    ]);
   });
 
   it("a SECOND attempt after the draining one (ALREADY verdict) publishes nothing more", async () => {
@@ -228,17 +252,20 @@ describe("order service — publishes on accept", () => {
       .mockResolvedValueOnce({ verdict: "OK" as const, remaining: 0 })
       .mockResolvedValueOnce({ verdict: "ALREADY" as const, remaining: 0 });
     const { events, service } = build(startMs + 1000, { port: { attempt } });
-    await service.attempt("last@x.com");
-    await service.attempt("last@x.com");
+    await service.attempt(ctx, "last@x.com");
+    await service.attempt(ctx, "last@x.com");
     await drain();
-    expect(events.publish.mock.calls).toEqual([["order.accepted"], ["sale.sold_out"]]);
+    expect(events.publish.mock.calls).toEqual([
+      ["order.accepted", SALE_ID],
+      ["sale.sold_out", SALE_ID],
+    ]);
   });
 
   it("SOLD_OUT verdicts NEVER publish — not even sale.sold_out (negative space)", async () => {
     const { events, service } = build(startMs + 1000, {
       port: { attempt: vi.fn(async () => ({ verdict: "SOLD_OUT" as const, remaining: 0 })) },
     });
-    expect(await service.attempt("late@x.com")).toEqual({ outcome: "sold_out", remaining: 0 });
+    expect(await service.attempt(ctx, "late@x.com")).toEqual({ outcome: "sold_out", remaining: 0 });
     await drain();
     expect(events.publish).not.toHaveBeenCalled();
   });
@@ -248,7 +275,7 @@ describe("order service — publishes on accept", () => {
       const { events, service } = build(endMs + 1, {
         port: { hasOrdered: vi.fn(async () => hasOrdered) },
       });
-      await service.attempt("x@x.com");
+      await service.attempt(ctx, "x@x.com");
       await drain();
       expect(events.publish).not.toHaveBeenCalled();
     }
@@ -261,7 +288,7 @@ describe("order service — publishes on accept", () => {
         throw boom;
       }),
     });
-    expect(await service.attempt("winner@x.com")).toEqual({ outcome: "created", remaining: 99 });
+    expect(await service.attempt(ctx, "winner@x.com")).toEqual({ outcome: "created", remaining: 99 });
     await drain();
     expect(report).toHaveBeenCalledExactlyOnceWith("publish", boom);
   });
@@ -274,7 +301,7 @@ describe("order service — publishes on accept", () => {
         throw boom;
       }),
     });
-    expect(await service.attempt("last@x.com")).toEqual({ outcome: "created", remaining: 0 });
+    expect(await service.attempt(ctx, "last@x.com")).toEqual({ outcome: "created", remaining: 0 });
     await drain();
     expect(report.mock.calls).toEqual([
       ["publish", boom],
@@ -287,7 +314,7 @@ describe("order service — publishes on accept", () => {
       publish: vi.fn(() => new Promise<void>(() => {})),
     });
     // If the service awaited the publish promise this would time out.
-    expect(await service.attempt("winner@x.com")).toEqual({ outcome: "created", remaining: 99 });
+    expect(await service.attempt(ctx, "winner@x.com")).toEqual({ outcome: "created", remaining: 99 });
   });
 });
 
@@ -314,7 +341,6 @@ describe("order service — hasOrdered", () => {
       events,
       service: createOrderService({
         clock,
-        window,
         orders,
         audit,
         payment,
@@ -324,17 +350,17 @@ describe("order service — hasOrdered", () => {
     };
   }
 
-  it("passes true through with the exact email — clock never read", async () => {
+  it("passes true through with the exact saleId + email — clock never read", async () => {
     const { clock, orders, service } = buildReadOnly(async () => true);
-    expect(await service.hasOrdered("held@x.com")).toBe(true);
-    expect(orders.hasOrdered).toHaveBeenCalledExactlyOnceWith("held@x.com");
+    expect(await service.hasOrdered(SALE_ID, "held@x.com")).toBe(true);
+    expect(orders.hasOrdered).toHaveBeenCalledExactlyOnceWith(SALE_ID, "held@x.com");
     expect(clock).not.toHaveBeenCalled();
   });
 
-  it("passes false through with the exact email", async () => {
+  it("passes false through with the exact saleId + email", async () => {
     const { orders, service } = buildReadOnly(async () => false);
-    expect(await service.hasOrdered("new@x.com")).toBe(false);
-    expect(orders.hasOrdered).toHaveBeenCalledExactlyOnceWith("new@x.com");
+    expect(await service.hasOrdered(SALE_ID, "new@x.com")).toBe(false);
+    expect(orders.hasOrdered).toHaveBeenCalledExactlyOnceWith(SALE_ID, "new@x.com");
   });
 
   it("port rejections propagate untouched (the 503 signal is the adapter's)", async () => {
@@ -342,12 +368,12 @@ describe("order service — hasOrdered", () => {
     const { service } = buildReadOnly(async () => {
       throw boom;
     });
-    await expect(service.hasOrdered("x@x.com")).rejects.toBe(boom);
+    await expect(service.hasOrdered(SALE_ID, "x@x.com")).rejects.toBe(boom);
   });
 
   it("is a pure read: never runs the script, never audits, never charges, never publishes", async () => {
     const { orders, audit, payment, events, service } = buildReadOnly(async () => true);
-    await service.hasOrdered("held@x.com");
+    await service.hasOrdered(SALE_ID, "held@x.com");
     await drain();
     expect(orders.attempt).not.toHaveBeenCalled();
     expect(audit.recordOrder).not.toHaveBeenCalled();

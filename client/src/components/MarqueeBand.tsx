@@ -1,7 +1,7 @@
 import "./MarqueeBand.css";
 
 export const HOUSE_RULES =
-  "flash sale . keycap one . the noon drop";
+  "flash sale . keycap one . live drop";
 
 export function MarqueeBand() {
   return (

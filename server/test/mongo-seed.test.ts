@@ -7,6 +7,9 @@ import {
   createDomainSeeder,
   PRODUCT_NAME,
   PRODUCT_SKU,
+  PRODUCT_ORIGINAL_PRICE,
+  PRODUCT_FLASH_SALE_PRICE,
+  SALE_NAME,
   SALE_SLUG,
   type SeedModelOps,
 } from "../src/adapters/mongo/seed.ts";
@@ -24,6 +27,16 @@ function fakeOps(overrides: Partial<SeedModelOps> = {}) {
     upsertSaleProduct: vi.fn(async () => {}),
     upsertInventory: vi.fn(async () => {}),
     listConfirmedOrderEmails: vi.fn(async () => ["a@x.com", "b@x.com"]),
+    listAllSales: vi.fn(async () => [
+      {
+        _id: "sale-1",
+        slug: SALE_SLUG,
+        name: SALE_NAME,
+        startTime: new Date(config.saleStartMs),
+        endTime: new Date(config.saleEndMs),
+        stockQuantity: 7,
+      },
+    ]),
     ...overrides,
   };
 }
@@ -33,20 +46,22 @@ describe("createDomainSeeder (boot seed)", () => {
     const ops = fakeOps();
     const refs = await createDomainSeeder(ops).seed(config);
 
-    expect(ops.upsertProduct).toHaveBeenCalledExactlyOnceWith(PRODUCT_SKU, PRODUCT_NAME);
+    expect(ops.upsertProduct).toHaveBeenCalledExactlyOnceWith(PRODUCT_SKU, PRODUCT_NAME, PRODUCT_ORIGINAL_PRICE);
     expect(ops.upsertSale).toHaveBeenCalledExactlyOnceWith(SALE_SLUG, {
+      name: SALE_NAME,
       startTime: new Date(config.saleStartMs),
       endTime: new Date(config.saleEndMs),
       stockQuantity: 7,
     });
-    expect(ops.upsertSaleProduct).toHaveBeenCalledExactlyOnceWith("sale-1", "product-1");
+    expect(ops.upsertSaleProduct).toHaveBeenCalledExactlyOnceWith("sale-1", "product-1", PRODUCT_FLASH_SALE_PRICE);
     expect(ops.upsertInventory).toHaveBeenCalledExactlyOnceWith("product-1", 7);
-    expect(refs).toEqual({ saleId: "sale-1", productId: "product-1" });
+    expect(refs).toEqual({ saleId: "sale-1", productId: "product-1", flashSalePrice: PRODUCT_FLASH_SALE_PRICE });
   });
 
-  it("stable identities: the sku and slug are constants (single-sale system)", () => {
+  it("stable identities: the sku, slug, and name are constants (single-sale system)", () => {
     expect(PRODUCT_SKU).toBe("KEYCAP-ONE");
     expect(SALE_SLUG).toBe("flash-sale");
+    expect(SALE_NAME).toBe("Flash Sale");
   });
 
   it("listConfirmedOrderEmails passes through to the model op with the saleId", async () => {
@@ -67,5 +82,21 @@ describe("createDomainSeeder (boot seed)", () => {
     });
     await expect(createDomainSeeder(ops).seed(config)).rejects.toBe(boom);
     expect(ops.upsertSaleProduct).not.toHaveBeenCalled();
+  });
+
+  it("listAllSales passes through to the model op (Story 4.5)", async () => {
+    const ops = fakeOps();
+    const sales = await createDomainSeeder(ops).listAllSales();
+    expect(ops.listAllSales).toHaveBeenCalledTimes(1);
+    expect(sales).toEqual([
+      {
+        _id: "sale-1",
+        slug: SALE_SLUG,
+        name: SALE_NAME,
+        startTime: new Date(config.saleStartMs),
+        endTime: new Date(config.saleEndMs),
+        stockQuantity: 7,
+      },
+    ]);
   });
 });

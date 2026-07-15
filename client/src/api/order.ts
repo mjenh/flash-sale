@@ -3,8 +3,13 @@
 // caller's state machine has no error branch that can strand a spinner.
 //
 // The wire field is `email` — the spine's older `userId` wording is superseded.
+//
+// Story 5.1: both `placeOrder` and `checkOrder` now take a `slug` and call
+// `/api/sales/${slug}/order[...]` instead of the v1.0 `/api/order[...]`
+// paths. Story 5.2 will extend this file further (dedicated URL-construction
+// tests, additional cleanup); this story's job was making the order flow
+// actually work end-to-end with a slug in the URL.
 
-export const ORDER_URL = "/api/order";
 export const TIMEOUT_MS = 10_000;
 
 export const SUCCESS = "Order successful.";
@@ -14,6 +19,15 @@ export const INACTIVE = "Sale is not active.";
 export const EMAIL_REQUIRED = "Email is required.";
 export const UNAVAILABLE = "Service temporarily unavailable.";
 export const NETWORK = "Something went wrong, please try again.";
+
+/** URL builders — the one place that knows the slug-scoped path shape. */
+export function orderUrl(slug: string): string {
+  return `/api/sales/${encodeURIComponent(slug)}/order`;
+}
+
+export function checkOrderUrl(slug: string, email: string): string {
+  return `${orderUrl(slug)}/${encodeURIComponent(email)}`;
+}
 
 export type VerdictKind =
   | "success"
@@ -46,7 +60,7 @@ function said(body: unknown, fallback: string): string {
   return fallback;
 }
 
-/** A 200/201 is only trustworthy if the body is actually an order envelope. A
+/** A 200/201/202 is only trustworthy if the body is actually an order envelope. A
  *  captive portal or proxy can answer 200 with HTML (which fails to parse, so
  *  `body` is null) — mapping that to "already ordered" or "success" would tell a
  *  buyer who ordered nothing that they hold an order. `success: false` is never
@@ -65,6 +79,7 @@ function isOrderEnvelope(body: unknown): boolean {
 function verdictFor(status: number, body: unknown): Verdict {
   switch (status) {
     case 201:
+    case 202:
       return isOrderEnvelope(body)
         ? { kind: "success", message: said(body, SUCCESS) }
         : { kind: "network", message: NETWORK };
@@ -88,8 +103,9 @@ function verdictFor(status: number, body: unknown): Verdict {
   }
 }
 
-/** POST /api/order. Total by construction — every path resolves a Verdict. */
-export async function placeOrder(email: string): Promise<Verdict> {
+/** POST /api/sales/:slug/order. Total by construction — every path resolves a
+ *  Verdict. */
+export async function placeOrder(slug: string, email: string): Promise<Verdict> {
   const controller = new AbortController();
   // A ~10s stall is an answer too. Abort for real, so a hung socket doesn't
   // hold a connection slot while the buyer retries (retry is safe: idempotent).
@@ -98,7 +114,7 @@ export async function placeOrder(email: string): Promise<Verdict> {
   }, TIMEOUT_MS);
 
   try {
-    const res = await fetch(ORDER_URL, {
+    const res = await fetch(orderUrl(slug), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email }),
@@ -118,12 +134,12 @@ export async function placeOrder(email: string): Promise<Verdict> {
   }
 }
 
-/** GET /api/order/:email — a convenience read, never how you learn the outcome
- *  of the attempt you just made. Rejects on failure; the caller swallows it
- *  silently. A hung load-check must not resolve late and pop a focus-stealing
- *  panel, so it carries its own timeout AND honors the caller's signal
- *  (aborted on submit / unmount). */
-export async function checkOrder(email: string, signal?: AbortSignal): Promise<boolean> {
+/** GET /api/sales/:slug/order/:email — a convenience read, never how you learn
+ *  the outcome of the attempt you just made. Rejects on failure; the caller
+ *  swallows it silently. A hung load-check must not resolve late and pop a
+ *  focus-stealing panel, so it carries its own timeout AND honors the
+ *  caller's signal (aborted on submit / unmount). */
+export async function checkOrder(slug: string, email: string, signal?: AbortSignal): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => {
     controller.abort();
@@ -138,7 +154,7 @@ export async function checkOrder(email: string, signal?: AbortSignal): Promise<b
   }
 
   try {
-    const res = await fetch(`${ORDER_URL}/${encodeURIComponent(email)}`, {
+    const res = await fetch(checkOrderUrl(slug, email), {
       signal: controller.signal,
     });
     if (!res.ok) {

@@ -14,6 +14,7 @@
 // listConfirmedOrderEmails filters by saleId AND status like the real query.
 import type { AuditModelOps } from "../../src/adapters/mongo/audit.ts";
 import type { SeedModelOps } from "../../src/adapters/mongo/seed.ts";
+import type { CatalogModelOps } from "../../src/adapters/mongo/catalog.ts";
 
 export interface FakeOrderDoc {
   id: string;
@@ -27,11 +28,24 @@ export interface FakeOrderLineDoc {
   orderId: string;
   productId: string;
   quantity: number;
-  unitPrice: number;
+  unitPrice: number; // snapshot of flashSalePrice at acceptance time
 }
 
 export interface FakeSaleDoc {
   id: string;
+  name: string;
+  startTime: Date;
+  endTime: Date;
+  stockQuantity: number;
+}
+
+/** Story 4.5: mirrors seed.ts's `SeedSaleDoc` — one entry per Sale document,
+ *  including its slug (the fake.sales Map is keyed by slug, so the key
+ *  becomes the field here). */
+export interface FakeSaleWindowDoc {
+  _id: string;
+  slug: string;
+  name: string;
   startTime: Date;
   endTime: Date;
   stockQuantity: number;
@@ -39,9 +53,9 @@ export interface FakeSaleDoc {
 
 export interface FakeMongo {
   users: Map<string, string>; // identifier -> userId
-  products: Map<string, { id: string; name: string }>; // sku -> doc
+  products: Map<string, { id: string; name: string; originalPrice: number }>; // sku -> doc
   sales: Map<string, FakeSaleDoc>; // slug -> doc
-  saleProducts: Set<string>; // `${saleId}:${productId}`
+  saleProducts: Map<string, number>; // `${saleId}:${productId}` -> flashSalePrice
   inventories: Map<string, number>; // productId -> initialQuantity
   orders: FakeOrderDoc[];
   orderLines: FakeOrderLineDoc[];
@@ -49,8 +63,9 @@ export interface FakeMongo {
   failingAudit: boolean;
   audit: AuditModelOps;
   seed: SeedModelOps;
+  catalog: CatalogModelOps;
   /** Ready-made bootstrap override: `mongoModelOps: fakeMongo.ops`. */
-  ops: { audit: AuditModelOps; seed: SeedModelOps };
+  ops: { audit: AuditModelOps; seed: SeedModelOps; catalog: CatalogModelOps };
 }
 
 export function createFakeMongo(): FakeMongo {
@@ -61,13 +76,14 @@ export function createFakeMongo(): FakeMongo {
     users: new Map(),
     products: new Map(),
     sales: new Map(),
-    saleProducts: new Set(),
+    saleProducts: new Map(),
     inventories: new Map(),
     orders: [],
     orderLines: [],
     failingAudit: false,
     audit: undefined as unknown as AuditModelOps,
     seed: undefined as unknown as SeedModelOps,
+    catalog: undefined as unknown as CatalogModelOps,
     ops: undefined as unknown as FakeMongo["ops"],
   };
 
@@ -109,32 +125,35 @@ export function createFakeMongo(): FakeMongo {
   };
 
   fake.seed = {
-    async upsertProduct(sku: string, name: string): Promise<string> {
+    async upsertProduct(sku: string, name: string, originalPrice: number): Promise<string> {
       const existing = fake.products.get(sku);
       if (existing !== undefined) {
+        // $set semantics: originalPrice updates on every boot.
+        existing.originalPrice = originalPrice;
         return existing.id;
       }
       const productId = id("product");
-      fake.products.set(sku, { id: productId, name });
+      fake.products.set(sku, { id: productId, name, originalPrice });
       return productId;
     },
 
-    async upsertSale(slug, { startTime, endTime, stockQuantity }): Promise<string> {
+    async upsertSale(slug, { name, startTime, endTime, stockQuantity }): Promise<string> {
       const existing = fake.sales.get(slug);
       if (existing !== undefined) {
         // $set semantics: the durable record mirrors current env config.
+        existing.name = name;
         existing.startTime = startTime;
         existing.endTime = endTime;
         existing.stockQuantity = stockQuantity;
         return existing.id;
       }
       const saleId = id("sale");
-      fake.sales.set(slug, { id: saleId, startTime, endTime, stockQuantity });
+      fake.sales.set(slug, { id: saleId, name, startTime, endTime, stockQuantity });
       return saleId;
     },
 
-    async upsertSaleProduct(saleId: string, productId: string): Promise<void> {
-      fake.saleProducts.add(`${saleId}:${productId}`);
+    async upsertSaleProduct(saleId: string, productId: string, flashSalePrice: number): Promise<void> {
+      fake.saleProducts.set(`${saleId}:${productId}`, flashSalePrice);
     },
 
     async upsertInventory(productId: string, initialQuantity: number): Promise<void> {
@@ -151,8 +170,93 @@ export function createFakeMongo(): FakeMongo {
         ),
       ];
     },
+
+    async listAllSales(): Promise<FakeSaleWindowDoc[]> {
+      return [...fake.sales.entries()].map(([slug, doc]) => ({
+        _id: doc.id,
+        slug,
+        name: doc.name,
+        startTime: doc.startTime,
+        endTime: doc.endTime,
+        stockQuantity: doc.stockQuantity,
+      }));
+    },
   };
 
-  fake.ops = { audit: fake.audit, seed: fake.seed };
+  // Story 4.3: Sale -> SaleProduct -> Product -> Inventory join, mirroring
+  // mongoCatalogModelOps's three one-query-per-op shape over the same
+  // products/saleProducts/inventories maps the seeder above populates.
+  fake.catalog = {
+    async listSaleProducts(saleId: string) {
+      const prefix = `${saleId}:`;
+      return [...fake.saleProducts.entries()]
+        .filter(([key]) => key.startsWith(prefix))
+        .map(([key, flashSalePrice]) => ({
+          productId: key.slice(prefix.length),
+          flashSalePrice,
+        }));
+    },
+
+    async listProductsByIds(productIds: string[]) {
+      const idSet = new Set(productIds);
+      return [...fake.products.entries()]
+        .filter(([, product]) => idSet.has(product.id))
+        .map(([sku, product]) => ({
+          id: product.id,
+          sku,
+          name: product.name,
+          originalPrice: product.originalPrice,
+        }));
+    },
+
+    async listInventoriesByProductIds(productIds: string[]) {
+      const idSet = new Set(productIds);
+      return [...fake.inventories.entries()]
+        .filter(([productId]) => idSet.has(productId))
+        .map(([productId, initialQuantity]) => ({ productId, initialQuantity }));
+    },
+  };
+
+  fake.ops = { audit: fake.audit, seed: fake.seed, catalog: fake.catalog };
   return fake;
+}
+
+/** Test fixture helper: adds a second product to a sale's catalog beyond the
+ *  single boot-seeded one, via the same real seed ops the production seeder
+ *  uses (upsertProduct -> upsertSaleProduct -> upsertInventory), so catalog
+ *  join tests can exercise a multi-product sale without hand-rolling map
+ *  entries that could drift from the real upsert semantics. */
+export async function addCatalogProduct(
+  mongo: FakeMongo,
+  saleId: string,
+  product: {
+    sku: string;
+    name: string;
+    initialQuantity: number;
+    originalPrice?: number;
+    flashSalePrice?: number;
+  },
+): Promise<string> {
+  const productId = await mongo.seed.upsertProduct(product.sku, product.name, product.originalPrice ?? 0);
+  await mongo.seed.upsertSaleProduct(saleId, productId, product.flashSalePrice ?? 0);
+  await mongo.seed.upsertInventory(productId, product.initialQuantity);
+  return productId;
+}
+
+/** Story 4.2 test seam: Redis keys/channel are namespaced by the resolved
+ *  sale's Mongo ObjectId string, but that id is only known once the REAL
+ *  bootstrap() seeder runs. Endpoint tests that need to pre-seed a fake
+ *  Redis with a scoped `stock:{saleId}:remaining` key (simulating a warm
+ *  boot) must know the id BEFORE calling bootstrap(). Since upsertSale is
+ *  idempotent by slug ($set semantics — see fake.seed.upsertSale above),
+ *  reserving the id here and letting the real seeder's later upsertSale call
+ *  land on the same doc is safe and keeps the fake and the production seeder
+ *  in lockstep. */
+export async function reserveSaleId(mongo: FakeMongo, slug: string): Promise<string> {
+  return mongo.seed.upsertSale(slug, {
+    name: "",
+    startTime: new Date(0),
+    endTime: new Date(0),
+    stockQuantity: 0,
+  });
 }

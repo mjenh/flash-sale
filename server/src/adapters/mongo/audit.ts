@@ -5,6 +5,12 @@
 // The one-query-per-op mongoose calls live behind AuditModelOps;
 // createOrderRecorder holds the ordering + duplicate-key semantics and is
 // fully unit-tested with fake ops.
+//
+// Story 4.4: recordOrder(saleId, email) takes saleId per call (from
+// req.sale._id via the order service's SaleContext) rather than a
+// bootstrap-frozen SaleRefs.saleId — createOrderRecorder now only closes
+// over productId, since v1.1 still ships exactly one product per sale
+// (Story 4.3) and there is no per-request product resolution yet.
 import { Order, OrderLine, User } from "./models.ts";
 import type { OrderAuditPort } from "../../services/order.ts";
 
@@ -12,6 +18,8 @@ import type { OrderAuditPort } from "../../services/order.ts";
 export interface SaleRefs {
   saleId: string;
   productId: string;
+  /** The active flash-sale price at boot — snapshotted into every order line. */
+  flashSalePrice: number;
 }
 
 /** Narrow model surface — one mongoose query per op. */
@@ -55,15 +63,16 @@ function isDuplicateKey(err: unknown): boolean {
 }
 
 export function createOrderRecorder(
-  refs: SaleRefs,
+  productId: string,
+  flashSalePrice: number,
   ops: AuditModelOps = mongoAuditModelOps,
 ): OrderAuditPort {
   return {
-    async recordOrder(email: string): Promise<void> {
+    async recordOrder(saleId: string, email: string): Promise<void> {
       const userId = await ops.upsertUser(email);
       let orderId: string;
       try {
-        orderId = await ops.insertConfirmedOrder({ saleId: refs.saleId, email, userId });
+        orderId = await ops.insertConfirmedOrder({ saleId, email, userId });
       } catch (err) {
         if (isDuplicateKey(err)) {
           // Defense-in-depth index doing its job: this order is already
@@ -73,11 +82,13 @@ export function createOrderRecorder(
         }
         throw err;
       }
+      // Snapshot the flash-sale price at the moment of acceptance — the
+      // server-sourced price, never a value from the client request.
       await ops.insertOrderLine({
         orderId,
-        productId: refs.productId,
+        productId,
         quantity: 1,
-        unitPrice: 0,
+        unitPrice: flashSalePrice,
       });
     },
   };

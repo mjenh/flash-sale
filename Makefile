@@ -1,6 +1,16 @@
-.PHONY: install dev up-stores test typecheck build deploy up down restart logs ps stress clean
+.PHONY: install dev up-stores test typecheck build deploy up down restart logs worker-logs ps stress clean
 
 COMPOSE := docker compose
+
+# When WORKER_COLOCATED=true the api process runs the worker internally, so the
+# "worker" Compose profile must NOT be activated (that would double-consume the
+# stream). In all other cases activate the profile so the standalone worker
+# container starts alongside the api.
+ifeq ($(WORKER_COLOCATED),true)
+WORKER_PROFILE :=
+else
+WORKER_PROFILE := --profile worker
+endif
 
 ## ---- Local dev ----
 
@@ -23,26 +33,30 @@ typecheck: ## tsc --noEmit in server and client
 
 ## ---- Docker stack ----
 
-build: ## build the api image
-	$(COMPOSE) build
+build: ## build all images (api + worker); always includes worker profile so the image is current
+	$(COMPOSE) --profile worker build
 
-deploy: build ## build and start the full stack
-	$(COMPOSE) up -d
-	@echo "app + api: http://localhost:3000"
+deploy: build ## build and start the full stack (separate worker unless WORKER_COLOCATED=true)
+	$(COMPOSE) $(WORKER_PROFILE) up -d
+	@echo "  app (nginx): http://localhost:80"
+	@echo "  api (direct): http://localhost:3000"
 
-up: ## start the stack (no rebuild)
-	$(COMPOSE) up -d
+up: ## start the stack without rebuilding
+	$(COMPOSE) $(WORKER_PROFILE) up -d
 
 down: ## stop the stack
-	$(COMPOSE) down
+	$(COMPOSE) $(WORKER_PROFILE) down
 
 restart: down deploy
 
-logs:
-	$(COMPOSE) logs -f
+logs: ## tail logs for all running services
+	$(COMPOSE) $(WORKER_PROFILE) logs -f
+
+worker-logs: ## tail worker logs only
+	$(COMPOSE) logs -f worker
 
 ps:
-	$(COMPOSE) ps
+	$(COMPOSE) $(WORKER_PROFILE) ps
 
 ## ---- Validation ----
 
@@ -50,4 +64,4 @@ stress: ## 5000-vs-100 fairness proof: stop api -> reset -> start api -> k6 -> v
 	npm run stress
 
 clean: ## stop stack and remove volumes + images
-	$(COMPOSE) down -v --rmi local
+	$(COMPOSE) --profile worker down -v --rmi local

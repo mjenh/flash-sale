@@ -1,26 +1,36 @@
-// The reset contract (ARCHITECTURE-SPINE "Reset contract"), made mechanical.
+// Mechanical implementation of the reset contract.
 //
 // Runs ONLY while the API is stopped: while the API serves, the Lua script
-// is the sole writer of `stock:remaining` and `orders:users`, and a concurrent
-// SET here could hand a buyer a 201 against stock that no longer exists.
-// The guard below treats ANY answer from the API — including a 503 — as
-// "still serving", and also treats a probe that TIMES OUT (a wedged-but-alive
-// API) as still serving. Only a genuine connection refusal (ECONNREFUSED) is
-// the green light.
+// is the sole writer of `stock:{saleId}:remaining` and `orders:{saleId}:users`,
+// and a concurrent SET here could hand a buyer a 201 against stock that no
+// longer exists. The guard below treats ANY answer from the API — including
+// a 503 — as "still serving", and also treats a probe that TIMES OUT (a
+// wedged-but-alive API) as still serving. Only a genuine connection refusal
+// (ECONNREFUSED) is the green light.
 //
 // Wipes, in crash-safe order (the sentinel is written LAST):
-//   DEL orders:users, deleteMany({}) on orders, orderlines, users,
-//   then SET stock:remaining = STOCK_QUANTITY.
-// stock:remaining IS the warm/cold sentinel (server/src/adapters/redis/
-// reconcile.ts writes DEL → SADD → SET) — writing it last means a crash
-// mid-reset leaves no sentinel beside a stale orders:users set, so the API's
-// boot rebuild re-runs the cold path.
+//   DEL orders:{saleId}:users, deleteMany({}) on orders, orderlines, users,
+//   then SET stock:{saleId}:remaining = STOCK_QUANTITY.
+// stock:{saleId}:remaining IS the warm/cold sentinel (server/src/adapters/
+// redis/reconcile.ts writes DEL → SADD → SET) — writing it last means a
+// crash mid-reset leaves no sentinel beside a stale orders:{saleId}:users
+// set, so the API's boot rebuild re-runs the cold path.
 // Never touches the seed collections (products, sales, saleproducts,
 // inventories) — the API re-upserts them at boot, and deleting `sales` would
-// mint a fresh saleId and silently orphan the verifier's join.
+// mint a fresh saleId and silently orphan the verifier's join. The `sales`
+// collection IS read (never written) below, to resolve {saleId} for the
+// namespaced keys — the sale document itself survives every reset.
+//
+// Story 4.6: keys are namespaced by saleId (v1.0's flat `stock:remaining` /
+// `orders:users` are no longer referenced anywhere in this harness). The
+// harness is an independent observer of the deployed stack (see config.ts's
+// file header) and deliberately does not import the server workspace's
+// key-naming helpers — stockKeyFor/ordersKeyFor below are this workspace's
+// own copies of the same naming convention (server/src/adapters/redis/
+// stock.ts, orders.ts).
 import { createClient } from "redis";
 import mongoose from "mongoose";
-import { loadStressConfig, type StressConfig } from "./config.ts";
+import { loadStressConfig, SALE_SLUG, type StressConfig } from "./config.ts";
 
 export class ApiStillServingError extends Error {
   override name = "ApiStillServingError";
@@ -32,8 +42,16 @@ export class ApiStillServingError extends Error {
 /** The wiped collections, in order. Seed collections are absent by design. */
 export const WIPED_COLLECTIONS = ["orders", "orderlines", "users"] as const;
 
-export const STOCK_KEY = "stock:remaining";
-export const ORDERS_KEY = "orders:users";
+/** v1.1 namespaced key names (Story 4.6) — the harness's own copy of the
+ *  same naming convention server/src/adapters/redis/stock.ts's stockKeyFor
+ *  and orders.ts's ordersKeyFor use. */
+export function stockKeyFor(saleId: string): string {
+  return `stock:${saleId}:remaining`;
+}
+
+export function ordersKeyFor(saleId: string): string {
+  return `orders:${saleId}:users`;
+}
 
 /** Narrow port surface — every dependency is a one-line async op, so the
  *  sequence (and its guard) is unit-testable without Redis, Mongo or Docker. */
@@ -51,25 +69,32 @@ export interface ResetPorts {
 export interface ResetResult {
   stockQuantity: number;
   cleared: readonly string[];
+  /** The resolved active sale's Mongo ObjectId string — the {saleId} the
+   *  namespaced keys above were built from. */
+  saleId: string;
 }
 
 /** The protocol step. Guard first, then wipe — in this order, always. */
-export async function resetAll(ports: ResetPorts, stockQuantity: number): Promise<ResetResult> {
+export async function resetAll(
+  ports: ResetPorts,
+  stockQuantity: number,
+  saleId: string,
+): Promise<ResetResult> {
   const serving = await ports.probeApi();
   if (serving !== null) {
     throw new ApiStillServingError(serving);
   }
 
-  // Wipe FIRST, write the sentinel LAST. stock:remaining is the
+  // Wipe FIRST, write the sentinel LAST. stock:{saleId}:remaining is the
   // warm/cold sentinel — a crash between the wipe and this final SET must never
-  // leave a present sentinel beside a stale orders:users set.
+  // leave a present sentinel beside a stale orders:{saleId}:users set.
   await ports.deleteOrderUsers();
   for (const name of WIPED_COLLECTIONS) {
     await ports.deleteCollection(name);
   }
   await ports.setStock(stockQuantity);
 
-  return { stockQuantity, cleared: [ORDERS_KEY, ...WIPED_COLLECTIONS] };
+  return { stockQuantity, cleared: [ordersKeyFor(saleId), ...WIPED_COLLECTIONS], saleId };
 }
 
 /** A Node fetch() connection refusal surfaces as a TypeError whose `cause`
@@ -91,7 +116,8 @@ export async function probeApiUrl(apiUrl: string, timeoutMs = 2000): Promise<str
     return `HTTP ${res.status} from ${apiUrl}/api/sale/status`;
   } catch (err) {
     if (isConnectionRefused(err)) {
-      return null; // genuinely refused — nothing is listening. Safe to reset.
+      // Genuine ECONNREFUSED — nothing is listening on that address. Safe to proceed.
+      return null;
     }
     // Timeout / abort / DNS / anything else: the API may still be alive but
     // slow. NOT safe to reset — treat it as still serving.
@@ -111,20 +137,32 @@ export async function runReset(config: StressConfig = loadStressConfig()): Promi
     if (db === undefined) {
       throw new Error("Mongo connection has no database handle");
     }
+    // Resolve {saleId} from the seeded (never deleted) sale document, so the
+    // reset targets the correct namespaced keys — the API re-upserts this
+    // document at boot, so its _id is stable across resets.
+    const sale = await db.collection("sales").findOne({ slug: SALE_SLUG });
+    if (sale === null) {
+      throw new Error(
+        `no sale document with slug "${SALE_SLUG}" — the API never booted against ${config.mongodbUri}; reset needs the seeded sale to resolve {saleId}`,
+      );
+    }
+    const saleId = String(sale._id);
+
     return await resetAll(
       {
         probeApi: () => probeApiUrl(config.apiUrl),
         setStock: async (value) => {
-          await redis.set(STOCK_KEY, String(value));
+          await redis.set(stockKeyFor(saleId), String(value));
         },
         deleteOrderUsers: async () => {
-          await redis.del(ORDERS_KEY);
+          await redis.del(ordersKeyFor(saleId));
         },
         deleteCollection: async (name) => {
           await db.collection(name).deleteMany({});
         },
       },
       config.stockQuantity,
+      saleId,
     );
   } finally {
     await redis.close();
@@ -137,7 +175,7 @@ if (process.argv[1] !== undefined && import.meta.url === `file://${process.argv[
   try {
     const result = await runReset();
     console.log(
-      `reset: ${STOCK_KEY} = ${result.stockQuantity}; cleared ${result.cleared.join(", ")}`,
+      `reset: ${stockKeyFor(result.saleId)} = ${result.stockQuantity}; cleared ${result.cleared.join(", ")}`,
     );
   } catch (err) {
     console.error(`reset FAILED: ${err instanceof Error ? err.message : String(err)}`);

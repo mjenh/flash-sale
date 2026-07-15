@@ -21,7 +21,7 @@ export function formatDateLine(startIso: string): string {
 }
 
 export interface MastheadProps {
-  /** ISO 8601 UTC instant from `/api/sale/status`. Absent until the first response. */
+  /** ISO 8601 UTC instant from `/api/sales/:slug/status`. Absent until the first response. */
   startTime?: string;
 }
 

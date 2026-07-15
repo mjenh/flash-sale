@@ -2,17 +2,28 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeEventSource, installFakeEventSource } from "../test/fake-event-source.ts";
 import { POLL_MS, WATCHDOG_SILENCE_MS, useSaleStatus } from "./useSaleStatus.ts";
+import { START_ISO, END_ISO } from "../test/time-fixtures.ts";
+
+const SLUG = "flash-sale";
 
 const BODY = {
   success: true as const,
   status: "active" as const,
   stock: 37,
-  startTime: "2026-07-10T04:00:00.000Z",
-  endTime: "2026-07-10T05:00:00.000Z",
+  startTime: START_ISO,
+  endTime: END_ISO,
 };
 
 function okOnce(body: unknown) {
   return Promise.resolve({ ok: true, status: 200, json: async () => body } as Response);
+}
+
+function notFoundOnce() {
+  return Promise.resolve({
+    ok: false,
+    status: 404,
+    json: async () => ({ success: false, error: "Sale not found." }),
+  } as Response);
 }
 
 function boom() {
@@ -35,7 +46,7 @@ afterEach(() => {
 
 describe("useSaleStatus", () => {
   it("paints from the stream's named `status` frame and reports the channel live", async () => {
-    const { result } = renderHook(() => useSaleStatus());
+    const { result } = renderHook(() => useSaleStatus(SLUG));
     expect(result.current.channel).toBe("connecting");
 
     await act(async () => {
@@ -45,14 +56,24 @@ describe("useSaleStatus", () => {
 
     expect(result.current.channel).toBe("live");
     expect(result.current.body).toEqual(BODY);
-    expect(FakeEventSource.current.url).toBe("/api/sale/events");
+    expect(FakeEventSource.current.url).toBe(`/api/sales/${SLUG}/events`);
+  });
+
+  it("reads status from the slug-scoped URL (AC2)", async () => {
+    renderHook(() => useSaleStatus(SLUG));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchSpy.mock.calls.some((c) => c[0] === `/api/sales/${SLUG}/status`)).toBe(true);
   });
 
   it("makes the open stream the SOLE WRITER — a poll that resolves while live is discarded", async () => {
     // The poll would say 99; the stream said 37. The stream wins.
     fetchSpy.mockImplementation(() => okOnce({ ...BODY, stock: 99 }));
 
-    const { result } = renderHook(() => useSaleStatus());
+    const { result } = renderHook(() => useSaleStatus(SLUG));
 
     await act(async () => {
       FakeEventSource.current.open();
@@ -69,7 +90,7 @@ describe("useSaleStatus", () => {
   });
 
   it("ignores a malformed frame rather than paint it", async () => {
-    const { result } = renderHook(() => useSaleStatus());
+    const { result } = renderHook(() => useSaleStatus(SLUG));
 
     await act(async () => {
       FakeEventSource.current.open();
@@ -83,7 +104,7 @@ describe("useSaleStatus", () => {
 
   it("degrades to polling when the stream dies, and re-creates the stream each cycle", async () => {
     vi.useFakeTimers();
-    const { result } = renderHook(() => useSaleStatus());
+    const { result } = renderHook(() => useSaleStatus(SLUG));
 
     await act(async () => {
       FakeEventSource.current.fail();
@@ -104,7 +125,7 @@ describe("useSaleStatus", () => {
 
   it("goes offline when both channels are down, keeping the last known body rather than erasing it", async () => {
     vi.useFakeTimers();
-    const { result } = renderHook(() => useSaleStatus());
+    const { result } = renderHook(() => useSaleStatus(SLUG));
 
     await act(async () => {
       FakeEventSource.current.open();
@@ -127,7 +148,7 @@ describe("useSaleStatus", () => {
     vi.useFakeTimers();
     fetchSpy.mockImplementation(boom);
 
-    const { result } = renderHook(() => useSaleStatus());
+    const { result } = renderHook(() => useSaleStatus(SLUG));
     await act(async () => {
       FakeEventSource.current.fail();
       await vi.advanceTimersByTimeAsync(0);
@@ -139,7 +160,7 @@ describe("useSaleStatus", () => {
 
   it("re-syncs exactly once on stream recovery and stops polling", async () => {
     vi.useFakeTimers();
-    const { result } = renderHook(() => useSaleStatus());
+    const { result } = renderHook(() => useSaleStatus(SLUG));
 
     await act(async () => {
       FakeEventSource.current.fail();
@@ -171,7 +192,7 @@ describe("useSaleStatus", () => {
 
   it("tears down cleanly: the stream closes and the poll timer stops", async () => {
     vi.useFakeTimers();
-    const { unmount } = renderHook(() => useSaleStatus());
+    const { unmount } = renderHook(() => useSaleStatus(SLUG));
 
     await act(async () => {
       FakeEventSource.current.fail();
@@ -195,7 +216,7 @@ describe("useSaleStatus", () => {
     // A re-sync GET and the SSE frame are independent Redis reads with no
     // ordering guarantee; a stale GET must never overwrite a newer frame,
     // rewinding the number or resurrecting `active` over `sold_out`.
-    const { result } = renderHook(() => useSaleStatus());
+    const { result } = renderHook(() => useSaleStatus(SLUG));
 
     await act(async () => {
       FakeEventSource.current.open();
@@ -216,7 +237,7 @@ describe("useSaleStatus", () => {
 
   it("refetch() DOES carry a fresh body while the stream is down", async () => {
     vi.useFakeTimers();
-    const { result } = renderHook(() => useSaleStatus());
+    const { result } = renderHook(() => useSaleStatus(SLUG));
 
     await act(async () => {
       FakeEventSource.current.fail(); // fatal — stream down, now degraded
@@ -236,7 +257,7 @@ describe("useSaleStatus", () => {
 
   it("keeps a quiet-but-live stream LIVE when heartbeats arrive (watchdog)", async () => {
     vi.useFakeTimers();
-    const { result } = renderHook(() => useSaleStatus());
+    const { result } = renderHook(() => useSaleStatus(SLUG));
 
     await act(async () => {
       FakeEventSource.current.open();
@@ -258,7 +279,7 @@ describe("useSaleStatus", () => {
 
   it("demotes a truly silent live stream once the watchdog window elapses", async () => {
     vi.useFakeTimers();
-    const { result } = renderHook(() => useSaleStatus());
+    const { result } = renderHook(() => useSaleStatus(SLUG));
 
     await act(async () => {
       FakeEventSource.current.open();
@@ -276,7 +297,7 @@ describe("useSaleStatus", () => {
 
   it("a recoverable mid-stream drop (error while CONNECTING) is left for the browser to retry", async () => {
     vi.useFakeTimers();
-    const { result } = renderHook(() => useSaleStatus());
+    const { result } = renderHook(() => useSaleStatus(SLUG));
 
     await act(async () => {
       FakeEventSource.current.open();
@@ -301,5 +322,73 @@ describe("useSaleStatus", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(result.current.channel).toBe("live");
+  });
+
+  describe("notFound (AC3) — a slug that names no sale", () => {
+    it("is set on a cold-load 404 and never becomes true otherwise", async () => {
+      fetchSpy.mockImplementation(notFoundOnce);
+      vi.useFakeTimers();
+
+      const { result } = renderHook(() => useSaleStatus(SLUG));
+      await act(async () => {
+        FakeEventSource.current.fail();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(result.current.notFound).toBe(true);
+    });
+
+    it("is terminal — stops polling for good, no matter how much time passes", async () => {
+      fetchSpy.mockImplementation(notFoundOnce);
+      vi.useFakeTimers();
+
+      const { result } = renderHook(() => useSaleStatus(SLUG));
+      await act(async () => {
+        FakeEventSource.current.fail();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current.notFound).toBe(true);
+
+      const callsAtNotFound = fetchSpy.mock.calls.length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(POLL_MS * 5);
+      });
+
+      expect(fetchSpy.mock.calls.length).toBe(callsAtNotFound);
+    });
+
+    it("closes the stream and never reconnects once notFound is set", async () => {
+      fetchSpy.mockImplementation(notFoundOnce);
+      vi.useFakeTimers();
+
+      renderHook(() => useSaleStatus(SLUG));
+      await act(async () => {
+        FakeEventSource.current.fail();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(FakeEventSource.current.closed).toBe(true);
+      const streamsAtNotFound = FakeEventSource.instances.length;
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(POLL_MS * 5);
+      });
+
+      expect(FakeEventSource.instances.length).toBe(streamsAtNotFound);
+    });
+
+    it("leaves a genuinely unreachable sale (non-404 failure) as offline, not notFound", async () => {
+      fetchSpy.mockImplementation(boom);
+      vi.useFakeTimers();
+
+      const { result } = renderHook(() => useSaleStatus(SLUG));
+      await act(async () => {
+        FakeEventSource.current.fail();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(result.current.channel).toBe("offline");
+      expect(result.current.notFound).toBe(false);
+    });
   });
 });

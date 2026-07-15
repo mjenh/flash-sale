@@ -1,9 +1,27 @@
 // Boot: bootstrap() -> listen. Fail fast with a non-zero exit on bad config
 // or unreachable stores, strictly before listen().
+//
+// WORKER_COLOCATED=true (env flag): starts the write-behind worker in this
+// same process. Convenient for single-container deployments; set to false (or
+// omit) to run the worker as a separate process (src/worker/index.ts).
 import { bootstrap } from "./bootstrap.ts";
+import { createOrderWorker } from "./worker/order-worker.ts";
+import { mongoBulkAudit } from "./adapters/mongo/bulk-audit.ts";
 
 bootstrap()
-  .then(({ app, config, logger, teardown }) => {
+  .then(({ app, config, logger, redis, teardown }) => {
+    // Co-located worker (optional). The worker is pure async — it never blocks
+    // the HTTP event loop. Use WORKER_COLOCATED=true for simple single-process
+    // deployments; leave it unset to run the worker as a separate container.
+    const colocated = process.env["WORKER_COLOCATED"] === "true";
+    const worker = colocated
+      ? createOrderWorker({ redis, bulkAudit: mongoBulkAudit, logger })
+      : null;
+    if (worker !== null) {
+      worker.start();
+      logger.info("write-behind worker started (co-located)");
+    }
+
     const server = app.listen(config.port, () => {
       logger.info(
         {
@@ -26,7 +44,10 @@ bootstrap()
       shuttingDown = true;
       logger.info({ signal }, "shutting down; draining connections then tearing down");
       server.close();
-      teardown()
+      // If co-located, finish the current batch before the main teardown runs.
+      const workerStop = worker !== null ? worker.stop() : Promise.resolve();
+      workerStop
+        .then(() => teardown())
         .then(() => {
           process.exit(0);
         })

@@ -1,12 +1,19 @@
-// Redis adapter for the `stock:remaining` key — reads for the sale-status
-// service. Writes happen only via the Lua script (serving), the boot rebuild
-// in reconcile.ts (pre-listen()), or the offline reset script.
+// Redis adapter for the `stock:{saleId}:remaining` key — reads for the
+// sale-status service. Writes happen only via the Lua script (serving), the
+// boot rebuild in reconcile.ts (pre-listen()), or the offline reset script.
 //
 // Fail closed: every command is bounded by redisCommandTimeoutMs; a timeout
 // or any command rejection surfaces as RedisUnavailableError, which the
 // central error middleware maps to 503.
+//
+// Story 4.2: keys are namespaced by saleId (the resolved Sale's Mongo
+// ObjectId string) so multiple sale records can coexist without collision.
+// The v1.0 flat `stock:remaining` key is no longer written or read by the
+// live request path — Story 4.6 owns migrating any surviving flat-key data.
 
-const STOCK_KEY = "stock:remaining";
+export function stockKeyFor(saleId: string): string {
+  return `stock:${saleId}:remaining`;
+}
 
 /** Typed fail-closed signal. `expose` (http-errors convention) tells the
  *  central middleware to keep this 5xx message instead of collapsing it. */
@@ -30,9 +37,10 @@ export interface StockStoreOptions {
 }
 
 export interface StockStore {
-  /** Current remaining stock. Throws RedisUnavailableError when Redis is
-   *  unreachable, a command times out, or the key is missing (fail closed). */
-  getRemaining(): Promise<number>;
+  /** Current remaining stock for the given sale. Throws RedisUnavailableError
+   *  when Redis is unreachable, a command times out, or the key is missing
+   *  (fail closed). */
+  getRemaining(saleId: string): Promise<number>;
 }
 
 /** Bound a command by the per-command timeout, wrapping timeout and any
@@ -60,12 +68,13 @@ export function createStockStore(
   { commandTimeoutMs }: StockStoreOptions,
 ): StockStore {
   return {
-    async getRemaining(): Promise<number> {
-      const raw = await bounded(client.get(STOCK_KEY), commandTimeoutMs);
+    async getRemaining(saleId: string): Promise<number> {
+      const key = stockKeyFor(saleId);
+      const raw = await bounded(client.get(key), commandTimeoutMs);
       if (raw === null) {
         // Key lost mid-run: never fabricate a number — 0 would lie "sold_out".
         // Fail closed; the next boot's cold rebuild restores truth.
-        throw new RedisUnavailableError(new Error(`${STOCK_KEY} key is missing`));
+        throw new RedisUnavailableError(new Error(`${key} key is missing`));
       }
       // Strict integer only. `Number.parseInt("12x", 10)` returns 12 — trailing
       // garbage slips a plain parseInt + isFinite guard and fabricates a count.
@@ -73,11 +82,11 @@ export function createStockStore(
       if (!/^-?\d+$/.test(raw.trim())) {
         // A non-integer value would read as NaN or a truncated number ->
         // fabricated truth. Fail closed instead — mirrors the order-store guard.
-        throw new RedisUnavailableError(new Error(`${STOCK_KEY} is not an integer: "${raw}"`));
+        throw new RedisUnavailableError(new Error(`${key} is not an integer: "${raw}"`));
       }
       const remaining = Number.parseInt(raw, 10);
       if (!Number.isFinite(remaining)) {
-        throw new RedisUnavailableError(new Error(`${STOCK_KEY} is not an integer: "${raw}"`));
+        throw new RedisUnavailableError(new Error(`${key} is not an integer: "${raw}"`));
       }
       return remaining;
     },

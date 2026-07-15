@@ -1,12 +1,22 @@
+// Story 5.1: renamed/relocated from App.test.tsx. Every existing behavioral
+// assertion is preserved verbatim — only the import, the render call (now
+// `<SalePage slug={SLUG} />` instead of `<App />`), and the fetch router's
+// URL matching (now slug-scoped `/api/sales/${SLUG}/...`) changed. A new
+// "Sale not found" describe block at the bottom covers AC3.
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { App, PROCESSING_LINE, UPCOMING_BUTTON_REASON } from "./App.tsx";
-import { HOUSE_RULES } from "./components/MarqueeBand.tsx";
-import { ENDED_FRAME, SOLD_OUT_FRAME } from "./components/SaleStatusZone.tsx";
-import { SUCCESS_FRAME } from "./components/VerdictPanel.tsx";
-import type { SaleState } from "./api/sale.ts";
-import { FakeEventSource, installFakeEventSource } from "./test/fake-event-source.ts";
+import { PROCESSING_LINE, SalePage, upcomingButtonReason } from "./SalePage.tsx";
+import { HOUSE_RULES } from "../components/MarqueeBand.tsx";
+import { ENDED_FRAME, SOLD_OUT_FRAME } from "../components/SaleStatusZone.tsx";
+import { SUCCESS_FRAME } from "../components/VerdictPanel.tsx";
+import type { SaleState } from "../api/sale.ts";
+import { FakeEventSource, installFakeEventSource } from "../test/fake-event-source.ts";
+
+const SLUG = "flash-sale";
+const STATUS_URL = `/api/sales/${SLUG}/status`;
+const EVENTS_URL = `/api/sales/${SLUG}/events`;
+const ORDER_URL = `/api/sales/${SLUG}/order`;
 
 const START = "2026-07-10T04:00:00.000Z";
 const END = "2026-07-10T05:00:00.000Z";
@@ -23,14 +33,15 @@ function json(status: number, body: unknown) {
   } as Response);
 }
 
-/** Routes by URL so a test can assert what the page asked for, and in what order. */
+/** Routes by URL so a test can assert what the page asked for, and in what
+ *  order. Slug-scoped: every URL is `/api/sales/${SLUG}/...`, per AC2. */
 function router(handlers: {
   order?: () => Promise<Response>;
   check?: () => Promise<Response>;
   status?: () => Promise<Response>;
 }) {
   return vi.fn((url: string, init?: RequestInit) => {
-    if (typeof url === "string" && url.startsWith("/api/order")) {
+    if (typeof url === "string" && url.startsWith(ORDER_URL)) {
       if (init?.method === "POST") {
         return handlers.order?.() ?? new Promise<Response>(() => {});
       }
@@ -58,7 +69,7 @@ afterEach(() => {
 
 /** Paint the page from the stream, exactly as production does. */
 async function paint(status: SaleState, stock = 37) {
-  const view = render(<App />);
+  const view = render(<SalePage slug={SLUG} />);
   await act(async () => {
     FakeEventSource.current.open();
     FakeEventSource.current.emit(saleBody(status, stock));
@@ -98,9 +109,9 @@ describe("the poster shell", () => {
 
 describe("the living status zone, in the page", () => {
   it("paints on the first response — no skeleton in between", async () => {
-    render(<App />);
+    render(<SalePage slug={SLUG} />);
     expect(screen.queryByTestId("status-chip")).toBeNull();
-    expect(screen.getByText("Doors at noon.")).toBeInTheDocument();
+    expect(screen.getByText("Doors open soon.")).toBeInTheDocument();
 
     await act(async () => {
       FakeEventSource.current.open();
@@ -114,7 +125,7 @@ describe("the living status zone, in the page", () => {
     const seen = new Set<string>();
 
     for (const [status, stock, reason] of [
-      ["upcoming", 100, UPCOMING_BUTTON_REASON],
+      ["upcoming", 100, upcomingButtonReason(START)],
       ["active", 37, null],
       ["sold_out", 0, SOLD_OUT_FRAME],
       ["ended", 0, ENDED_FRAME],
@@ -148,7 +159,7 @@ describe("the living status zone, in the page", () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("down"))));
     vi.useFakeTimers();
 
-    render(<App />);
+    render(<SalePage slug={SLUG} />);
     await act(async () => {
       FakeEventSource.current.fail();
       await vi.advanceTimersByTimeAsync(0);
@@ -210,7 +221,7 @@ describe("the winner", () => {
     vi.stubGlobal("fetch", fetchSpy);
 
     await paint("active", 37);
-    const before = fetchSpy.mock.calls.filter((c) => c[0] === "/api/sale/status").length;
+    const before = fetchSpy.mock.calls.filter((c) => c[0] === STATUS_URL).length;
 
     fireEvent.change(emailField(), { target: { value: "priya@example.com" } });
     fireEvent.click(buyNow());
@@ -219,7 +230,7 @@ describe("the winner", () => {
       expect(screen.getByTestId("verdict-string")).toBeInTheDocument();
     });
     await waitFor(() => {
-      const after = fetchSpy.mock.calls.filter((c) => c[0] === "/api/sale/status").length;
+      const after = fetchSpy.mock.calls.filter((c) => c[0] === STATUS_URL).length;
       expect(after).toBeGreaterThan(before);
     });
   });
@@ -281,7 +292,7 @@ describe("the email field is transient — never remembered", () => {
     });
 
     const checkedOnLoad = fetchSpy.mock.calls.some(
-      (c) => typeof c[0] === "string" && c[0].startsWith("/api/order/"),
+      (c) => typeof c[0] === "string" && c[0].startsWith(`${ORDER_URL}/`),
     );
     expect(checkedOnLoad).toBe(false);
     expect(screen.queryByTestId("verdict-panel")).toBeNull();
@@ -409,5 +420,73 @@ describe("the honest edges", () => {
     });
     expect(screen.queryByTestId("verdict-frame")).toBeNull(); // no blame, no dressing up
     expect(buyNow()).toBeEnabled();
+  });
+});
+
+describe("AC2 — every API call is slug-scoped", () => {
+  it("reads status from /api/sales/:slug/status and connects events to /api/sales/:slug/events", async () => {
+    await paint("active", 37);
+
+    expect(FakeEventSource.current.url).toBe(EVENTS_URL);
+    expect(fetchSpy.mock.calls.some((c) => c[0] === STATUS_URL)).toBe(true);
+  });
+
+  it("posts the order to /api/sales/:slug/order", async () => {
+    fetchSpy = router({ order: () => json(201, { message: "Order successful." }) });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await paint("active", 37);
+    fireEvent.change(emailField(), { target: { value: "priya@example.com" } });
+    fireEvent.click(buyNow());
+
+    await waitFor(() => {
+      expect(screen.getByTestId("verdict-string")).toBeInTheDocument();
+    });
+    const post = fetchSpy.mock.calls.find((c) => (c[1] as RequestInit | undefined)?.method === "POST");
+    expect(post?.[0]).toBe(ORDER_URL);
+  });
+
+  it("a different slug hits a different URL entirely", async () => {
+    const otherFetch = vi.fn((url: string) => {
+      if (typeof url === "string" && url.startsWith("/api/sales/other-sale/")) {
+        return json(200, saleBody("active"));
+      }
+      return json(404, { success: false, error: "Sale not found." });
+    });
+    vi.stubGlobal("fetch", otherFetch);
+
+    render(<SalePage slug="other-sale" />);
+    await act(async () => {
+      FakeEventSource.current.open();
+      FakeEventSource.current.emit(saleBody("active", 5));
+    });
+
+    expect(FakeEventSource.current.url).toBe("/api/sales/other-sale/events");
+    expect(otherFetch.mock.calls.some((c) => c[0] === "/api/sales/other-sale/status")).toBe(true);
+  });
+});
+
+describe("AC3 — a slug that names no sale", () => {
+  it("renders a friendly Sale not found state instead of the poster shell", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        json(404, { success: false, error: "Sale not found." }),
+      ),
+    );
+
+    render(<SalePage slug="does-not-exist" />);
+    await act(async () => {
+      FakeEventSource.current.fail();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("sale-not-found").textContent).toContain("does-not-exist");
+    // The broken/empty poster shell never renders — no status chip, no form,
+    // no Buy Now button.
+    expect(screen.queryByRole("button", { name: /Buy Now/ })).toBeNull();
+    expect(screen.queryByTestId("status-chip")).toBeNull();
+    expect(screen.queryByLabelText("Who's buying?")).toBeNull();
   });
 });

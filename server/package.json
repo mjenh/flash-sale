@@ -8,7 +8,9 @@
   },
   "scripts": {
     "dev": "node --env-file-if-exists=../.env --watch src/index.ts",
+    "dev:worker": "node --env-file-if-exists=../.env --watch src/worker/index.ts",
     "start": "node src/index.ts",
+    "start:worker": "node src/worker/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"

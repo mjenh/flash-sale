@@ -10,11 +10,23 @@
 //   degraded   — stream down, polling succeeding ("Live-ish")
 //   offline    — stream down AND the last poll failed; the page stops
 //                claiming liveness (the number may be stale)
+//
+// Story 5.1: the hook now takes a `slug` and threads it into every URL
+// (`/api/sales/${slug}/status`, `/api/sales/${slug}/events`) instead of the
+// v1.0 implicit-sale paths. It also grows a `notFound` flag, orthogonal to
+// `channel`: a 404 for the given slug is a TERMINAL outcome (this slug names
+// no sale, so retrying is pointless) rather than a transient "unreachable"
+// one — once set, every timer is torn down and the stream stays closed. The
+// caller (SalePage) renders a friendly "Sale not found" page instead of the
+// Noon Poster shell when `notFound` is true. `channel`'s own four states are
+// left untouched so every existing consumer (SaleStatusZone, StatusChip,
+// etc.) keeps its current meaning.
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  SALE_EVENTS_URL,
+  SaleNotFoundError,
   fetchSaleStatus,
   parseSaleStatus,
+  saleEventsUrl,
   type SaleStatusBody,
 } from "../api/sale.ts";
 
@@ -42,16 +54,21 @@ const RECONNECT_MAX_MS = 30_000;
 export interface SaleStatusHandle {
   body: SaleStatusBody | null;
   channel: Channel;
+  /** True once the API has confirmed the slug names no sale (404). Terminal —
+   *  once set, no further poll/reconnect activity happens. */
+  notFound: boolean;
   /** One-shot re-sync, called after every order attempt. */
   refetch: () => void;
 }
 
-export function useSaleStatus(): SaleStatusHandle {
+export function useSaleStatus(slug: string): SaleStatusHandle {
   const [body, setBody] = useState<SaleStatusBody | null>(null);
   const [channel, setChannel] = useState<Channel>("connecting");
+  const [notFound, setNotFound] = useState(false);
 
   const channelRef = useRef<Channel>("connecting");
   const mountedRef = useRef(true);
+  const notFoundRef = useRef(false);
   const sourceRef = useRef<EventSource | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -80,7 +97,11 @@ export function useSaleStatus(): SaleStatusHandle {
   }, []);
 
   const refetch = useCallback(() => {
-    void fetchSaleStatus()
+    if (notFoundRef.current) {
+      // Terminal outcome — no further re-sync is possible or useful.
+      return;
+    }
+    void fetchSaleStatus(slug)
       .then((next) => {
         // A re-sync obeys the SAME sole-writer rule as a poll: while the stream
         // is live it alone writes `body`, so a re-sync GET (an independent Redis
@@ -94,12 +115,19 @@ export function useSaleStatus(): SaleStatusHandle {
       })
       .catch(() => {
         // Silent: a re-sync failure is not a verdict, and the status zone
-        // keeps whatever truth it has.
+        // keeps whatever truth it has. (A 404 here — the sale vanishing
+        // mid-session — is an edge case not worth a dedicated path; the next
+        // cold navigation to the slug will surface "Sale not found" via the
+        // normal mount-time flow.)
       });
-  }, []);
+  }, [slug]);
 
   useEffect(() => {
     mountedRef.current = true;
+    // A fresh effect run (new slug, or a remount) starts from a clean slate —
+    // a stale `notFound` from a PREVIOUS slug must never haunt a new one.
+    notFoundRef.current = false;
+    setNotFound(false);
     const controller = new AbortController();
 
     const stopPolling = () => {
@@ -127,14 +155,33 @@ export function useSaleStatus(): SaleStatusHandle {
       lastActivityRef.current = Date.now();
     };
 
+    /** The slug names no sale — a terminal outcome. Tear everything down and
+     *  never retry: every subsequent poll/reconnect entry point checks this
+     *  ref first and becomes inert. */
+    const markNotFound = () => {
+      if (notFoundRef.current) {
+        return;
+      }
+      notFoundRef.current = true;
+      if (mountedRef.current) {
+        setNotFound(true);
+      }
+      stopPolling();
+      stopReconnect();
+      closeStream();
+    };
+
     const openStream = () => {
+      if (notFoundRef.current) {
+        return;
+      }
       closeStream();
       markActivity();
-      const source = new EventSource(SALE_EVENTS_URL);
+      const source = new EventSource(saleEventsUrl(slug));
       sourceRef.current = source;
 
       source.onopen = () => {
-        if (!mountedRef.current) {
+        if (!mountedRef.current || notFoundRef.current) {
           return;
         }
         markActivity();
@@ -151,7 +198,7 @@ export function useSaleStatus(): SaleStatusHandle {
         if (recovering) {
           // Re-sync ONCE. Belt to the snapshot's braces — correct even if the
           // snapshot frame is lost in flight.
-          void fetchSaleStatus(controller.signal).then(writeFromStream).catch(() => {});
+          void fetchSaleStatus(slug, controller.signal).then(writeFromStream).catch(() => {});
         }
       };
 
@@ -163,7 +210,8 @@ export function useSaleStatus(): SaleStatusHandle {
         try {
           raw = JSON.parse((event as MessageEvent<string>).data);
         } catch {
-          return; // A malformed frame is ignored, never painted.
+          // Malformed SSE frame — ignore it; the UI keeps whatever state it had.
+          return;
         }
         const next = parseSaleStatus(raw);
         if (next !== null) {
@@ -177,7 +225,7 @@ export function useSaleStatus(): SaleStatusHandle {
       source.addEventListener("heartbeat", markActivity);
 
       source.onerror = () => {
-        if (!mountedRef.current) {
+        if (!mountedRef.current || notFoundRef.current) {
           return;
         }
         // Drop the liveness claim THE MOMENT the stream falters — before any
@@ -205,7 +253,10 @@ export function useSaleStatus(): SaleStatusHandle {
      *  the cold-load poll paints, but the stream's own outcome decides the
      *  channel, so the sticker never flashes a claim it hasn't earned. */
     const pollOnce = (fromFallback: boolean) => {
-      void fetchSaleStatus(controller.signal)
+      if (notFoundRef.current) {
+        return;
+      }
+      void fetchSaleStatus(slug, controller.signal)
         .then((next) => {
           if (!mountedRef.current || channelRef.current === "live") {
             return;
@@ -215,8 +266,17 @@ export function useSaleStatus(): SaleStatusHandle {
             setChannelSafely("degraded");
           }
         })
-        .catch(() => {
-          if (!mountedRef.current || channelRef.current === "live") {
+        .catch((err: unknown) => {
+          if (!mountedRef.current) {
+            return;
+          }
+          // Terminal: this slug names no sale. Stop retrying for good — no
+          // amount of polling will ever turn a 404 into a 200.
+          if (err instanceof SaleNotFoundError) {
+            markNotFound();
+            return;
+          }
+          if (channelRef.current === "live") {
             return;
           }
           if (fromFallback) {
@@ -234,8 +294,12 @@ export function useSaleStatus(): SaleStatusHandle {
     };
 
     function startFallback() {
+      if (notFoundRef.current) {
+        return;
+      }
       if (timerRef.current !== null) {
-        return; // Exactly one poll timer, ever.
+        // Guard: only one poll interval may run at a time.
+        return;
       }
       pollOnce(true);
       timerRef.current = setInterval(() => {
@@ -252,12 +316,16 @@ export function useSaleStatus(): SaleStatusHandle {
     }
 
     function scheduleReconnect() {
+      if (notFoundRef.current) {
+        return;
+      }
       if (reconnectTimerRef.current !== null) {
-        return; // Exactly one reconnect timer, ever.
+        // Guard: only one reconnect timer may run at a time.
+        return;
       }
       const attempt = () => {
         reconnectTimerRef.current = null;
-        if (!mountedRef.current || channelRef.current === "live") {
+        if (!mountedRef.current || notFoundRef.current || channelRef.current === "live") {
           return;
         }
         const current = sourceRef.current;
@@ -278,7 +346,7 @@ export function useSaleStatus(): SaleStatusHandle {
     // and treat prolonged silence on a live stream as death. The demotion is
     // cheap and self-healing: the reconnect re-snapshots within a beat.
     const watchdog = setInterval(() => {
-      if (!mountedRef.current) {
+      if (!mountedRef.current || notFoundRef.current) {
         return;
       }
       if (channelRef.current === "live" && Date.now() - lastActivityRef.current > WATCHDOG_SILENCE_MS) {
@@ -298,7 +366,7 @@ export function useSaleStatus(): SaleStatusHandle {
     // A stream that hangs before headers fires neither `open` nor `error`. If
     // we are still `connecting` at the deadline, carry the page by polling.
     const connectDeadline = setTimeout(() => {
-      if (mountedRef.current && channelRef.current === "connecting") {
+      if (mountedRef.current && channelRef.current === "connecting" && !notFoundRef.current) {
         startFallback();
         scheduleReconnect();
       }
@@ -313,7 +381,7 @@ export function useSaleStatus(): SaleStatusHandle {
       stopPolling();
       closeStream();
     };
-  }, [setChannelSafely, writeFromPoll, writeFromStream]);
+  }, [slug, setChannelSafely, writeFromPoll, writeFromStream]);
 
-  return { body, channel, refetch };
+  return { body, channel, notFound, refetch };
 }

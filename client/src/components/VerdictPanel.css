@@ -120,3 +120,20 @@
 .verdict-panel--error .verdict-panel__string {
   border-color: var(--tomato);
 }
+
+/* Price receipt line shown only on success — what the buyer paid, immutably
+ * snapshotted from orderlines.unitPrice at acceptance time. */
+.verdict-panel__price {
+  margin: var(--sp-stack) 0 0;
+  font-family: var(--font-sans);
+  font-size: var(--body-size);
+  font-weight: var(--body-weight);
+  color: var(--ink-soft);
+}
+
+.verdict-panel__price-amount {
+  font-family: var(--font-sans);
+  font-size: var(--body-size);
+  font-weight: 900;
+  color: var(--ink);
+}

@@ -5,6 +5,11 @@
 //
 // The empty-email check is the ONLY thing this hook refuses to send. There is
 // no format gate — never block a plausible attempt client-side.
+//
+// Story 5.1: the hook now takes a `slug` (alongside the existing
+// `onAttemptSettled` option) and threads it into every `placeOrder`/
+// `checkOrder` call so the wire hits `/api/sales/${slug}/order[...]` instead
+// of the v1.0 `/api/order[...]` paths.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ALREADY, EMAIL_REQUIRED, checkOrder, placeOrder, type Verdict } from "../api/order.ts";
 
@@ -31,11 +36,13 @@ export interface OrderHandle {
 }
 
 export interface UseOrderOptions {
+  /** The sale this order flow targets — threaded into every wire call. */
+  slug: string;
   /** Status re-fetches after every attempt — win, loss, or error alike. */
   onAttemptSettled?: () => void;
 }
 
-export function useOrder({ onAttemptSettled }: UseOrderOptions = {}): OrderHandle {
+export function useOrder({ slug, onAttemptSettled }: UseOrderOptions): OrderHandle {
   const [phase, setPhase] = useState<Phase>("idle");
   const [verdict, setVerdict] = useState<Verdict | null>(null);
   const [verdictSource, setVerdictSource] = useState<VerdictSource | null>(null);
@@ -68,7 +75,8 @@ export function useOrder({ onAttemptSettled }: UseOrderOptions = {}): OrderHandl
         return;
       }
       if (inFlight.current) {
-        return; // First click wins. Not a debounce — a guard.
+        // First click wins — this is an atomic in-flight guard, not a debounce.
+        return;
       }
 
       // From here on the load check is superseded: mark it, and abort it in
@@ -80,7 +88,7 @@ export function useOrder({ onAttemptSettled }: UseOrderOptions = {}): OrderHandl
       inFlight.current = true;
       setPhase("processing");
 
-      void placeOrder(trimmed).then((next) => {
+      void placeOrder(slug, trimmed).then((next) => {
         inFlight.current = false;
         if (!mounted.current) {
           return;
@@ -97,34 +105,37 @@ export function useOrder({ onAttemptSettled }: UseOrderOptions = {}): OrderHandl
         onAttemptSettled?.();
       });
     },
-    [onAttemptSettled],
+    [slug, onAttemptSettled],
   );
 
-  const checkOnLoad = useCallback((email: string) => {
-    if (checked.current || email.trim() === "") {
-      return;
-    }
-    checked.current = true;
+  const checkOnLoad = useCallback(
+    (email: string) => {
+      if (checked.current || email.trim() === "") {
+        return;
+      }
+      checked.current = true;
 
-    const controller = new AbortController();
-    checkAbort.current = controller;
+      const controller = new AbortController();
+      checkAbort.current = controller;
 
-    void checkOrder(email.trim(), controller.signal)
-      .then((ordered) => {
-        // A submit already answered (or the hook is gone): the check is moot.
-        if (!mounted.current || submitted.current) {
-          return;
-        }
-        if (ordered) {
-          // Relief in a single page-load — no interaction required.
-          setVerdict({ kind: "already", message: ALREADY });
-          setVerdictSource("check");
-        }
-      })
-      .catch(() => {
-        // Silent. No error verdict for a check the user never asked for.
-      });
-  }, []);
+      void checkOrder(slug, email.trim(), controller.signal)
+        .then((ordered) => {
+          // A submit already answered (or the hook is gone): the check is moot.
+          if (!mounted.current || submitted.current) {
+            return;
+          }
+          if (ordered) {
+            // Relief in a single page-load — no interaction required.
+            setVerdict({ kind: "already", message: ALREADY });
+            setVerdictSource("check");
+          }
+        })
+        .catch(() => {
+          // Silent. No error verdict for a check the user never asked for.
+        });
+    },
+    [slug],
+  );
 
   const clearFieldError = useCallback(() => {
     setFieldError(null);

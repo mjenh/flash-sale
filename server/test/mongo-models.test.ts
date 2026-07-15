@@ -1,8 +1,7 @@
 // Zero I/O: pure mongoose schema inspection, no connection. Pins the
-// spine's Mongo conventions: eight collections with exact names, timestamps
+// spine's Mongo conventions: seven collections with exact names, timestamps
 // everywhere, the four unique indexes (orders on (saleId, email)), the
-// single v1 order status, OrderLine defaults, and Reservation dormancy.
-import { readFileSync } from "node:fs";
+// single v1 order status, and OrderLine defaults.
 import { describe, expect, it } from "vitest";
 import type { Model, Schema } from "mongoose";
 import {
@@ -10,7 +9,6 @@ import {
   Order,
   OrderLine,
   Product,
-  Reservation,
   Sale,
   SaleProduct,
   User,
@@ -24,7 +22,6 @@ const allModels: Array<[Model<never> | Model<unknown>, string]> = [
   [Inventory as unknown as Model<unknown>, "inventories"],
   [Order as unknown as Model<unknown>, "orders"],
   [OrderLine as unknown as Model<unknown>, "orderlines"],
-  [Reservation as unknown as Model<unknown>, "reservations"],
 ];
 
 function hasUniqueIndex(schema: Schema, fields: Record<string, number>): boolean {
@@ -37,7 +34,7 @@ function hasUniqueIndex(schema: Schema, fields: Record<string, number>): boolean
 }
 
 describe("mongo domain models", () => {
-  it("registers all eight models with the exact spine collection names", () => {
+  it("registers all seven models with the exact spine collection names", () => {
     for (const [model, name] of allModels) {
       expect(model.collection.collectionName).toBe(name);
     }
@@ -72,20 +69,10 @@ describe("mongo domain models", () => {
     expect(status.options.required).toBe(true);
   });
 
-  it("order line snapshots default to qty 1 / unitPrice 0", () => {
+  it("order line defaults qty to 1 and requires unitPrice without a default (snapshot enforced by caller)", () => {
     expect(OrderLine.schema.path("quantity").options.default).toBe(1);
-    expect(OrderLine.schema.path("unitPrice").options.default).toBe(0);
+    expect(OrderLine.schema.path("unitPrice").options.required).toBe(true);
+    expect(OrderLine.schema.path("unitPrice").options.default).toBeUndefined();
   });
 
-  it("reservation stays dormant: no production write path references it", () => {
-    // Source guard (the order-script.test.ts pattern): the only modules that
-    // write Mongo are audit.ts and seed.ts — neither may touch Reservation.
-    for (const file of ["audit.ts", "seed.ts", "client.ts"]) {
-      const source = readFileSync(
-        new URL(`../src/adapters/mongo/${file}`, import.meta.url),
-        "utf8",
-      );
-      expect(source.includes("Reservation"), `${file} must not reference Reservation`).toBe(false);
-    }
-  });
 });

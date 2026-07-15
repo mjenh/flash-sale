@@ -8,7 +8,6 @@ import {
   ENDED_FRAME,
   LIVE_NOTE,
   SOLD_OUT_FRAME,
-  UPCOMING_FRAME,
   SaleStatusZone,
 } from "./SaleStatusZone.tsx";
 import { DEGRADED_LABEL, LIVE_LABEL } from "./LiveSticker.tsx";
@@ -32,15 +31,12 @@ function paint(status: SaleState, channel: Channel = "live", stock = 37) {
 }
 
 describe("the four states, verbatim", () => {
-  it("upcoming: the poster panel, the status string with viewer-local time, the warm frame — no numeral, no sticker", () => {
+  it("upcoming: the poster panel, the status string with viewer-local time — no numeral, no sticker", () => {
     paint("upcoming");
 
     expect(screen.getByTestId("status-chip")).toHaveTextContent(
       `Upcoming — sale starts at ${localTime(START)}`,
     );
-    expect(screen.getByText("Doors at noon.")).toBeInTheDocument();
-    expect(screen.getByText(UPCOMING_FRAME)).toBeInTheDocument();
-    expect(UPCOMING_FRAME).toBe("Almost time — doors open at 12:00.");
 
     expect(screen.queryByTestId("stock-numeral")).toBeNull();
     expect(screen.queryByTestId("live-sticker")).toBeNull();
@@ -113,7 +109,7 @@ describe("channel honesty", () => {
   it("cold load in flight: the poster furniture, no chip, no claim — and no skeleton", () => {
     const { container } = render(<SaleStatusZone body={null} channel="connecting" />);
 
-    expect(screen.getByText("Doors at noon.")).toBeInTheDocument();
+    expect(screen.getByText("Doors open soon.")).toBeInTheDocument();
     expect(screen.queryByTestId("status-chip")).toBeNull();
     expect(container.querySelector("[aria-busy]")).toBeNull();
     expect(container.querySelector(".skeleton")).toBeNull();

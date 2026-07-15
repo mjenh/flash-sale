@@ -6,6 +6,14 @@
 // ONCE per emit via getStatus(), the 25 s named heartbeat event,
 // fail-closed-on-compose-failure, and future-boundaries-only timers with
 // chunked re-arm below Node's setTimeout ceiling.
+//
+// Story 4.4: getStatus(saleId, window) now takes both per call, and the
+// broadcaster's pubsub/heartbeat-driven paths (emit, the sold-out safety
+// net) resolve them via the injected getActiveSale() rather than a frozen
+// window dep. SALE_ID/WINDOW below stand in for "the currently active sale"
+// throughout — getActiveSale() always resolves to them unless a test
+// overrides it, so every existing timer/coalescing/heartbeat invariant is
+// unchanged; only the wiring that feeds getStatus() its saleId/window moved.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   COALESCE_MS,
@@ -14,10 +22,16 @@ import {
   armWindowTimers,
   createSaleEventsBroadcaster,
 } from "../src/services/sale-events.ts";
-import type { SaleStatusBody } from "../src/services/sale-status.ts";
+import type { SaleStatusBody, SaleWindow } from "../src/services/sale-status.ts";
+import { START_MS, END_MS, START_ISO, END_ISO } from "./helpers/time-fixtures.ts";
 
-const startTime = "2026-07-10T04:00:00.000Z";
-const endTime = "2026-07-10T05:00:00.000Z";
+const SALE_ID = "sale-1";
+const WINDOW: SaleWindow = {
+  startMs: START_MS,
+  endMs: END_MS,
+  startIso: START_ISO,
+  endIso: END_ISO,
+};
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -31,8 +45,8 @@ afterEach(() => {
 const flush = () => vi.advanceTimersByTimeAsync(0);
 
 function makeSaleStatus() {
-  let body: SaleStatusBody = { success: true, status: "active", stock: 37, startTime, endTime };
-  const getStatus = vi.fn(async () => ({ ...body }));
+  let body: SaleStatusBody = { success: true, status: "active", stock: 37, startTime: START_ISO, endTime: END_ISO };
+  const getStatus = vi.fn(async (_saleId: string, _window: SaleWindow) => ({ ...body }));
   return {
     getStatus,
     set(patch: Partial<SaleStatusBody>) {
@@ -61,15 +75,22 @@ function frameFor(body: SaleStatusBody): string {
   return `event: status\ndata: ${JSON.stringify(body)}\n\n`;
 }
 
-function build(overrides: { getStatus?: () => Promise<SaleStatusBody> } = {}) {
+function build(
+  overrides: {
+    getStatus?: (saleId: string, window: SaleWindow) => Promise<SaleStatusBody>;
+    getActiveSale?: () => Promise<{ saleId: string; window: SaleWindow }>;
+  } = {},
+) {
   const status = makeSaleStatus();
   const report = vi.fn();
+  const getActiveSale = vi.fn(overrides.getActiveSale ?? (async () => ({ saleId: SALE_ID, window: WINDOW })));
   const broadcaster = createSaleEventsBroadcaster({
     saleStatus: { getStatus: overrides.getStatus ?? status.getStatus },
     clock: () => Date.now(),
     reportBroadcastFailure: report,
+    getActiveSale,
   });
-  return { status, report, broadcaster };
+  return { status, report, getActiveSale, broadcaster };
 }
 
 describe("sale-events broadcaster — snapshot + coalescing/serialization", () => {
@@ -78,17 +99,17 @@ describe("sale-events broadcaster — snapshot + coalescing/serialization", () =
     expect(HEARTBEAT_MS).toBe(25_000);
   });
 
-  it("snapshotFrame() is exactly `event: status` + the body from a fresh getStatus() read", async () => {
+  it("snapshotFrame(saleId, window) is exactly `event: status` + the body from a fresh getStatus() read, called with the exact args", async () => {
     const { status, broadcaster } = build();
-    const frame = await broadcaster.snapshotFrame();
+    const frame = await broadcaster.snapshotFrame(SALE_ID, WINDOW);
     expect(frame).toBe(frameFor(status.body()));
-    expect(status.getStatus).toHaveBeenCalledTimes(1);
+    expect(status.getStatus).toHaveBeenCalledExactlyOnceWith(SALE_ID, WINDOW);
   });
 
   it("a snapshotFrame() rejection propagates untouched (route -> central middleware -> 503)", async () => {
     const boom = new Error("redis gone");
     const { broadcaster } = build({ getStatus: async () => Promise.reject(boom) });
-    await expect(broadcaster.snapshotFrame()).rejects.toBe(boom);
+    await expect(broadcaster.snapshotFrame(SALE_ID, WINDOW)).rejects.toBe(boom);
   });
 
   it("first event after a quiet period emits immediately (leading edge) — identical frame to every sink, ONE getStatus per emit", async () => {
@@ -219,6 +240,7 @@ describe("sale-events broadcaster — snapshot + coalescing/serialization", () =
       saleStatus: { getStatus: status.getStatus },
       clock: () => Date.now(),
       reportBroadcastFailure: report,
+      getActiveSale: async () => ({ saleId: SALE_ID, window: WINDOW }),
     });
     const a = makeSink();
     const b = makeSink();
@@ -273,6 +295,70 @@ describe("sale-events broadcaster — snapshot + coalescing/serialization", () =
 
     expect(dead.write).toHaveBeenCalledTimes(1); // dropped after the first failure
     expect(alive.written).toHaveLength(2);
+  });
+});
+
+describe("Story 4.4 — dynamic active-sale resolution for pubsub/heartbeat-driven composition", () => {
+  it("emit() re-derives the active sale via getActiveSale() on every call, then composes getStatus() with that saleId/window", async () => {
+    const { status, getActiveSale, broadcaster } = build();
+    const sink = makeSink();
+    broadcaster.register(sink);
+
+    broadcaster.onDomainEvent("order.accepted");
+    await flush();
+
+    expect(getActiveSale).toHaveBeenCalledTimes(1);
+    expect(status.getStatus).toHaveBeenCalledExactlyOnceWith(SALE_ID, WINDOW);
+  });
+
+  it("a changed active sale between emits is reflected in the next composed frame — not frozen at construction", async () => {
+    const OTHER_ID = "sale-2";
+    const OTHER_WINDOW: SaleWindow = {
+      startMs: START_MS + 60_000,
+      endMs: END_MS + 60_000,
+      startIso: new Date(START_MS + 60_000).toISOString(),
+      endIso: new Date(END_MS + 60_000).toISOString(),
+    };
+    let active = { saleId: SALE_ID, window: WINDOW };
+    const status = makeSaleStatus();
+    const broadcaster = createSaleEventsBroadcaster({
+      saleStatus: { getStatus: status.getStatus },
+      clock: () => Date.now(),
+      reportBroadcastFailure: vi.fn(),
+      getActiveSale: async () => active,
+    });
+    const sink = makeSink();
+    broadcaster.register(sink);
+
+    broadcaster.onDomainEvent("order.accepted");
+    await flush();
+    expect(status.getStatus).toHaveBeenLastCalledWith(SALE_ID, WINDOW);
+
+    // Simulate the resolver now pointing at a different active sale.
+    active = { saleId: OTHER_ID, window: OTHER_WINDOW };
+    await vi.advanceTimersByTimeAsync(COALESCE_MS);
+    broadcaster.onDomainEvent("order.accepted");
+    await flush();
+    expect(status.getStatus).toHaveBeenLastCalledWith(OTHER_ID, OTHER_WINDOW);
+  });
+
+  it("the sold-out safety net (heartbeat-driven) also resolves saleId/window via getActiveSale()", async () => {
+    const { status, getActiveSale, broadcaster } = build();
+    status.set({ status: "sold_out", stock: 0 });
+    const sink = makeSink();
+    broadcaster.register(sink);
+
+    await vi.advanceTimersByTimeAsync(HEARTBEAT_MS);
+    expect(getActiveSale).toHaveBeenCalled();
+    expect(status.getStatus).toHaveBeenCalledWith(SALE_ID, WINDOW);
+  });
+
+  it("snapshotFrame(saleId, window) uses the explicit args, independent of getActiveSale()", async () => {
+    const { status, getActiveSale, broadcaster } = build();
+    const OTHER_ID = "sale-2";
+    await broadcaster.snapshotFrame(OTHER_ID, WINDOW);
+    expect(status.getStatus).toHaveBeenCalledExactlyOnceWith(OTHER_ID, WINDOW);
+    expect(getActiveSale).not.toHaveBeenCalled(); // connect-time snapshot never consults it
   });
 });
 

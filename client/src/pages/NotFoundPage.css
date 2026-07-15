@@ -1,0 +1,22 @@
+/* Deliberately plain — this page exists to say "you're in the wrong place",
+ * not to dress up the poster around a sale that isn't there. */
+
+.not-found-page {
+  padding-top: var(--sp-zone);
+}
+
+.not-found-page__headline {
+  margin: 0 0 var(--sp-stack);
+  color: var(--ink);
+}
+
+.not-found-page__body {
+  max-width: 34em;
+  color: var(--ink-soft);
+}
+
+.not-found-page__home {
+  display: inline-block;
+  margin-top: var(--sp-stack);
+  color: var(--ink);
+}

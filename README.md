@@ -10,22 +10,27 @@ order it accepted, and keeps the page truthful the whole way through.
 | Runtime | Node.js 24 (native TypeScript type stripping — no build step, no bundler) |
 | API | Express 5 · TypeScript |
 | Decision store | Redis 8 (AOF), driven by a single atomic Lua script |
+| Write-behind queue | Redis Stream (`queue:orders`) + consumer group worker |
 | Audit store | MongoDB 8 · Mongoose |
 | Realtime | Server-Sent Events (SSE) over Redis pub/sub |
-| Frontend | React 19 · Vite |
+| Frontend | React 19 · Vite · nginx (static + /api reverse proxy) |
 | Logging & security | pino / pino-http · helmet |
 | Testing | Vitest · React Testing Library · k6 (load) |
 | Packaging | npm workspaces monorepo · Docker · Docker Compose |
 
-Redis is the concurrency core and MongoDB is the audit trail; the React SPA is
-built into the API image and served from it. See
-[`docs/architecture.md`](docs/architecture.md) for how these fit together.
+Redis is the concurrency core and MongoDB is the audit trail. Accepted orders
+are enqueued to a Redis Stream and drained to MongoDB by a background worker —
+keeping MongoDB off the hot path while narrowing the audit under-count window
+versus a plain fire-and-forget write. The React SPA is built and served by a
+separate nginx container. See [`docs/architecture.md`](docs/architecture.md)
+for how these fit together.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     Browser["Browser<br/>React 19 SPA (Vite)"]
+    Nginx["nginx · :80<br/>static SPA + /api proxy"]
 
     subgraph API["Express 5 API · node:24-alpine (native TS)"]
         Routes["routes/<br/>HTTP translation"]
@@ -34,20 +39,24 @@ flowchart LR
     end
 
     subgraph Redis["Redis 8 · AOF"]
-        Decision["DECISION STATE<br/>stock:remaining (int)<br/>orders:users (set)"]
-        Channel["PUB/SUB · sale:events"]
+        Decision["DECISION STATE<br/>stock:{saleId}:remaining (int)<br/>orders:{saleId}:users (set)"]
+        Channel["PUB/SUB · sale:{saleId}:events"]
+        Queue["STREAM · queue:orders<br/>(write-behind audit queue)"]
     end
 
+    Worker["Write-Behind Worker<br/>order-worker.ts<br/>XREADGROUP · at-least-once · exp. backoff"]
     Mongo[("MongoDB 8 · AUDIT<br/>users · orders · orderlines · …")]
 
-    Browser -- "POST /api/order" --> Routes
-    Browser -- "GET /api/sale/status" --> Routes
-    Browser -- "GET /api/order/:email" --> Routes
-    Browser == "SSE GET /api/sale/events" ==> Broadcaster
+    Browser -- "SPA + /api" --> Nginx
+    Nginx --> Routes
+    Browser == "SSE /api/sales/:slug/events" ==> Broadcaster
     Routes --> Services
     Services -- "EVALSHA order.lua (atomic)" --> Decision
-    Services -. "async audit write" .-> Mongo
-    Services -- "PUBLISH sale:events" --> Channel
+    Services -. "XADD (enqueue on OK)" .-> Queue
+    Queue -- "XREADGROUP" --> Worker
+    Worker -. "bulkWrite (idempotent)" .-> Mongo
+    Worker -- "XACK after confirmed write" --> Queue
+    Services -- "PUBLISH sale:{saleId}:events" --> Channel
     Channel -- "SUBSCRIBE (dedicated connection)" --> Broadcaster
     Broadcaster -- "fresh status read at emit" --> Decision
     Mongo -. "cold start only: rebuild" .-> Decision
@@ -56,9 +65,13 @@ flowchart LR
 Three roles are kept strictly separate: **Redis** is the decision layer (the only
 state a request reads or writes — remaining stock and the set of buyers — with a
 single Lua script as the sole writer while serving); **MongoDB** is the audit
-layer (written asynchronously after a decision, read only at cold start to
-rebuild Redis); and the **clock** is the API server's own UTC `Date.now()`, never
-the client's.
+layer (written by the background worker after it drains the Redis Stream, read
+only at cold start to rebuild Redis); and the **clock** is the API server's own
+UTC `Date.now()`, never the client's.
+
+Redis keys are namespaced by the MongoDB `ObjectId` of the active sale document
+(`stock:{saleId}:remaining`, `orders:{saleId}:users`, `sale:{saleId}:events`), so
+multiple sales can coexist in the same Redis instance.
 
 The full design — layers, request flows, the restart gate, failure behavior, and
 trade-offs — lives in [`docs/architecture.md`](docs/architecture.md).
@@ -73,9 +86,9 @@ revisit each — is in
 | Decision | Buys | Costs |
 | --- | --- | --- |
 | One atomic Lua script owns the decision | No oversell / one-per-user by construction | Hot-path logic in Lua, not TypeScript |
-| Redis decides, Mongo records (async) | Single-store hot path, clean recovery | Audit under-count if a crash lands mid-write |
+| Redis decides; write-behind worker records to Mongo | Single-store hot path, clean recovery, narrow audit gap | Gap between EVALSHA OK and XADD; worker crash leaves PEL until restart |
 | Fail closed on Redis loss (503, never a guess) | Correctness under partial failure | Availability — Redis down means the sale is down |
-| Synchronous order flow, no queue | Immediate, interpretable verdicts | No burst shock absorber; scale the API tier head-on |
+| Synchronous order decision, no decision queue | Immediate, interpretable verdicts | No burst shock absorber; scale the API tier head-on |
 | Email as the idempotency key | Honest retries, no session/account needed | Case + NFC normalized so one mailbox is one customer; provider aliases (plus-tags, gmail dots) are an accepted bypass |
 | Stateless API, scale by widening the tier | Add instances freely without weakening the guarantee | One Redis primary is the shared throughput ceiling |
 | SSE over Redis pub/sub for live status | Plain-HTTP one-way stream, coalesced frames | One-way only; a stateful broadcaster + client fallback ladder |
@@ -84,13 +97,17 @@ revisit each — is in
 ## Quick start
 
 ```bash
-docker compose up      # healthchecked redis + mongo, then the api on :3000
+make deploy    # build + start: api · worker · nginx client · redis · mongo
 ```
 
-Open <http://localhost:3000>. The compose defaults ship an **already-active**
-sale (window `2026-01-01T00:00:00Z` → `2027-01-01T00:00:00Z`, 100 units), so the
-page is live the moment the stack is up. Override the window and stock with a
-`.env` file next to `docker-compose.yml` (see [Configuration](#configuration)).
+Open <http://localhost> (nginx on port 80 — SPA + API). The compose defaults
+ship an **already-active** sale (window `2026-01-01T00:00:00Z` →
+`2027-01-01T00:00:00Z`, 100 units), so the page is live the moment the stack
+is up. Override the window and stock with a `.env` file next to
+`docker-compose.yml` (see [Configuration](#configuration)).
+
+> The write-behind worker runs as a separate container (`--profile worker`).
+> Use `WORKER_COLOCATED=true` to fold it into the API process instead.
 
 ## Configuration
 
@@ -99,12 +116,13 @@ is no runtime admin endpoint.
 
 | Variable | Required | Default | Meaning |
 | --- | --- | --- | --- |
-| `SALE_START_TIME` | **yes** | — | ISO 8601; parsed to UTC epoch ms at boot |
-| `SALE_END_TIME` | **yes** | — | ISO 8601; must be strictly after the start |
+| `SALE_START_TIME` | **yes** | — | ISO 8601 with explicit UTC offset (`Z` or `±HH:MM`); parsed to UTC epoch ms at boot |
+| `SALE_END_TIME` | **yes** | — | ISO 8601 with explicit UTC offset; must be strictly after the start |
 | `STOCK_QUANTITY` | no | `100` | Positive integer; units on sale |
 | `REDIS_URL` | no | `redis://localhost:6379` | Redis 8, AOF enabled |
 | `MONGODB_URI` | no | `mongodb://localhost:27017/flash-sale` | The audit database |
 | `PORT` | no | `3000` | API port |
+| `WORKER_COLOCATED` | no | `false` | `true`: run the write-behind worker inside the API process (single-container mode). `false` / unset: run the worker separately (`src/worker/index.ts` or the `worker` Compose service). |
 
 An invalid or missing required value fails the boot before the server listens.
 Compose ships defaults for an active sale; override them in `.env`:
@@ -125,8 +143,13 @@ STOCK_QUANTITY=100
 npm install                      # all workspaces, one root lockfile
 docker compose up -d redis mongo # stores only (ports 6379 / 27017 published)
 cp .env.example .env             # set the sale window to develop against
-npm run dev                      # server :3000 + Vite client :5173 (/api proxied)
+npm run dev                      # server :3000 + worker + Vite client :5173 (/api proxied)
 ```
+
+`npm run dev` starts three concurrent processes: the API server (`:3000`), the
+write-behind worker, and the Vite dev client (`:5173`). The `.env.example`
+defaults to `WORKER_COLOCATED=true`; in `npm run dev` the worker runs as its
+own process regardless.
 
 Gates:
 
@@ -138,13 +161,17 @@ npm run typecheck                # tsc --noEmit (strict)
 ## Build & run
 
 ```bash
-make deploy                      # build the api image and start the full stack
+make deploy                      # build all images and start the full stack
 make down                        # stop the stack
 make clean                       # stop and remove volumes + local images
+make worker-logs                 # tail worker container logs only
 ```
 
 `make help`-style targets live in the `Makefile`; `docker compose` works directly
-as well (`docker compose build`, `docker compose up -d`).
+as well. `make build` always builds both `Dockerfile.server` and `Dockerfile.client`
+images. `make deploy` activates the `worker` Compose profile by default (separate
+container); set `WORKER_COLOCATED=true` to omit the profile and run the worker
+co-located.
 
 ## Proving it
 
@@ -157,11 +184,11 @@ npm run stress        # or: make stress
 Prerequisite: Docker. k6 runs from your `PATH` if present, otherwise from the
 `grafana/k6` image. The harness stops the API, resets the stores, restarts the
 API, drives the concurrent burst with k6, then verifies the results against the
-stores. Redis (`SCARD orders:users` + `stock:remaining`) is the authoritative
-fairness record: every fairness count is an exact equality against the API's own
-seeded stock (the harness never asserts against a quantity it chose). The async
-Mongo audit is reconciled with a tolerance — an accepted under-count (a Redis
-accept whose durable write was lost) passes with a note, while an
+stores. Redis (`SCARD orders:{saleId}:users` + `stock:{saleId}:remaining`) is the
+authoritative fairness record: every fairness count is an exact equality against
+the API's own seeded stock (the harness never asserts against a quantity it chose).
+The async Mongo audit is reconciled with a tolerance — an accepted under-count (a
+Redis accept whose durable write was lost) passes with a note, while an
 over-count (a phantom order Mongo holds but Redis never accepted) hard-fails. It
 then re-checks that a past-window sale rejects every attempt.
 Buyer count (`ATTEMPTS`, default 5,000), virtual users (`VUS`, default 500), and
@@ -184,19 +211,25 @@ the root.
 ```
 server/   Express 5 + TypeScript API (Node 24 native type stripping — no bundler)
           src/
-            index.ts        boot entry: bootstrap() then listen()
+            index.ts        boot entry: bootstrap() then listen(); WORKER_COLOCATED
+                            starts the write-behind worker in this same process
             bootstrap.ts    the single composition root (shared with tests)
             app.ts          Express pipeline + central error middleware
             routes/         HTTP translation only
             services/       all business logic (framework-free, injected clock)
             adapters/       stores & ports: redis/ · mongo/ · payment/ · config.ts
+            worker/         write-behind consumer worker
+              order-worker.ts  XREADGROUP polling loop · at-least-once · exp. backoff
+              index.ts         standalone entrypoint (node src/worker/index.ts)
           test/             unit + integration tests
 
-client/   React 19 + Vite SPA — built into the api image, served at /
+client/   React 19 + Vite SPA — built into the nginx image, served at /
           src/
             components/     presentational UI
-            hooks/          realtime status + order state machines
-            api/            typed wire clients (sale, order)
+            hooks/          active-sale redirect · realtime status · order state machines
+            api/            typed wire clients (sale, order) — slug-parameterized
+            router.tsx      React Router: / → /sale/:slug redirect · /sale/:slug · * → 404
+          nginx.conf        static serving + /api reverse proxy to the API container
 
 stress/   the fairness proof (imports no server code — an independent observer)
             run.ts          orchestrator: stop → reset → start → k6 → verify → window
@@ -205,9 +238,10 @@ stress/   the fairness proof (imports no server code — an independent observer
             verify.ts       equality checks against Mongo + Redis
 
 docs/     architecture.md   the full architecture reference
-Dockerfile              multi-stage api image (client build → node:24-alpine)
-docker-compose.yml      api + redis:8-alpine (AOF) + mongo:8 — the one-command stack
-Makefile                install / dev / build / deploy / stress / clean targets
+Dockerfile.server       node:24-alpine API image (no client build)
+Dockerfile.client       nginx image: Vite build → static SPA + /api proxy
+docker-compose.yml      api · worker (profile) · client (nginx) · redis:8-alpine · mongo:8
+Makefile                install / dev / build / deploy / stress / clean / worker-logs targets
 ```
 
 ## Domain model
@@ -220,16 +254,16 @@ ship; Redis holds the runtime truth.
 | Category | Collections | Role |
 | --- | --- | --- |
 | Boot-seeded constants | `products`, `sales`, `saleproducts`, `inventories` | Upserted idempotently at boot from env config. Never written per order. `Inventory.initialQuantity` is seeded from `STOCK_QUANTITY` but never decremented — concurrency truth lives in Redis. |
-| Per-order writes | `users`, `orders`, `orderlines` | Written async after a Redis `OK`. `Order` carries a compound unique index on `(saleId, email)` as defense-in-depth. |
-| Dormant | `reservations` | Schema ships, no code writes it. Reserved for a future reserve-then-confirm payment flow. |
+| Per-order writes | `users`, `orders`, `orderlines` | Written by the background worker after draining `queue:orders`. `Order` carries a compound unique index on `(saleId, email)` as defense-in-depth. |
 
-**Redis (runtime truth) — two keys + one channel:**
+**Redis (runtime truth) — two keys + one channel + one stream:**
 
 | Key | Type | Purpose |
 | --- | --- | --- |
-| `stock:remaining` | integer | Units left; also the warm/cold boot sentinel |
-| `orders:users` | set | Buyer emails with confirmed orders |
-| `sale:events` | pub/sub | Type-only event strings (`order.accepted`, `sale.sold_out`, `sale.started`, `sale.ended`) |
+| `stock:{saleId}:remaining` | integer | Units left; also the warm/cold boot sentinel. `{saleId}` is the MongoDB `ObjectId` of the active sale. |
+| `orders:{saleId}:users` | set | Buyer emails with confirmed orders |
+| `sale:{saleId}:events` | pub/sub | Type-only event strings (`order.accepted`, `sale.sold_out`, `sale.started`, `sale.ended`) |
+| `queue:orders` | stream | Write-behind audit queue; the worker drains it to MongoDB via XREADGROUP / XACK. |
 
 The Lua script, the boot rebuild, and the offline reset script are the only
 permitted writers of the two state keys. The full ER diagram and interface
@@ -241,12 +275,12 @@ catalog live in
 These are accepted properties of the v1 design, not overlooked bugs. Each is
 documented so a future maintainer inherits the reasoning.
 
-**Audit under-count window.** A crash between "Redis accepted the order" and
-"Mongo recorded it" permanently loses that audit row. The buyer keeps their
-order (Redis is correct; a retry returns 200), but Mongo under-counts by one.
-This is the deliberate cost of the async decision path — rolling back a promised
-order would be worse. The outbox pattern closes the gap without putting Mongo on
-the hot path.
+**Audit under-count window.** A crash between "Redis accepted the order" (Lua
+script returns `OK`) and "order enqueued to the Redis Stream" (`XADD
+queue:orders`) permanently loses that audit row. Once in the stream, at-least-once
+delivery guarantees eventual persistence. The buyer keeps their order (Redis is
+correct; a retry returns 200), but Mongo under-counts by one. This window is
+smaller than a plain fire-and-forget write but not zero.
 
 **Single Redis primary is the throughput ceiling.** The API tier scales
 horizontally (stateless, shared Redis), but every accepted order is one
@@ -284,17 +318,13 @@ Each builds on the current architecture without disturbing the decision core.
 
 **Payment integration.** The `PaymentProvider` port already exists with a no-op
 implementation. A real adapter (Stripe, etc.) slots in after the Redis `OK`,
-with a reserve-then-confirm flow activating the dormant `Reservation` schema.
+with a reserve-then-confirm flow requiring a new `Reservation` collection
+(schema to be designed alongside the payment adapter).
 This is the first feature that turns the system from a demo into a real sale.
 
-**Outbox pattern for audit durability.** The accepting Lua script pushes an
-event to a Redis list alongside the `SADD`/`DECR`; a background worker drains
-the list to Mongo. Closes the audit under-count window (the one known data-loss
-path) without putting Mongo on the hot path.
-
 **Authentication and account identity.** Replace the raw email with an
-authenticated user id. The set-membership mechanism is unchanged — only the key
-stored in `orders:users` changes. Eliminates the email aliasing bypass entirely.
+authenticated user id. The set-membership mechanism is unchanged — only the value
+stored in `orders:{saleId}:users` changes. Eliminates the email aliasing bypass entirely.
 
 **Rate limiting.** A per-IP or per-email throttle at the API edge (or via a
 reverse proxy). Prevents bandwidth waste from abusive clients without affecting

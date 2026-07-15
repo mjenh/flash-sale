@@ -1,0 +1,8 @@
+.root-redirect {
+  padding-top: var(--sp-zone);
+}
+
+.root-redirect__message {
+  max-width: 34em;
+  color: var(--ink);
+}
