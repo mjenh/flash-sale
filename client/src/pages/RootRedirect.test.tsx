@@ -4,10 +4,10 @@
 // renders the "No active sale" fallback rather than hanging.
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { NO_ACTIVE_SALE_MESSAGE, RootRedirect } from "./RootRedirect.tsx";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ACTIVE_SALE_URL } from "../hooks/useActiveSaleRedirect.ts";
+import { NO_ACTIVE_SALE_MESSAGE, RootRedirect } from "./RootRedirect.tsx";
 
 function json(status: number, body: unknown) {
   return Promise.resolve({

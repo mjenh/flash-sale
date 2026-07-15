@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
 import { MemoryRouter } from "react-router-dom";
+import { afterEach, describe, expect, it } from "vitest";
 import { NOT_FOUND_HEADLINE, NotFoundPage } from "./NotFoundPage.tsx";
 
 afterEach(() => {

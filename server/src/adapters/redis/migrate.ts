@@ -17,8 +17,9 @@
 //         -> no flat keys -> no-op.
 //     no  -> flat keys present? -> RENAME both to their namespaced form, warn.
 //         -> no flat keys either -> no-op (fresh v1.1 install, AC2).
-import { bounded, stockKeyFor } from "./stock.ts";
+
 import { ordersKeyFor } from "./orders.ts";
+import { bounded, stockKeyFor } from "./stock.ts";
 
 const FLAT_STOCK_KEY = "stock:remaining";
 const FLAT_ORDERS_KEY = "orders:users";

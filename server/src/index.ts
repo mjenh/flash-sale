@@ -4,16 +4,17 @@
 // WORKER_COLOCATED=true (env flag): starts the write-behind worker in this
 // same process. Convenient for single-container deployments; set to false (or
 // omit) to run the worker as a separate process (src/worker/index.ts).
+
+import { mongoBulkAudit } from "./adapters/mongo/bulk-audit.ts";
 import { bootstrap } from "./bootstrap.ts";
 import { createOrderWorker } from "./worker/order-worker.ts";
-import { mongoBulkAudit } from "./adapters/mongo/bulk-audit.ts";
 
 bootstrap()
   .then(({ app, config, logger, redis, teardown }) => {
     // Co-located worker (optional). The worker is pure async — it never blocks
     // the HTTP event loop. Use WORKER_COLOCATED=true for simple single-process
     // deployments; leave it unset to run the worker as a separate container.
-    const colocated = process.env["WORKER_COLOCATED"] === "true";
+    const colocated = process.env.WORKER_COLOCATED === "true";
     const worker = colocated
       ? createOrderWorker({ redis, bulkAudit: mongoBulkAudit, logger })
       : null;

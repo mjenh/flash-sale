@@ -6,7 +6,7 @@
 // mongoCatalogModelOps itself is exercised only through real Mongo (out of
 // scope for this suite, same as mongoSeedModelOps/mongoAuditModelOps).
 import { describe, expect, it, vi } from "vitest";
-import { createCatalogReader, type CatalogModelOps } from "../src/adapters/mongo/catalog.ts";
+import { type CatalogModelOps, createCatalogReader } from "../src/adapters/mongo/catalog.ts";
 
 function fakeOps(overrides: Partial<CatalogModelOps> = {}) {
   return {

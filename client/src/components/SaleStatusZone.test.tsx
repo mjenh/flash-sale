@@ -1,18 +1,18 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { SaleStatusBody, SaleState } from "../api/sale.ts";
+import type { SaleState, SaleStatusBody } from "../api/sale.ts";
 import type { Channel } from "../hooks/useSaleStatus.ts";
+import { localTime } from "../utils/formatSaleTime.ts";
+import { DEGRADED_LABEL, LIVE_LABEL } from "./LiveSticker.tsx";
 import {
   COLD_LOAD_LINE,
   ENDED_FRAME,
   LIVE_NOTE,
-  SOLD_OUT_FRAME,
   SaleStatusZone,
+  SOLD_OUT_FRAME,
 } from "./SaleStatusZone.tsx";
-import { DEGRADED_LABEL, LIVE_LABEL } from "./LiveSticker.tsx";
 import { LAST_SEEN_LINE } from "./StockNumeral.tsx";
-import { localTime } from "../utils/formatSaleTime.ts";
 
 afterEach(() => {
   cleanup();

@@ -6,9 +6,9 @@
 // Both handlers read req.sale (attached by forSlug() in the sale-resolver
 // middleware) instead of a bootstrap-frozen saleId/window.
 import { Router } from "express";
-import type { SaleStatusService } from "../services/sale-status.ts";
-import type { SaleEventsBroadcaster, SseSink } from "../services/sale-events.ts";
 import { windowFromSale } from "../middleware/sale-resolver.ts";
+import type { SaleEventsBroadcaster, SseSink } from "../services/sale-events.ts";
+import type { SaleStatusService } from "../services/sale-status.ts";
 
 export interface SaleRouterDeps {
   saleStatus: SaleStatusService;

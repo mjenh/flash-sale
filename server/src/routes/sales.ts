@@ -2,14 +2,14 @@
 // v1.0 after the sale resolution middleware attaches req.sale. The /active
 // discovery endpoint is mounted first to avoid :slug shadowing.
 import { Router } from "express";
-import type { SaleStatusService } from "../services/sale-status.ts";
-import type { SaleEventsBroadcaster } from "../services/sale-events.ts";
-import type { OrderService } from "../services/order.ts";
-import type { SaleResolver } from "../middleware/sale-resolver.ts";
 import type { CatalogReader } from "../adapters/mongo/catalog.ts";
 import { RedisUnavailableError, type StockStore } from "../adapters/redis/stock.ts";
-import { createSaleRouter } from "./sale.ts";
+import type { SaleResolver } from "../middleware/sale-resolver.ts";
+import type { OrderService } from "../services/order.ts";
+import type { SaleEventsBroadcaster } from "../services/sale-events.ts";
+import type { SaleStatusService } from "../services/sale-status.ts";
 import { createOrderRouter } from "./order.ts";
+import { createSaleRouter } from "./sale.ts";
 
 export interface SalesRouterDeps {
   saleStatus: SaleStatusService;

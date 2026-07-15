@@ -1,17 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ALREADY,
+  checkOrder,
+  checkOrderUrl,
   EMAIL_REQUIRED,
   INACTIVE,
   NETWORK,
+  orderUrl,
+  placeOrder,
   SOLD_OUT,
   SUCCESS,
   TIMEOUT_MS,
   UNAVAILABLE,
-  checkOrder,
-  checkOrderUrl,
-  orderUrl,
-  placeOrder,
 } from "./order.ts";
 
 const SLUG = "flash-sale";

@@ -5,7 +5,7 @@
 //
 // This middleware lives at the HTTP layer (it imports from express); the
 // lookup ops port is satisfied by the adapter layer and injected at boot.
-import type { Request, Response, NextFunction } from "express";
+import type { NextFunction, Request, Response } from "express";
 import type { Clock } from "../services/clock.ts";
 import type { SaleWindow } from "../services/sale-status.ts";
 

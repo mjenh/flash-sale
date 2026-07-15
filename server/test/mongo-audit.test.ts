@@ -5,7 +5,7 @@
 // recordOrder(saleId, email) takes saleId per call — the recorder only
 // closes over productId.
 import { describe, expect, it, vi } from "vitest";
-import { createOrderRecorder, type AuditModelOps } from "../src/adapters/mongo/audit.ts";
+import { type AuditModelOps, createOrderRecorder } from "../src/adapters/mongo/audit.ts";
 
 const SALE_ID = "sale-1";
 const PRODUCT_ID = "product-1";

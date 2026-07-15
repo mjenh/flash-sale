@@ -49,6 +49,7 @@ export function KeyboardIllustration() {
       {[0, 1, 2, 3].map((row) =>
         xs.map((x, col) => (
           <rect
+            // biome-ignore lint/suspicious/noArrayIndexKey: decorative SVG, keys never reorder
             key={`r${row}c${col}`}
             x={x}
             y={rowY[row]}

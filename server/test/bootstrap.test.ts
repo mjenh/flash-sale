@@ -13,19 +13,20 @@
 // Sale timing and stock come from MongoDB (listAllSales at boot), not from
 // env vars. The "fails fast" test uses an invalid PORT to trigger a
 // ConfigError from loadConfig rather than missing sale env vars.
-import { describe, expect, it, vi } from "vitest";
+
 import { Writable } from "node:stream";
+import { type Logger, pino } from "pino";
 import request from "supertest";
-import { pino, type Logger } from "pino";
-import { bootstrap, type BootstrapOverrides } from "../src/bootstrap.ts";
+import { describe, expect, it, vi } from "vitest";
 import { ConfigError } from "../src/adapters/config.ts";
 import { SALE_SLUG } from "../src/adapters/mongo/seed.ts";
-import { stockKeyFor } from "../src/adapters/redis/stock.ts";
-import { ordersKeyFor } from "../src/adapters/redis/orders.ts";
-import { SALE_EVENTS_PATTERN } from "../src/adapters/redis/events.ts";
 import type { RedisClient } from "../src/adapters/redis/client.ts";
+import { SALE_EVENTS_PATTERN } from "../src/adapters/redis/events.ts";
+import { ordersKeyFor } from "../src/adapters/redis/orders.ts";
+import { stockKeyFor } from "../src/adapters/redis/stock.ts";
+import { type BootstrapOverrides, bootstrap } from "../src/bootstrap.ts";
 import { createFakeMongo, reserveSaleId } from "./helpers/fake-mongo.ts";
-import { START_MS, END_MS, IN_WINDOW } from "./helpers/time-fixtures.ts";
+import { END_MS, IN_WINDOW, } from "./helpers/time-fixtures.ts";
 
 const FLAT_STOCK_KEY = "stock:remaining";
 const FLAT_ORDERS_KEY = "orders:users";

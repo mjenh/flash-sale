@@ -16,14 +16,14 @@
 // the wiring that feeds getStatus() its saleId/window moved.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  armWindowTimers,
   COALESCE_MS,
+  createSaleEventsBroadcaster,
   HEARTBEAT_MS,
   MAX_TIMEOUT_MS,
-  armWindowTimers,
-  createSaleEventsBroadcaster,
 } from "../src/services/sale-events.ts";
 import type { SaleStatusBody, SaleWindow } from "../src/services/sale-status.ts";
-import { START_MS, END_MS, START_ISO, END_ISO } from "./helpers/time-fixtures.ts";
+import { END_ISO, END_MS, START_ISO, START_MS } from "./helpers/time-fixtures.ts";
 
 const SALE_ID = "sale-1";
 const WINDOW: SaleWindow = {

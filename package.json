@@ -14,10 +14,12 @@
     "dev": "concurrently -k -n server,worker,client -c blue,cyan,green \"npm run dev -w server\" \"npm run dev:worker -w server\" \"npm run dev -w client\"",
     "seed": "node db/scripts/seed-db.ts",
     "test": "npm run test --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "stress": "npm run stress -w stress"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.4",
     "concurrently": "^10.0.0"
   }
 }

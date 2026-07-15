@@ -11,15 +11,16 @@
 // Boundary-timer firing runs here on real short-delay timers (window
 // boundaries ~150/400 ms after boot); the full boundary matrix (ceiling
 // chunking, cancel, mid-window) is unit-tested in sale-events.test.ts.
-import { afterEach, describe, expect, it, vi } from "vitest";
+
 import { Writable } from "node:stream";
+import { type Logger, pino } from "pino";
 import request from "supertest";
-import { pino, type Logger } from "pino";
-import { bootstrap, type BootstrapOverrides } from "../src/bootstrap.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SALE_SLUG } from "../src/adapters/mongo/seed.ts";
 import { saleEventsChannel } from "../src/adapters/redis/events.ts";
-import { createFakeRedis, type FakeRedis } from "./helpers/fake-redis.ts";
+import { type BootstrapOverrides, bootstrap } from "../src/bootstrap.ts";
 import { createFakeMongo, reserveSaleId } from "./helpers/fake-mongo.ts";
+import { createFakeRedis, type FakeRedis } from "./helpers/fake-redis.ts";
 import { closeAllSse, frameData, openSse } from "./helpers/sse.ts";
 
 const SALE_START = "2026-07-10T04:00:00Z";

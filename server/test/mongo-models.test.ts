@@ -2,8 +2,9 @@
 // spine's Mongo conventions: seven collections with exact names, timestamps
 // everywhere, the four unique indexes (orders on (saleId, email)), the
 // single v1 order status, and OrderLine defaults.
-import { describe, expect, it } from "vitest";
+
 import type { Model, Schema } from "mongoose";
+import { describe, expect, it } from "vitest";
 import {
   Inventory,
   Order,

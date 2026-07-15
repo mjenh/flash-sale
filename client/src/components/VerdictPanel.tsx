@@ -6,8 +6,8 @@
 // on the close button, Escape, or a backdrop click. As a role="dialog" with
 // aria-modal, the platform announces it on open — so it carries NO aria-live.
 import { useEffect, useRef } from "react";
-import type { SaleState } from "../api/sale.ts";
 import type { Verdict, VerdictKind } from "../api/order.ts";
+import type { SaleState } from "../api/sale.ts";
 import { Panel } from "./Panel.tsx";
 import { ENDED_FRAME, SOLD_OUT_FRAME, UPCOMING_FRAME, upcomingFrame } from "./SaleStatusZone.tsx";
 import "./VerdictPanel.css";
@@ -96,7 +96,7 @@ export function VerdictPanel({
     if (focusOnMount) {
       dialogRef.current?.focus();
     }
-  }, [verdict, focusOnMount]);
+  }, [focusOnMount]);
 
   // Escape closes; Tab is trapped within the dialog so focus never escapes to
   // the dimmed page behind it.
@@ -141,6 +141,7 @@ export function VerdictPanel({
   }, [onClose]);
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: backdrop div uses onMouseDown for drag-aware dismiss; keyboard dismiss is handled by the focusable dialog inside
     <div
       className="verdict-overlay"
       data-testid="verdict-overlay"

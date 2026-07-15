@@ -15,11 +15,13 @@
   background: var(--noon-yellow);
 }
 
+/* biome-ignore lint/style/noDescendingSpecificity: intentional — base styles follow the .stripes override block */
 .status-zone__headline {
   margin: 0 0 var(--sp-stack);
   color: var(--ink);
 }
 
+/* biome-ignore lint/style/noDescendingSpecificity: intentional — base styles follow the .stripes override block */
 .status-zone__frame {
   margin: var(--sp-stack) 0 0;
   color: var(--ink-soft);
@@ -30,6 +32,7 @@
   color: var(--olive-deep);
 }
 
+/* biome-ignore lint/style/noDescendingSpecificity: intentional — base styles follow the .stripes override block */
 .status-zone__unreachable {
   margin: 0;
   color: var(--ink);
@@ -37,6 +40,7 @@
 
 /* "That one's a wrap." runs at headline scale but keeps SENTENCE CASE — the
  * one place the headline role's uppercase is deliberately overridden. */
+/* biome-ignore lint/style/noDescendingSpecificity: intentional — base styles follow the .stripes override block */
 .status-zone__wrap {
   margin: var(--sp-stack) 0 0;
   font-family: var(--font-sans);
@@ -49,6 +53,7 @@
 }
 
 @media (max-width: 1159px) {
+  /* biome-ignore lint/style/noDescendingSpecificity: intentional — base styles follow the .stripes override block */
   .status-zone__wrap {
     font-size: clamp(36px, 6vw, var(--headline-size));
   }

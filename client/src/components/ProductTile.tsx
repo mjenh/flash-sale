@@ -24,11 +24,13 @@ export function ProductTile({ originalPrice, flashSalePrice }: ProductTileProps)
       {hasPrices && (
         <div className="product-tile__prices">
           {originalPrice !== undefined && (
+            // biome-ignore lint/a11y/useAriaPropsSupportedByRole: aria-label on <s> improves screen-reader announcement of strikethrough price
             <s className="product-tile__original" aria-label={`Original price $${originalPrice.toFixed(2)}`}>
               ${originalPrice.toFixed(2)}
             </s>
           )}
           {flashSalePrice !== undefined && (
+            // biome-ignore lint/a11y/useAriaPropsSupportedByRole: aria-label on <strong> improves screen-reader announcement of flash price
             <strong className="product-tile__flash" aria-label={`Flash sale price $${flashSalePrice.toFixed(2)}`}>
               ${flashSalePrice.toFixed(2)}
             </strong>

@@ -1,10 +1,10 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SaleState } from "../api/sale.ts";
 import type { Verdict } from "../api/order.ts";
-import { ALREADY_FRAME, SUCCESS_FRAME, VerdictPanel } from "./VerdictPanel.tsx";
+import type { SaleState } from "../api/sale.ts";
 import { ENDED_FRAME, SOLD_OUT_FRAME, UPCOMING_FRAME } from "./SaleStatusZone.tsx";
+import { ALREADY_FRAME, SUCCESS_FRAME, VerdictPanel } from "./VerdictPanel.tsx";
 
 afterEach(() => {
   cleanup();

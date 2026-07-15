@@ -6,10 +6,10 @@
 // against the adapters (orders.ts, stock.ts, reconcile.ts, events.ts) rather
 // than incidentally through an HTTP round trip.
 import { describe, expect, it } from "vitest";
-import { createOrderStore } from "../src/adapters/redis/orders.ts";
-import { createStockStore } from "../src/adapters/redis/stock.ts";
-import { createReconciler } from "../src/adapters/redis/reconcile.ts";
 import { createEventPublisher, createSaleEventsSubscription } from "../src/adapters/redis/events.ts";
+import { createOrderStore } from "../src/adapters/redis/orders.ts";
+import { createReconciler } from "../src/adapters/redis/reconcile.ts";
+import { createStockStore } from "../src/adapters/redis/stock.ts";
 import { createFakeRedis, orderSetMembers, orderSetSize, stockKeyFor } from "./helpers/fake-redis.ts";
 
 const OPTS = { commandTimeoutMs: 50 };

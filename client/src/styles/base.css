@@ -157,7 +157,9 @@ body {
   *,
   *::before,
   *::after {
+    /* biome-ignore lint/complexity/noImportantStyles: !important required to override inline styles and third-party animations in reduced-motion context */
     animation: none !important;
+    /* biome-ignore lint/complexity/noImportantStyles: !important required to override inline styles and third-party animations in reduced-motion context */
     transition: none !important;
   }
 }

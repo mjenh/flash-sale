@@ -62,13 +62,13 @@ export interface WorkerConfig {
 
 export function loadWorkerConfig(env: Env = process.env): WorkerConfig {
   return {
-    redisUrl: env["REDIS_URL"] ?? "redis://localhost:6379",
-    mongodbUri: env["MONGODB_URI"] ?? "mongodb://localhost:27017/flash-sale",
+    redisUrl: env.REDIS_URL ?? "redis://localhost:6379",
+    mongodbUri: env.MONGODB_URI ?? "mongodb://localhost:27017/flash-sale",
     redisConnectTimeoutMs: positiveInt(env, "REDIS_CONNECT_TIMEOUT_MS", 2000),
     redisCommandTimeoutMs: positiveInt(env, "REDIS_COMMAND_TIMEOUT_MS", 1000),
     redisReconnectMaxMs: positiveInt(env, "REDIS_RECONNECT_MAX_MS", 2000),
-    workerConsumerId: env["WORKER_CONSUMER_ID"]?.trim() || `worker-${hostname()}`,
-    workerGroup: env["WORKER_GROUP"]?.trim() || "workers",
+    workerConsumerId: env.WORKER_CONSUMER_ID?.trim() || `worker-${hostname()}`,
+    workerGroup: env.WORKER_GROUP?.trim() || "workers",
   };
 }
 

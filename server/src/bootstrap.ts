@@ -5,39 +5,40 @@
 //   warm/cold reconcile -> sale-events init (publisher + broadcaster +
 //   subscriber on a dedicated connection + window timers) -> app.
 // Teardown unwinds in reverse.
-import { pino, type Logger } from "pino";
+
 import type { Express } from "express";
-import { ConfigError, loadConfig, type AppConfig } from "./adapters/config.ts";
-import { createRedisClient, type RedisClient } from "./adapters/redis/client.ts";
-import { createStockStore } from "./adapters/redis/stock.ts";
-import { createOrderStore } from "./adapters/redis/orders.ts";
-import { createReconciler } from "./adapters/redis/reconcile.ts";
-import { createFlatKeyMigrator } from "./adapters/redis/migrate.ts";
-import { createEventPublisher, createSaleEventsSubscription } from "./adapters/redis/events.ts";
+import { type Logger, pino } from "pino";
+import { type AppConfig, ConfigError, loadConfig } from "./adapters/config.ts";
+import { type AuditModelOps, mongoAuditModelOps } from "./adapters/mongo/audit.ts";
+import { type CatalogModelOps, createCatalogReader, mongoCatalogModelOps } from "./adapters/mongo/catalog.ts";
 import { connectMongo, disconnectMongo } from "./adapters/mongo/client.ts";
-import { createOrderRecorder, mongoAuditModelOps, type AuditModelOps } from "./adapters/mongo/audit.ts";
-import { createOrderQueueProducer, createQueueAuditAdapter } from "./adapters/redis/order-queue.ts";
 import {
   mongoSaleBootstrapOps,
   type SaleBootstrapOps,
 } from "./adapters/mongo/sale-bootstrap.ts";
-import { createCatalogReader, mongoCatalogModelOps, type CatalogModelOps } from "./adapters/mongo/catalog.ts";
 import { noopPaymentProvider } from "./adapters/payment/noop.ts";
-import { createSaleStatusService, type SaleWindow } from "./services/sale-status.ts";
-import { armWindowTimers, createSaleEventsBroadcaster } from "./services/sale-events.ts";
-import { createOrderService, type OrderAttemptPort, type OrderEventsPort } from "./services/order.ts";
-import type { PaymentProvider } from "./services/payment.ts";
-import { systemClock, type Clock } from "./services/clock.ts";
+import { createRedisClient, type RedisClient } from "./adapters/redis/client.ts";
+import { createEventPublisher, createSaleEventsSubscription } from "./adapters/redis/events.ts";
+import { createFlatKeyMigrator } from "./adapters/redis/migrate.ts";
+import { createOrderQueueProducer, createQueueAuditAdapter } from "./adapters/redis/order-queue.ts";
+import { createOrderStore } from "./adapters/redis/orders.ts";
+import { createReconciler } from "./adapters/redis/reconcile.ts";
+import { createStockStore } from "./adapters/redis/stock.ts";
+import { createApp } from "./app.ts";
 import {
   createSaleResolver,
   isSaleActiveAt,
-  selectActiveSale,
-  windowFromSale,
   type SaleLookupOps,
   type SaleSummary,
+  selectActiveSale,
+  windowFromSale,
 } from "./middleware/sale-resolver.ts";
 import { createApiRouter } from "./routes/index.ts";
-import { createApp } from "./app.ts";
+import { type Clock, systemClock } from "./services/clock.ts";
+import { createOrderService, type OrderAttemptPort, type OrderEventsPort } from "./services/order.ts";
+import type { PaymentProvider } from "./services/payment.ts";
+import { armWindowTimers, createSaleEventsBroadcaster } from "./services/sale-events.ts";
+import { createSaleStatusService, type SaleWindow } from "./services/sale-status.ts";
 
 export interface BootstrapOverrides {
   env?: Record<string, string | undefined>;

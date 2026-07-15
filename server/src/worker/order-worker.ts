@@ -12,12 +12,12 @@
 // Graceful shutdown: stop() waits for the current batch to finish before
 // the process exits, so SIGTERM never tears mid-write.
 import type { Logger } from "pino";
+import type { BulkAuditPort } from "../adapters/mongo/bulk-audit.ts";
 import type { RedisClient } from "../adapters/redis/client.ts";
 import {
   createOrderQueueConsumer,
   type QueueMessage,
 } from "../adapters/redis/order-queue.ts";
-import type { BulkAuditPort } from "../adapters/mongo/bulk-audit.ts";
 
 export interface WorkerOptions {
   redis: RedisClient;

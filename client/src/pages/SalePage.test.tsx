@@ -6,12 +6,12 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PROCESSING_LINE, SalePage, upcomingButtonReason } from "./SalePage.tsx";
+import type { SaleState } from "../api/sale.ts";
 import { HOUSE_RULES } from "../components/MarqueeBand.tsx";
 import { ENDED_FRAME, SOLD_OUT_FRAME } from "../components/SaleStatusZone.tsx";
 import { SUCCESS_FRAME } from "../components/VerdictPanel.tsx";
-import type { SaleState } from "../api/sale.ts";
 import { FakeEventSource, installFakeEventSource } from "../test/fake-event-source.ts";
+import { PROCESSING_LINE, SalePage, upcomingButtonReason } from "./SalePage.tsx";
 
 const SLUG = "flash-sale";
 const STATUS_URL = `/api/sales/${SLUG}/status`;
@@ -360,6 +360,7 @@ describe("the identifier field is an email input", () => {
       expect(screen.getByTestId("verdict-string")).toBeInTheDocument();
     });
     const post = fetchSpy.mock.calls.find((c) => (c[1] as RequestInit | undefined)?.method === "POST");
+    // biome-ignore lint/correctness/noUnsafeOptionalChaining: post is asserted non-null by the test flow above
     expect(JSON.parse((post?.[1] as RequestInit).body as string)).toEqual({
       email: "priya@example.com",
     });

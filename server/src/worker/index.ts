@@ -3,9 +3,9 @@
 // Teardown (SIGTERM/SIGINT): finish current batch -> disconnect MongoDB -> close Redis.
 import { pino } from "pino";
 import { loadWorkerConfig } from "../adapters/config.ts";
-import { createRedisClient } from "../adapters/redis/client.ts";
-import { connectMongo, disconnectMongo } from "../adapters/mongo/client.ts";
 import { mongoBulkAudit } from "../adapters/mongo/bulk-audit.ts";
+import { connectMongo, disconnectMongo } from "../adapters/mongo/client.ts";
+import { createRedisClient } from "../adapters/redis/client.ts";
 import { createOrderWorker } from "./order-worker.ts";
 
 const logger = pino();

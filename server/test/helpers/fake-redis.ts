@@ -21,9 +21,9 @@
 // KEYS[1] = stock:{saleId}:remaining, KEYS[2] = orders:{saleId}:users,
 // ARGV[1] = email — mirrors the updated order.lua contract (finding #1).
 import { createHash } from "node:crypto";
+import type { RedisClient } from "../../src/adapters/redis/client.ts";
 import { ORDER_SCRIPT_SOURCE, ordersKeyFor } from "../../src/adapters/redis/orders.ts";
 import { stockKeyFor } from "../../src/adapters/redis/stock.ts";
-import type { RedisClient } from "../../src/adapters/redis/client.ts";
 
 export interface FakeRedis {
   kv: Map<string, string>;
@@ -83,7 +83,7 @@ export function createFakeRedis(initial?: { stock?: string; saleId?: string }): 
   /** Minimal Redis-compatible glob match (only * is used in practice). */
   function globMatch(pattern: string, channel: string): boolean {
     const regex = new RegExp(
-      "^" + pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$",
+      `^${pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`,
     );
     return regex.test(channel);
   }
@@ -230,7 +230,7 @@ export function createFakeRedis(initial?: { stock?: string; saleId?: string }): 
       }
       return runOrderScript(options.keys, options.arguments);
     },
-    xAdd: async (key: string, id: string, fields: Record<string, string>, _options?: unknown) => {
+    xAdd: async (key: string, _id: string, fields: Record<string, string>, _options?: unknown) => {
       assertUp();
       const entries = streams.get(key) ?? [];
       const entryId = `${Date.now()}-${entries.length}`;
@@ -325,4 +325,4 @@ export function orderSetMembers(fake: FakeRedis, saleId: string): string[] {
 
 /** Re-exported so endpoint tests can build the exact sale-scoped key names
  *  for direct kv/sets assertions without duplicating the naming scheme. */
-export { stockKeyFor, ordersKeyFor };
+export { ordersKeyFor, stockKeyFor };

@@ -1,8 +1,8 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeEventSource, installFakeEventSource } from "../test/fake-event-source.ts";
-import { POLL_MS, WATCHDOG_SILENCE_MS, useSaleStatus } from "./useSaleStatus.ts";
-import { START_ISO, END_ISO } from "../test/time-fixtures.ts";
+import { END_ISO, START_ISO } from "../test/time-fixtures.ts";
+import { POLL_MS, useSaleStatus, WATCHDOG_SILENCE_MS } from "./useSaleStatus.ts";
 
 const SLUG = "flash-sale";
 

@@ -2,17 +2,18 @@
 // 404 on unknown slug, alias fallback to active sale, and the Express
 // request augmentation. Tests call the middleware directly with fake
 // req/res/next objects — no bootstrap, no Express app.
+
+import type { Request, Response } from "express";
 import { describe, expect, it, vi } from "vitest";
 import {
   createSaleResolver,
   isSaleActiveAt,
-  selectActiveSale,
-  windowFromSale,
   type SaleLookupOps,
   type SaleSummary,
+  selectActiveSale,
+  windowFromSale,
 } from "../src/middleware/sale-resolver.ts";
-import type { Request, Response, NextFunction } from "express";
-import { START_MS, END_MS, START_ISO, END_ISO } from "./helpers/time-fixtures.ts";
+import { END_ISO, END_MS, START_ISO, START_MS } from "./helpers/time-fixtures.ts";
 
 const FLASH_SALE: SaleSummary = {
   _id: "sale-1",

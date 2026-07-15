@@ -10,8 +10,9 @@
 // the order service's SaleContext) rather than a bootstrap-frozen saleId —
 // createOrderRecorder closes over productId only, since v1.1 ships exactly
 // one product per sale and there is no per-request product resolution yet.
-import { Order, OrderLine, User } from "./models.ts";
+
 import type { OrderAuditPort } from "../../services/order.ts";
+import { Order, OrderLine, User } from "./models.ts";
 
 /** Narrow model surface — one mongoose query per op. */
 export interface AuditModelOps {

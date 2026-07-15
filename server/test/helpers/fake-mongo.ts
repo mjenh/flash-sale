@@ -14,16 +14,16 @@
 // inventories honor $setOnInsert semantics (never overwrites);
 // listConfirmedOrderEmails filters by saleId AND status like the real query.
 import type { AuditModelOps } from "../../src/adapters/mongo/audit.ts";
-import type { SaleBootstrapOps } from "../../src/adapters/mongo/sale-bootstrap.ts";
 import type { CatalogModelOps } from "../../src/adapters/mongo/catalog.ts";
+import type { SaleBootstrapOps } from "../../src/adapters/mongo/sale-bootstrap.ts";
 import {
-  SALE_NAME,
-  PRODUCT_SKU,
+  PRODUCT_FLASH_SALE_PRICE,
   PRODUCT_NAME,
   PRODUCT_ORIGINAL_PRICE,
-  PRODUCT_FLASH_SALE_PRICE,
+  PRODUCT_SKU,
+  SALE_NAME,
 } from "../../src/adapters/mongo/seed.ts";
-import { START_MS, END_MS } from "./time-fixtures.ts";
+import { END_MS, START_MS } from "./time-fixtures.ts";
 
 interface FakeOrderDoc {
   id: string;
@@ -67,6 +67,7 @@ export interface FakeMongo {
 
 export function createFakeMongo(): FakeMongo {
   let nextId = 0;
+  // biome-ignore lint/suspicious/noAssignInExpressions: compact counter idiom; no side-effects beyond the increment
   const id = (prefix: string): string => `${prefix}-${(nextId += 1)}`;
 
   const fake: FakeMongo = {

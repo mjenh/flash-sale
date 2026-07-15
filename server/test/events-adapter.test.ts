@@ -6,10 +6,10 @@
 // teardown.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  saleEventsChannel,
   createEventPublisher,
   createSaleEventsSubscription,
   SALE_EVENTS_PATTERN,
+  saleEventsChannel,
 } from "../src/adapters/redis/events.ts";
 import { RedisUnavailableError } from "../src/adapters/redis/stock.ts";
 import type { SaleEventType } from "../src/services/sale-events.ts";

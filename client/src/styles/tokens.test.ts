@@ -6,9 +6,9 @@
 //
 // `?raw` imports keep this a Vite-native test — no node:fs, no @types/node.
 import { describe, expect, it } from "vitest";
-import tokensCss from "./tokens.css?raw";
-import baseCss from "./base.css?raw";
 import marqueeCss from "../components/MarqueeBand.css?raw";
+import baseCss from "./base.css?raw";
+import tokensCss from "./tokens.css?raw";
 
 /** Comments are prose — they may name what the system forbids ("true #000
  *  never appears"). The rules are what we assert against. */

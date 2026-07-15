@@ -10,7 +10,7 @@
 // and threads it into every `placeOrder`/`checkOrder` call so the wire hits
 // `/api/sales/${slug}/order[...]` instead of the v1.0 `/api/order[...]` paths.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ALREADY, EMAIL_REQUIRED, checkOrder, placeOrder, type Verdict } from "../api/order.ts";
+import { ALREADY, checkOrder, EMAIL_REQUIRED, placeOrder, type Verdict } from "../api/order.ts";
 
 export type Phase = "idle" | "processing";
 

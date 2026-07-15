@@ -4,8 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createStockStore,
   RedisUnavailableError,
-  stockKeyFor,
   type StockCommands,
+  stockKeyFor,
 } from "../src/adapters/redis/stock.ts";
 
 const SALE_ID = "sale-abc123";

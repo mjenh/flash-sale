@@ -11,8 +11,8 @@
 // All three bulkWrites use ordered: false so one duplicate-key skip does not
 // abort the rest of the batch.
 import { Types } from "mongoose";
-import { User, Order, OrderLine } from "./models.ts";
 import type { QueueOrderPayload } from "../redis/order-queue.ts";
+import { Order, OrderLine, User } from "./models.ts";
 
 export interface BulkAuditPort {
   /** Persist a batch of accepted orders to MongoDB idempotently. */

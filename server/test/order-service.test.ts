@@ -13,7 +13,7 @@
 // asserted against the exact saleId passed through.
 import { describe, expect, it, vi } from "vitest";
 import { createOrderService, type OrderAttemptPort, type SaleContext } from "../src/services/order.ts";
-import { START_MS, END_MS, WINDOW } from "./helpers/time-fixtures.ts";
+import { END_MS, START_MS, WINDOW } from "./helpers/time-fixtures.ts";
 
 const SALE_ID = "sale-1";
 const startMs = START_MS;

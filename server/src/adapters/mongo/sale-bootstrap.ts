@@ -13,7 +13,7 @@
 // — adapter layer must not depend on the HTTP middleware layer. BootstrapSaleDoc
 // is structurally identical; bootstrap.ts passes it to selectActiveSale() which
 // accepts SaleSummary[] by structural subtyping.
-import { Order, Product, Sale, SaleProduct } from "./models.ts";
+import { Order, Sale, SaleProduct } from "./models.ts";
 
 /** Subset of a Sale document needed by the boot sequence. Structurally
  *  identical to SaleSummary (middleware/sale-resolver.ts), duplicated here

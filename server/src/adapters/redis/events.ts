@@ -10,8 +10,9 @@
 // The channel is namespaced by saleId so SSE subscribers for a given sale
 // only ever hear that sale's domain events. The v1.0 flat `sale:events`
 // channel is no longer published to or subscribed on.
-import { bounded, RedisUnavailableError } from "./stock.ts";
+
 import type { SaleEventType } from "../../services/sale-events.ts";
+import { bounded, RedisUnavailableError } from "./stock.ts";
 
 export function saleEventsChannel(saleId: string): string {
   return `sale:${saleId}:events`;
@@ -62,7 +63,7 @@ export interface SubscriberCommands {
   pUnsubscribe(pattern?: string): Promise<unknown>;
   on(event: "error", listener: (err: Error) => void): unknown;
   destroy(): void;
-  close(): Promise<unknown> | void;
+  close(): Promise<unknown> | undefined;
   isOpen: boolean;
 }
 

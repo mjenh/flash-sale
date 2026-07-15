@@ -200,6 +200,7 @@ write-behind worker, and the Vite dev client (`:5173`). `npm run seed` uses
 Gates:
 
 ```bash
+npm run lint                     # biome check across server + client
 npm test                         # vitest across workspaces
 npm run typecheck                # tsc --noEmit (strict)
 ```
@@ -435,8 +436,9 @@ latency histograms), distributed tracing (OpenTelemetry), and alerting.
 Currently the system logs one pino line per request.
 
 **CI pipeline.** Automated gates: lint, typecheck, unit tests, integration
-tests, and the stress harness on every push. Currently all gates are manual
-(`npm test`, `npm run typecheck`, `make stress`).
+tests, and the stress harness on every push. Lint (`npm run lint` / `make lint`)
+and typecheck (`npm run typecheck`) are wired; test and stress remain manual
+(`npm test`, `make stress`).
 
 **Multi-node scale-out.** Redis Cluster or Redlock for write distribution across
 nodes. The single-writer Lua script is the correct design for one primary; at

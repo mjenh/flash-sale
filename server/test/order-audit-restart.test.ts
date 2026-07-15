@@ -7,23 +7,23 @@
 // (idempotent) saleId up front from the shared mongo — reused across boots
 // so the sale-scoped keys stay identical across restarts.
 import { Writable } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
+import { type Logger, pino } from "pino";
 import request from "supertest";
-import { pino, type Logger } from "pino";
-import { bootstrap, type BootstrapOverrides } from "../src/bootstrap.ts";
-import { SALE_SLUG } from "../src/adapters/mongo/seed.ts";
+import { describe, expect, it, vi } from "vitest";
 import { createOrderRecorder } from "../src/adapters/mongo/audit.ts";
+import { SALE_SLUG } from "../src/adapters/mongo/seed.ts";
+import { type BootstrapOverrides, bootstrap } from "../src/bootstrap.ts";
 import type { PaymentProvider } from "../src/services/payment.ts";
+import { createFakeMongo, type FakeMongo, reserveSaleId } from "./helpers/fake-mongo.ts";
 import {
   createFakeRedis,
+  type FakeRedis,
   orderSetMembers,
   orderSetSize,
-  stockKeyFor,
   ordersKeyFor,
-  type FakeRedis,
+  stockKeyFor,
 } from "./helpers/fake-redis.ts";
-import { createFakeMongo, reserveSaleId, type FakeMongo } from "./helpers/fake-mongo.ts";
-import { START_MS, IN_WINDOW } from "./helpers/time-fixtures.ts";
+import { IN_WINDOW, START_MS } from "./helpers/time-fixtures.ts";
 
 const startMs = START_MS;
 

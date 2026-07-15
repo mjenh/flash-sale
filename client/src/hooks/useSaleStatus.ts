@@ -23,11 +23,11 @@
 // (SaleStatusZone, StatusChip, etc.) keeps its current meaning.
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  SaleNotFoundError,
   fetchSaleStatus,
   parseSaleStatus,
-  saleEventsUrl,
+  SaleNotFoundError,
   type SaleStatusBody,
+  saleEventsUrl,
 } from "../api/sale.ts";
 
 export type Channel = "connecting" | "live" | "degraded" | "offline";

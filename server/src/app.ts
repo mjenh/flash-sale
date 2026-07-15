@@ -8,8 +8,8 @@ import express, {
   type Router,
 } from "express";
 import helmet from "helmet";
-import { pinoHttp } from "pino-http";
 import type { Logger } from "pino";
+import { pinoHttp } from "pino-http";
 
 export interface AppDeps {
   logger: Logger;

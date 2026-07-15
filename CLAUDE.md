@@ -9,6 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm run dev              # concurrent server (:3000) + worker + Vite client (:5173)
 npm test                 # vitest run across all workspaces
 npm run typecheck        # tsc --noEmit in server + client
+npm run lint             # biome check across server + client
 
 # Per-workspace
 npm run dev -w server
@@ -17,6 +18,8 @@ npm run test -w server
 npm run test:watch -w server
 npm run dev -w client
 npm run test -w client
+npm run lint -w server
+npm run lint -w client
 
 # Single test file
 npx vitest run server/test/order-service.test.ts
@@ -30,7 +33,7 @@ make stress              # fairness proof (stop → reset → start → k6 → v
 make clean               # docker compose down -v --rmi local
 ```
 
-No lint step is configured in this project.
+Linter: Biome (`npm run lint`). Run before committing. Violations block CI.
 
 ## Architecture
 

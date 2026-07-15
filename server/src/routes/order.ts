@@ -5,9 +5,9 @@
 // Both handlers read req.sale (attached by forSlug() in the sale-resolver
 // middleware) and pass its saleId/window through to the order service on
 // every call, instead of a bootstrap-frozen saleId baked into the deps.
-import { Router, type Request, type Response } from "express";
-import type { OrderService } from "../services/order.ts";
+import { type Request, type Response, Router } from "express";
 import { windowFromSale } from "../middleware/sale-resolver.ts";
+import type { OrderService } from "../services/order.ts";
 
 export interface OrderRouterDeps {
   orderService: OrderService;

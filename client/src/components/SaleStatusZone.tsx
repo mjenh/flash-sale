@@ -10,11 +10,11 @@ import { useEffect, useRef, useState } from "react";
 import type { SaleStatusBody } from "../api/sale.ts";
 import type { Channel } from "../hooks/useSaleStatus.ts";
 import { localTime } from "../utils/formatSaleTime.ts";
+import { Countdown } from "./Countdown.tsx";
+import { LiveSticker } from "./LiveSticker.tsx";
 import { Panel } from "./Panel.tsx";
 import { StatusChip, statusString } from "./StatusChip.tsx";
-import { LiveSticker } from "./LiveSticker.tsx";
 import { StockNumeral } from "./StockNumeral.tsx";
-import { Countdown } from "./Countdown.tsx";
 import "./SaleStatusZone.css";
 
 export const COLD_LOAD_LINE = "Can't reach the sale — retrying…";

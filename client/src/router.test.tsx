@@ -4,12 +4,12 @@
 // without touching the real browser history.
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
-import { routeObjects } from "./router.tsx";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NOT_FOUND_HEADLINE } from "./pages/NotFoundPage.tsx";
-import { SALE_NOT_FOUND_HEADLINE } from "./pages/SalePage.tsx";
 import { NO_ACTIVE_SALE_MESSAGE } from "./pages/RootRedirect.tsx";
+import { SALE_NOT_FOUND_HEADLINE } from "./pages/SalePage.tsx";
+import { routeObjects } from "./router.tsx";
 import { FakeEventSource, installFakeEventSource } from "./test/fake-event-source.ts";
 
 const START = "2026-07-10T04:00:00.000Z";

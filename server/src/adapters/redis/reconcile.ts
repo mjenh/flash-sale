@@ -12,8 +12,9 @@
 //
 // Keys are namespaced by saleId. The v1.0 flat keys are no longer written or
 // read here — the flat-key migrator (migrate.ts) handles any surviving flat-key data.
-import { bounded, stockKeyFor } from "./stock.ts";
+
 import { ordersKeyFor } from "./orders.ts";
+import { bounded, stockKeyFor } from "./stock.ts";
 
 /** Narrow command surface — structurally satisfied by node-redis RedisClientType. */
 export interface ReconcileCommands {

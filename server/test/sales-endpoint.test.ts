@@ -3,21 +3,22 @@
 // bootstrap() with the same in-memory fakes as the v1.0 endpoint tests.
 // Every test verifies that the slug-scoped routes produce identical results
 // to the v1.0 alias routes.
-import { describe, expect, it, vi } from "vitest";
-import request from "supertest";
+
 import { pino } from "pino";
-import { bootstrap, type BootstrapOverrides } from "../src/bootstrap.ts";
-import type { SaleLookupOps } from "../src/middleware/sale-resolver.ts";
+import request from "supertest";
+import { describe, expect, it, vi } from "vitest";
 import {
-  PRODUCT_NAME,
-  PRODUCT_SKU,
-  PRODUCT_ORIGINAL_PRICE,
   PRODUCT_FLASH_SALE_PRICE,
+  PRODUCT_NAME,
+  PRODUCT_ORIGINAL_PRICE,
+  PRODUCT_SKU,
   SALE_NAME,
   SALE_SLUG,
 } from "../src/adapters/mongo/seed.ts";
-import { createFakeRedis, stockKeyFor, type FakeRedis } from "./helpers/fake-redis.ts";
+import { type BootstrapOverrides, bootstrap } from "../src/bootstrap.ts";
+import type { SaleLookupOps } from "../src/middleware/sale-resolver.ts";
 import { addCatalogProduct, createFakeMongo, reserveSaleId } from "./helpers/fake-mongo.ts";
+import { createFakeRedis, type FakeRedis, stockKeyFor } from "./helpers/fake-redis.ts";
 
 const SALE_START = "2026-07-10T04:00:00Z";
 const SALE_END = "2026-07-10T05:00:00Z";

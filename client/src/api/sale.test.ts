@@ -1,15 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { END_ISO, START_ISO } from "../test/time-fixtures.ts";
 import {
-  SaleNotFoundError,
   fetchSaleDetails,
   fetchSaleStatus,
   parseSaleDetails,
   parseSaleStatus,
+  SaleNotFoundError,
   saleDetailsUrl,
   saleEventsUrl,
   saleStatusUrl,
 } from "./sale.ts";
-import { START_ISO, END_ISO } from "../test/time-fixtures.ts";
 
 const SLUG = "flash-sale";
 

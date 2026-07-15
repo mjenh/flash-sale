@@ -5,9 +5,9 @@
 //
 // Keys are namespaced by saleId.
 import { describe, expect, it, vi } from "vitest";
+import { ordersKeyFor } from "../src/adapters/redis/orders.ts";
 import { createReconciler, type ReconcileCommands } from "../src/adapters/redis/reconcile.ts";
 import { RedisUnavailableError, stockKeyFor } from "../src/adapters/redis/stock.ts";
-import { ordersKeyFor } from "../src/adapters/redis/orders.ts";
 
 const SALE_ID = "sale-abc123";
 

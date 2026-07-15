@@ -11,8 +11,8 @@
 // Key invariant: messages are ACKed ONLY after MongoDB confirms the write.
 // A worker crash leaves them in the PEL so the next restart re-delivers them.
 import { randomUUID } from "node:crypto";
-import type { RedisClient } from "./client.ts";
 import type { OrderAuditPort } from "../../services/order.ts";
+import type { RedisClient } from "./client.ts";
 
 const QUEUE_STREAM_KEY = "queue:orders";
 const WORKER_GROUP = "workers";
@@ -119,7 +119,7 @@ function parseStreamResult(result: Awaited<ReturnType<RedisClient["xReadGroup"]>
   const messages: QueueMessage[] = [];
   for (const stream of result) {
     for (const entry of stream.messages) {
-      const raw = entry.message["data"];
+      const raw = entry.message.data;
       if (typeof raw !== "string") {
         continue;
       }

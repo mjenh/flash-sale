@@ -1,12 +1,13 @@
 // Supertest with an injected router — no per-route try/catch anywhere;
 // Express 5 async propagation.
-import { describe, expect, it } from "vitest";
+
 import { Writable } from "node:stream";
+import { type Request, type Response, Router } from "express";
+import { type Logger, pino } from "pino";
 import request from "supertest";
-import { Router, type Request, type Response } from "express";
-import { pino, type Logger } from "pino";
-import { createApp } from "../src/app.ts";
+import { describe, expect, it } from "vitest";
 import { RedisUnavailableError } from "../src/adapters/redis/stock.ts";
+import { createApp } from "../src/app.ts";
 
 function captureLogger(): { lines: string[]; logger: Logger } {
   const lines: string[] = [];

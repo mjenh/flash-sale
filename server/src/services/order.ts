@@ -16,8 +16,8 @@
 // are saleId-parameterized to match the saleId-scoped adapter signatures in
 // orders.ts and events.ts, so bootstrap can wire them with zero closures.
 import type { Clock } from "./clock.ts";
-import type { SaleWindow } from "./sale-status.ts";
 import type { PaymentProvider } from "./payment.ts";
+import type { SaleWindow } from "./sale-status.ts";
 
 /** The resolved sale identity + window for one attempt() call — sourced from
  *  req.sale at the route layer. */

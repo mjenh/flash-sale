@@ -8,9 +8,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createOrderStore,
-  ordersKeyFor,
   ORDER_SCRIPT_SOURCE,
   type OrderCommands,
+  ordersKeyFor,
 } from "../src/adapters/redis/orders.ts";
 import { RedisUnavailableError, stockKeyFor } from "../src/adapters/redis/stock.ts";
 

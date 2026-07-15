@@ -3,8 +3,8 @@
 // fresh v1.1 install (no flat keys — no-op).
 import { describe, expect, it, vi } from "vitest";
 import { createFlatKeyMigrator, type MigrateCommands, type MigrateLogger } from "../src/adapters/redis/migrate.ts";
-import { stockKeyFor } from "../src/adapters/redis/stock.ts";
 import { ordersKeyFor } from "../src/adapters/redis/orders.ts";
+import { stockKeyFor } from "../src/adapters/redis/stock.ts";
 
 const SALE_ID = "sale-abc123";
 const SLUG = "flash-sale";

@@ -14,6 +14,8 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { localTime } from "../utils/formatSaleTime.ts";
 import "./SalePage.css";
+import { fetchSaleDetails, type SaleDetails, type SaleStatusBody } from "../api/sale.ts";
+import { KeyboardIllustration } from "../components/KeyboardIllustration.tsx";
 import { MarqueeBand } from "../components/MarqueeBand.tsx";
 import { Masthead } from "../components/Masthead.tsx";
 import { Panel } from "../components/Panel.tsx";
@@ -21,16 +23,14 @@ import { ProductTile } from "../components/ProductTile.tsx";
 import { RulesChips } from "../components/RulesChips.tsx";
 import {
   ENDED_FRAME,
-  SOLD_OUT_FRAME,
   SaleStatusZone,
+  SOLD_OUT_FRAME,
 } from "../components/SaleStatusZone.tsx";
 import { VerdictPanel } from "../components/VerdictPanel.tsx";
-import { useSaleStatus } from "../hooks/useSaleStatus.ts";
-import { useOrder } from "../hooks/useOrder.ts";
 import { useEmailField } from "../hooks/useEmailField.ts";
-import { fetchSaleDetails, type SaleDetails, type SaleStatusBody } from "../api/sale.ts";
+import { useOrder } from "../hooks/useOrder.ts";
+import { useSaleStatus } from "../hooks/useSaleStatus.ts";
 import { NotFoundPage } from "./NotFoundPage.tsx";
-import { KeyboardIllustration } from "../components/KeyboardIllustration.tsx";
 import "../components/KeyboardIllustration.css";
 
 /** Dynamic — returns the disabled reason for the Buy Now button during the upcoming window. */

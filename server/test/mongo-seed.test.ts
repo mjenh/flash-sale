@@ -8,15 +8,15 @@
 // data were in a real DB.
 import { describe, expect, it } from "vitest";
 import {
-  PRODUCT_NAME,
-  PRODUCT_SKU,
-  PRODUCT_ORIGINAL_PRICE,
   PRODUCT_FLASH_SALE_PRICE,
+  PRODUCT_NAME,
+  PRODUCT_ORIGINAL_PRICE,
+  PRODUCT_SKU,
   SALE_NAME,
   SALE_SLUG,
 } from "../src/adapters/mongo/seed.ts";
 import { createFakeMongo, reserveSaleId } from "./helpers/fake-mongo.ts";
-import { START_MS, END_MS } from "./helpers/time-fixtures.ts";
+import { END_MS, START_MS } from "./helpers/time-fixtures.ts";
 
 describe("seed.ts constants (exported for test fixtures)", () => {
   it("product and sale identity constants have the expected values", () => {

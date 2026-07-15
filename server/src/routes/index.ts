@@ -2,12 +2,12 @@
 // resolution middleware attaches req.sale to every request before
 // downstream handlers run.
 import { Router } from "express";
-import type { SaleStatusService } from "../services/sale-status.ts";
-import type { SaleEventsBroadcaster } from "../services/sale-events.ts";
-import type { OrderService } from "../services/order.ts";
-import type { SaleResolver } from "../middleware/sale-resolver.ts";
 import type { CatalogReader } from "../adapters/mongo/catalog.ts";
 import type { StockStore } from "../adapters/redis/stock.ts";
+import type { SaleResolver } from "../middleware/sale-resolver.ts";
+import type { OrderService } from "../services/order.ts";
+import type { SaleEventsBroadcaster } from "../services/sale-events.ts";
+import type { SaleStatusService } from "../services/sale-status.ts";
 import { createSalesRouter } from "./sales.ts";
 
 export interface ApiRouterDeps {

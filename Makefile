@@ -1,4 +1,4 @@
-.PHONY: install dev up-stores seed test typecheck build deploy up down restart logs worker-logs ps stress clean
+.PHONY: install dev up-stores seed test typecheck lint build deploy up down restart logs worker-logs ps stress clean
 
 COMPOSE := docker compose
 
@@ -33,6 +33,9 @@ test: ## vitest across all workspaces
 
 typecheck: ## tsc --noEmit in server and client
 	npm run typecheck
+
+lint: ## biome check across server + client
+	npm run lint
 
 ## ---- Docker stack ----
 
