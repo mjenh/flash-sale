@@ -13,16 +13,12 @@
 // events.publish) are asserted against the exact saleId passed through.
 import { describe, expect, it, vi } from "vitest";
 import { createOrderService, type OrderAttemptPort, type SaleContext } from "../src/services/order.ts";
+import { START_MS, END_MS, WINDOW } from "./helpers/time-fixtures.ts";
 
 const SALE_ID = "sale-1";
-const startMs = Date.parse("2026-07-10T04:00:00Z");
-const endMs = Date.parse("2026-07-10T05:00:00Z");
-const window = {
-  startMs,
-  endMs,
-  startIso: "2026-07-10T04:00:00.000Z",
-  endIso: "2026-07-10T05:00:00.000Z",
-};
+const startMs = START_MS;
+const endMs = END_MS;
+const window = WINDOW;
 const ctx: SaleContext = { saleId: SALE_ID, window };
 
 /** Drain the microtask/immediate queue so fire-and-forget effects settle. */
@@ -226,6 +222,24 @@ describe("order service — publishes on accept", () => {
     });
     expect(await service.attempt(ctx, "last@x.com")).toEqual({ outcome: "created", remaining: 0 });
     await drain();
+    expect(events.publish.mock.calls).toEqual([
+      ["order.accepted", SALE_ID],
+      ["sale.sold_out", SALE_ID],
+    ]);
+  });
+
+  it("Scenario D: stock exactly 1 → first buyer succeeds AND triggers sale.sold_out (remaining === 0)", async () => {
+    // The draining request is the most critical happy-path edge case: the
+    // single unit remaining is claimed, remaining drops to 0, and the
+    // sold_out event fires exactly once — no more, no less.
+    const { events, service } = build(startMs + 1000, {
+      port: { attempt: vi.fn(async () => ({ verdict: "OK" as const, remaining: 0 })) },
+    });
+
+    const result = await service.attempt(ctx, "last-buyer@x.com");
+    await drain();
+
+    expect(result).toEqual({ outcome: "created", remaining: 0 });
     expect(events.publish.mock.calls).toEqual([
       ["order.accepted", SALE_ID],
       ["sale.sold_out", SALE_ID],

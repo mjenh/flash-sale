@@ -9,11 +9,12 @@ import { bootstrap, type BootstrapOverrides } from "../src/bootstrap.ts";
 import { SALE_SLUG } from "../src/adapters/mongo/seed.ts";
 import { createFakeRedis, stockKeyFor, type FakeRedis } from "./helpers/fake-redis.ts";
 import { createFakeMongo, reserveSaleId } from "./helpers/fake-mongo.ts";
+import { START_MS, END_MS, START_ISO, END_ISO } from "./helpers/time-fixtures.ts";
 
-const SALE_START = "2026-07-10T04:00:00Z";
-const SALE_END = "2026-07-10T05:00:00Z";
-const startMs = Date.parse(SALE_START);
-const endMs = Date.parse(SALE_END);
+const SALE_START = START_ISO;
+const SALE_END = END_ISO;
+const startMs = START_MS;
+const endMs = END_MS;
 
 async function boot(opts: { nowMs: number; stock?: string }) {
   const mongo = createFakeMongo();
@@ -49,8 +50,8 @@ describe("GET /api/sale/status (booted via bootstrap())", () => {
       success: true,
       status: "upcoming",
       stock: 100,
-      startTime: "2026-07-10T04:00:00.000Z",
-      endTime: "2026-07-10T05:00:00.000Z",
+      startTime: START_ISO,
+      endTime: END_ISO,
     });
   });
 

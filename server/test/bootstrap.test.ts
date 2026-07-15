@@ -21,10 +21,11 @@ import { ordersKeyFor } from "../src/adapters/redis/orders.ts";
 import { saleEventsChannel } from "../src/adapters/redis/events.ts";
 import type { RedisClient } from "../src/adapters/redis/client.ts";
 import { createFakeMongo, reserveSaleId } from "./helpers/fake-mongo.ts";
+import { START_ISO, END_ISO } from "./helpers/time-fixtures.ts";
 
 const validEnv = {
-  SALE_START_TIME: "2026-07-10T04:00:00Z",
-  SALE_END_TIME: "2026-07-10T05:00:00Z",
+  SALE_START_TIME: START_ISO,
+  SALE_END_TIME: END_ISO,
 };
 
 const FLAT_STOCK_KEY = "stock:remaining";
@@ -257,7 +258,8 @@ describe("bootstrap", () => {
   it("a boot pinned after endMs arms NO boundary timers — zero publishes ever", async () => {
     const { fakeRedis, overrides } = await fakeOverrides(validEnv);
     await bootstrap({ ...overrides, clock: () => Date.parse(validEnv.SALE_END_TIME) + 60_000 });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Drain pending microtasks and the macrotask queue without a real wall-clock delay.
+    await new Promise<void>((resolve) => setImmediate(resolve));
     const publish = (fakeRedis as unknown as { publish: ReturnType<typeof vi.fn> }).publish;
     expect(publish).not.toHaveBeenCalled();
   });

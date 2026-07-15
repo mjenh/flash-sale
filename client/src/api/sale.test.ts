@@ -9,6 +9,7 @@ import {
   saleEventsUrl,
   saleStatusUrl,
 } from "./sale.ts";
+import { START_ISO, END_ISO } from "../test/time-fixtures.ts";
 
 const SLUG = "flash-sale";
 
@@ -16,8 +17,8 @@ const BODY = {
   success: true,
   status: "active",
   stock: 37,
-  startTime: "2026-07-10T04:00:00.000Z",
-  endTime: "2026-07-10T05:00:00.000Z",
+  startTime: START_ISO,
+  endTime: END_ISO,
 };
 
 function respond(body: unknown, status = 200) {
@@ -101,8 +102,8 @@ describe("fetchSaleStatus", () => {
 const DETAILS = {
   slug: SLUG,
   name: "Flash Sale",
-  startTime: "2026-07-10T04:00:00.000Z",
-  endTime: "2026-07-10T05:00:00.000Z",
+  startTime: START_ISO,
+  endTime: END_ISO,
   stockQuantity: 100,
   products: [{ sku: "KC-001", name: "Keycap One", initialQuantity: 100, remaining: 42 }],
 };

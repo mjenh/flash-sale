@@ -23,15 +23,14 @@ import {
   createSaleEventsBroadcaster,
 } from "../src/services/sale-events.ts";
 import type { SaleStatusBody, SaleWindow } from "../src/services/sale-status.ts";
+import { START_MS, END_MS, START_ISO, END_ISO } from "./helpers/time-fixtures.ts";
 
-const startTime = "2026-07-10T04:00:00.000Z";
-const endTime = "2026-07-10T05:00:00.000Z";
 const SALE_ID = "sale-1";
 const WINDOW: SaleWindow = {
-  startMs: Date.parse(startTime),
-  endMs: Date.parse(endTime),
-  startIso: startTime,
-  endIso: endTime,
+  startMs: START_MS,
+  endMs: END_MS,
+  startIso: START_ISO,
+  endIso: END_ISO,
 };
 
 beforeEach(() => {
@@ -46,7 +45,7 @@ afterEach(() => {
 const flush = () => vi.advanceTimersByTimeAsync(0);
 
 function makeSaleStatus() {
-  let body: SaleStatusBody = { success: true, status: "active", stock: 37, startTime, endTime };
+  let body: SaleStatusBody = { success: true, status: "active", stock: 37, startTime: START_ISO, endTime: END_ISO };
   const getStatus = vi.fn(async (_saleId: string, _window: SaleWindow) => ({ ...body }));
   return {
     getStatus,
@@ -315,10 +314,10 @@ describe("Story 4.4 — dynamic active-sale resolution for pubsub/heartbeat-driv
   it("a changed active sale between emits is reflected in the next composed frame — not frozen at construction", async () => {
     const OTHER_ID = "sale-2";
     const OTHER_WINDOW: SaleWindow = {
-      startMs: WINDOW.startMs + 60_000,
-      endMs: WINDOW.endMs + 60_000,
-      startIso: "2026-07-10T04:01:00.000Z",
-      endIso: "2026-07-10T05:01:00.000Z",
+      startMs: START_MS + 60_000,
+      endMs: END_MS + 60_000,
+      startIso: new Date(START_MS + 60_000).toISOString(),
+      endIso: new Date(END_MS + 60_000).toISOString(),
     };
     let active = { saleId: SALE_ID, window: WINDOW };
     const status = makeSaleStatus();

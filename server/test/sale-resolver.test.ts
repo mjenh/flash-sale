@@ -12,25 +12,26 @@ import {
   type SaleSummary,
 } from "../src/middleware/sale-resolver.ts";
 import type { Request, Response, NextFunction } from "express";
+import { START_MS, END_MS, START_ISO, END_ISO } from "./helpers/time-fixtures.ts";
 
 const FLASH_SALE: SaleSummary = {
   _id: "sale-1",
   slug: "flash-sale",
-  startTime: new Date("2026-07-10T04:00:00Z"),
-  endTime: new Date("2026-07-10T05:00:00Z"),
+  startTime: new Date(START_MS),
+  endTime: new Date(END_MS),
   stockQuantity: 100,
 };
 
 const SUMMER_SALE: SaleSummary = {
   _id: "sale-2",
   slug: "summer-sale",
-  startTime: new Date("2026-08-01T00:00:00Z"),
-  endTime: new Date("2026-08-02T00:00:00Z"),
+  startTime: new Date(END_MS + 86_400_000),
+  endTime: new Date(END_MS + 86_400_000 + 86_400_000),
   stockQuantity: 50,
 };
 
-const startMs = FLASH_SALE.startTime.getTime();
-const endMs = FLASH_SALE.endTime.getTime();
+const startMs = START_MS;
+const endMs = END_MS;
 
 function createFakeOps(
   sales: SaleSummary[] = [FLASH_SALE],
@@ -281,8 +282,8 @@ describe("windowFromSale() (Story 4.4)", () => {
     const window = windowFromSale(req.sale as SaleSummary);
     expect(window.startMs).toBe(startMs);
     expect(window.endMs).toBe(endMs);
-    expect(window.startIso).toBe("2026-07-10T04:00:00.000Z");
-    expect(window.endIso).toBe("2026-07-10T05:00:00.000Z");
+    expect(window.startIso).toBe(START_ISO);
+    expect(window.endIso).toBe(END_ISO);
   });
 });
 

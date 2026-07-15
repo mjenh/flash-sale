@@ -14,12 +14,12 @@ import { bootstrap, type BootstrapOverrides } from "../src/bootstrap.ts";
 import { SALE_SLUG } from "../src/adapters/mongo/seed.ts";
 import { createFakeRedis, orderSetSize, stockKeyFor, ordersKeyFor, type FakeRedis } from "./helpers/fake-redis.ts";
 import { createFakeMongo, reserveSaleId, type FakeMongo } from "./helpers/fake-mongo.ts";
+import { START_MS, END_MS, IN_WINDOW, START_ISO, END_ISO } from "./helpers/time-fixtures.ts";
 
-const SALE_START = "2026-07-10T04:00:00Z";
-const SALE_END = "2026-07-10T05:00:00Z";
-const startMs = Date.parse(SALE_START);
-const endMs = Date.parse(SALE_END);
-const IN_WINDOW = startMs + 1000;
+const SALE_START = START_ISO;
+const SALE_END = END_ISO;
+const startMs = START_MS;
+const endMs = END_MS;
 
 async function boot(opts: { nowMs: number; stock?: string; stockQuantity?: string }) {
   const mongo = createFakeMongo();
@@ -135,15 +135,19 @@ describe("POST /api/order (booted via bootstrap())", () => {
     // with surviving Redis + Mongo state (both fakes persist across the
     // second boot; reusing the same mongo keeps the saleId — and therefore
     // the sale-scoped Redis keys — identical across both boots).
-    const after = await bootWithSurvivingState(fake, mongo, endMs + 1000);
-    const res = await request(after).post("/api/order").send({ email: "held@example.com" });
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({
-      success: true,
-      email: "held@example.com",
-      message: "You have already ordered this item.",
-    });
-    expect(fake.calls.evalSha + fake.calls.eval).toBe(scriptCallsAfterPurchase); // script did NOT run
+    const { app: afterApp, teardown } = await bootWithSurvivingState(fake, mongo, endMs + 1000);
+    try {
+      const res = await request(afterApp).post("/api/order").send({ email: "held@example.com" });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        success: true,
+        email: "held@example.com",
+        message: "You have already ordered this item.",
+      });
+      expect(fake.calls.evalSha + fake.calls.eval).toBe(scriptCallsAfterPurchase); // script did NOT run
+    } finally {
+      await teardown();
+    }
   });
 
   describe("400 validation precedes every other check — no Redis command runs", () => {
@@ -280,6 +284,6 @@ async function bootWithSurvivingState(fake: FakeRedis, mongo: FakeMongo, nowMs: 
     disconnectMongoDb: vi.fn(async () => {}),
     mongoModelOps: mongo.ops,
   };
-  const { app } = await bootstrap(overrides);
-  return app;
+  const { app, teardown } = await bootstrap(overrides);
+  return { app, teardown };
 }

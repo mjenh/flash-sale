@@ -44,15 +44,25 @@ describe("order.lua (authoritative source)", () => {
   });
 
   it("mutates (SADD, DECR) only after the membership and stock checks", () => {
-    const idx = (needle: string): number => {
-      const at = stripped.indexOf(needle);
-      expect(at, `expected script to contain ${needle}`).toBeGreaterThanOrEqual(0);
-      return at;
+    // Split into non-blank, non-comment lines — each represents one Lua statement.
+    // Line-index comparison is robust against reformatting and inline comments;
+    // character-index comparison (indexOf on the joined string) breaks if a comment
+    // or variable name contains a command keyword before the real call.
+    const executableLines = ORDER_SCRIPT_SOURCE.split("\n").filter(
+      (line) => line.trim() !== "" && !line.trim().startsWith("--"),
+    );
+
+    const indexOf = (needle: string): number => {
+      const i = executableLines.findIndex((line) => line.includes(needle));
+      expect(i, `expected script to contain a line with '${needle}'`).toBeGreaterThanOrEqual(0);
+      return i;
     };
-    const membershipCheck = idx("SISMEMBER");
-    const stockRead = idx("'GET'");
-    const sadd = idx("SADD");
-    const decr = idx("DECR");
+
+    const stockRead = indexOf("'GET'");      // GET stockKey
+    const membershipCheck = indexOf("SISMEMBER"); // membership guard
+    const sadd = indexOf("SADD");            // write: add member
+    const decr = indexOf("DECR");            // write: decrement stock
+
     expect(stockRead).toBeLessThan(sadd);
     expect(membershipCheck).toBeLessThan(sadd);
     expect(sadd).toBeLessThan(decr);

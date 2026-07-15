@@ -23,11 +23,11 @@ import {
   type FakeRedis,
 } from "./helpers/fake-redis.ts";
 import { createFakeMongo, reserveSaleId, type FakeMongo } from "./helpers/fake-mongo.ts";
+import { START_MS, IN_WINDOW, START_ISO, END_ISO } from "./helpers/time-fixtures.ts";
 
-const SALE_START = "2026-07-10T04:00:00Z";
-const SALE_END = "2026-07-10T05:00:00Z";
-const startMs = Date.parse(SALE_START);
-const IN_WINDOW = startMs + 1000;
+const SALE_START = START_ISO;
+const SALE_END = END_ISO;
+const startMs = START_MS;
 
 /** Drain macro/microtasks so the fire-and-forget side effects settle. */
 const drain = () => new Promise((resolve) => setImmediate(resolve));

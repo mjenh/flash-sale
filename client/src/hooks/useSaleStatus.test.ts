@@ -2,6 +2,7 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeEventSource, installFakeEventSource } from "../test/fake-event-source.ts";
 import { POLL_MS, WATCHDOG_SILENCE_MS, useSaleStatus } from "./useSaleStatus.ts";
+import { START_ISO, END_ISO } from "../test/time-fixtures.ts";
 
 const SLUG = "flash-sale";
 
@@ -9,8 +10,8 @@ const BODY = {
   success: true as const,
   status: "active" as const,
   stock: 37,
-  startTime: "2026-07-10T04:00:00.000Z",
-  endTime: "2026-07-10T05:00:00.000Z",
+  startTime: START_ISO,
+  endTime: END_ISO,
 };
 
 function okOnce(body: unknown) {

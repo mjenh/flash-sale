@@ -39,7 +39,10 @@ describe("k6-order.js", () => {
     expect(source).toContain('unexpected_status: ["rate==0"]');
     // 409 is an honest answer, not an error — without this, every fair rejection
     // would count as a failed request and the thresholds would be meaningless.
-    expect(source).toContain("http.expectedStatuses(200, 201, 409)");
+    // 202 (not 201) is the server's accepted status: the route enqueues to the
+    // Redis stream and returns 202 Accepted immediately; Mongo is written
+    // asynchronously by the worker.
+    expect(source).toContain("http.expectedStatuses(200, 202, 409)");
   });
 
   it("posts to the order endpoint with the `email` field (never `userId`)", () => {
