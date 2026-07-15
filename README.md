@@ -262,6 +262,10 @@ k6 enforces zero 5xx responses and zero statuses outside `{202, 409}` (plus
 oversell; the window phase confirms all attempts are rejected `409` once the
 sale window is closed.
 
+<!-- stress:latest -->
+**Latest stress report:** [20260716_0044](docs/testing/stress/20260716_0044/report.html)
+<!-- /stress:latest -->
+
 ### Stress configuration
 
 The stress harness uses `.env.stress` so the harness and the API container always

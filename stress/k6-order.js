@@ -20,6 +20,8 @@ const RETRY = __ENV.RETRY === "1" || __ENV.RETRY === "true";
 // a database that was reset still reuses the same addresses, which is fine —
 // but two runs against a NON-reset database would collide. run.ts always resets.
 const RUN_TAG = __ENV.RUN_TAG || "s";
+// Output directory for handleSummary — set by run.ts to the timestamped folder.
+const OUT_DIR = (__ENV.K6_OUT_DIR || ".out").replace(/\/$/, "");
 
 const created = new Counter("order_created_202");
 const rejected = new Counter("order_rejected_409");
@@ -164,7 +166,7 @@ export function spam() {
 
 export function handleSummary(data) {
   return {
-    ".out/k6-summary.json": JSON.stringify(data, null, 2),
+    [`${OUT_DIR}/k6-summary.json`]: JSON.stringify(data, null, 2),
     stdout: `\nk6: 202=${count(data, "order_created_202")} · 409=${count(data, "order_rejected_409")} · 200=${count(data, "order_already_200")} · 5xx=${count(data, "order_5xx")}\n`,
   };
 }
