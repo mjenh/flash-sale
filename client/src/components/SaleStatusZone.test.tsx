@@ -12,7 +12,7 @@ import {
 } from "./SaleStatusZone.tsx";
 import { DEGRADED_LABEL, LIVE_LABEL } from "./LiveSticker.tsx";
 import { LAST_SEEN_LINE } from "./StockNumeral.tsx";
-import { localTime } from "./StatusChip.tsx";
+import { localTime } from "../utils/formatSaleTime.ts";
 
 afterEach(() => {
   cleanup();

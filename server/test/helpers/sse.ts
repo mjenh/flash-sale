@@ -21,7 +21,7 @@ export interface SseStream {
 
 const openStreams: SseStream[] = [];
 
-export async function openSse(app: Express, path = "/api/sale/events"): Promise<SseStream> {
+export async function openSse(app: Express, path: string): Promise<SseStream> {
   const server = http.createServer(app);
   await new Promise<void>((resolve) => {
     server.listen(0, resolve);

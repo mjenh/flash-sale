@@ -42,7 +42,7 @@ export const PROCESSING_LINE = "Hang tight — checking stock for you…";
  *  (channel `connecting`), or the stream is down and a poll has not landed a
  *  body yet (`degraded` with no body). Confirmed offline fails open instead:
  *  the button is enabled, so there is no dead button to explain. */
-export const COLD_LOAD_BUTTON_REASON = "Hang tight — reading the sale before the button opens.";
+const COLD_LOAD_BUTTON_REASON = "Hang tight — reading the sale before the button opens.";
 
 /** AC3: the friendly, non-broken state for a slug that names no sale. Kept
  *  simple and deliberately distinct from the generic `*` 404 (NotFoundPage) —
