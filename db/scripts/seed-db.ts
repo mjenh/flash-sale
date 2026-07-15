@@ -205,7 +205,7 @@ async function seed(): Promise<void> {
     const doc = await Product.findOneAndUpdate(
       { sku: row.sku },
       { $set: { name: row.name, originalPrice: row.originalPrice } },
-      { upsert: true, new: true, setDefaultsOnInsert: true },
+      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
     ).lean();
     const id = doc!._id as Types.ObjectId;
     productIdBySku.set(row.sku, id);
@@ -250,7 +250,7 @@ async function seed(): Promise<void> {
     const doc = await Sale.findOneAndUpdate(
       { slug: row.slug },
       { $set: { name: row.name, startTime, endTime, stockQuantity: row.stockQuantity } },
-      { upsert: true, new: true, setDefaultsOnInsert: true },
+      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
     ).lean();
     const id = doc!._id as Types.ObjectId;
     saleIdBySlug.set(row.slug, id);
@@ -274,7 +274,7 @@ async function seed(): Promise<void> {
     await SaleProduct.findOneAndUpdate(
       { saleId, productId },
       { $set: { flashSalePrice: row.flashSalePrice } },
-      { upsert: true, new: true, setDefaultsOnInsert: true },
+      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
     );
     console.log(
       `[seed-db] saleproduct: ${row.saleSlug}+${row.productSku} flashSalePrice=${row.flashSalePrice}`,
@@ -292,7 +292,7 @@ async function seed(): Promise<void> {
     await Inventory.findOneAndUpdate(
       { productId },
       { $setOnInsert: { initialQuantity: row.initialQuantity } },
-      { upsert: true, new: true },
+      { upsert: true, returnDocument: 'after' },
     );
     console.log(
       `[seed-db] inventory  : ${row.productSku} initialQuantity=${row.initialQuantity} (setOnInsert)`,
