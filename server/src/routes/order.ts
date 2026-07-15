@@ -2,9 +2,9 @@
 // map the outcome to the wire contract. Rejections propagate via Express 5
 // async handling to the central error middleware — no try/catch.
 //
-// Story 4.4: both handlers read req.sale (attached by the sale-resolver
-// middleware) and pass its saleId/window through to the order service on
-// every call, instead of a bootstrap-frozen saleId baked into the deps.
+// Both handlers read req.sale (attached by the sale-resolver middleware) and
+// pass its saleId/window through to the order service on every call, instead
+// of a bootstrap-frozen saleId baked into the deps.
 import { Router, type Request, type Response } from "express";
 import type { OrderService } from "../services/order.ts";
 import { windowFromSale } from "../middleware/sale-resolver.ts";

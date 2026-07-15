@@ -45,10 +45,10 @@ function createFakeOps(
     },
     async findActiveSale(nowMs: number): Promise<SaleSummary | null> {
       calls.findActiveSale += 1;
-      // within window > nearest upcoming > most recently ended — Story 4.5
-      // extracted this priority into selectActiveSale() (reused here rather
-      // than reimplemented, so this fake stays in lockstep with the shared
-      // helper bootstrap.ts's boot-time reconciliation also calls).
+      // within window > nearest upcoming > most recently ended — this priority
+      // is delegated to selectActiveSale() (reused rather than reimplemented,
+      // so this fake stays in lockstep with the shared helper bootstrap.ts's
+      // boot-time reconciliation also calls).
       return selectActiveSale(sales, nowMs);
     },
   };
@@ -263,7 +263,7 @@ describe("findActive()", () => {
   });
 });
 
-describe("windowFromSale() (Story 4.4)", () => {
+describe("windowFromSale()", () => {
   it("converts a SaleSummary's Date fields into a SaleWindow of epoch ms + ISO strings", () => {
     expect(windowFromSale(FLASH_SALE)).toEqual({
       startMs: FLASH_SALE.startTime.getTime(),
@@ -287,7 +287,7 @@ describe("windowFromSale() (Story 4.4)", () => {
   });
 });
 
-describe("isSaleActiveAt() (Story 4.5)", () => {
+describe("isSaleActiveAt()", () => {
   it("is true at the exact start instant and false at the exact end instant ([start, end) semantics)", () => {
     expect(isSaleActiveAt(FLASH_SALE, startMs)).toBe(true);
     expect(isSaleActiveAt(FLASH_SALE, endMs)).toBe(false);
@@ -296,7 +296,7 @@ describe("isSaleActiveAt() (Story 4.5)", () => {
   });
 });
 
-describe("selectActiveSale() (Story 4.5)", () => {
+describe("selectActiveSale()", () => {
   it("returns the sale within its window when exactly one is active", () => {
     expect(selectActiveSale([FLASH_SALE, SUMMER_SALE], startMs + 1000)).toEqual(FLASH_SALE);
   });

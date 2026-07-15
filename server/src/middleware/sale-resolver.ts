@@ -40,10 +40,12 @@ interface CacheEntry {
   expiresAt: number;
 }
 
-/** Story 4.4: the single conversion point from a resolved SaleSummary (Date
- *  fields) to the SaleWindow shape the status/order services expect (epoch
- *  ms + ISO strings) — every route handler that needs a window derives it
- *  from req.sale via this helper instead of re-deriving ad hoc. */
+/**
+ * The single conversion point from a resolved SaleSummary (Date fields) to
+ * the SaleWindow shape the status/order services expect (epoch ms + ISO
+ * strings). Every route handler that needs a window derives it from req.sale
+ * via this helper instead of re-deriving ad hoc.
+ */
 export function windowFromSale(sale: SaleSummary): SaleWindow {
   return {
     startMs: sale.startTime.getTime(),
@@ -63,12 +65,14 @@ export function isSaleActiveAt(sale: SaleSummary, nowMs: number): boolean {
   return sale.startTime.getTime() <= nowMs && nowMs < sale.endTime.getTime();
 }
 
-/** Story 4.5: priority-based active-sale selection over a candidate list —
- *  within window > nearest upcoming > most recently ended — extracted so
- *  boot-time reconciliation (bootstrap.ts) and any future Mongoose-backed
- *  `SaleLookupOps.findActiveSale()` implementation share one definition of
- *  "the active sale" instead of reimplementing this priority twice. Returns
- *  null for an empty list. */
+/**
+ * Priority-based active-sale selection over a candidate list — within window
+ * > nearest upcoming > most recently ended. Extracted so boot-time
+ * reconciliation (bootstrap.ts) and any future Mongoose-backed
+ * `SaleLookupOps.findActiveSale()` implementation share one definition of
+ * "the active sale" instead of reimplementing this priority twice. Returns
+ * null for an empty list.
+ */
 export function selectActiveSale(sales: SaleSummary[], nowMs: number): SaleSummary | null {
   const active = sales.find((s) => isSaleActiveAt(s, nowMs));
   if (active !== undefined) {

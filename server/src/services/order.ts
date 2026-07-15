@@ -10,12 +10,11 @@
 // injected callback and are never rolled back. sale.sold_out publishes exactly
 // once: by the request whose script returns OK with remaining === 0.
 //
-// Story 4.4: saleId and window travel as a per-call SaleContext instead of a
-// bootstrap-frozen dep — the route resolves them fresh from req.sale on every
-// request. The ports (OrderAttemptPort, OrderAuditPort, OrderEventsPort) are
-// saleId-parameterized to match, mirroring the already-saleId-scoped adapter
-// signatures from Story 4.2 (orders.ts's attempt/hasOrdered, events.ts's
-// publish) so bootstrap can wire them through with zero closures.
+// saleId and window travel as a per-call SaleContext instead of a
+// bootstrap-frozen dep — the route resolves them fresh from req.sale on
+// every request. The ports (OrderAttemptPort, OrderAuditPort, OrderEventsPort)
+// are saleId-parameterized to match the saleId-scoped adapter signatures in
+// orders.ts and events.ts, so bootstrap can wire them with zero closures.
 import type { Clock } from "./clock.ts";
 import type { SaleWindow } from "./sale-status.ts";
 import type { PaymentProvider } from "./payment.ts";

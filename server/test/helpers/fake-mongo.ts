@@ -154,7 +154,7 @@ export function createFakeMongo(): FakeMongo {
     },
   };
 
-  // Story 4.3: Sale -> SaleProduct -> Product -> Inventory join, mirroring
+  // Sale -> SaleProduct -> Product -> Inventory join, mirroring
   // mongoCatalogModelOps's three one-query-per-op shape over the same
   // products/saleProducts/inventories maps reserveSaleId/addCatalogProduct populate.
   fake.catalog = {
@@ -231,9 +231,10 @@ export async function addCatalogProduct(
   return productId;
 }
 
-/** Story 4.2 + 6-1 test seam: reserves a deterministic saleId for the given
- *  slug and pre-seeds the associated Product / SaleProduct / Inventory so that
- *  bootstrap()'s getSaleProduct(saleId) returns real data at boot.
+/**
+ * Test seam: reserves a deterministic saleId for the given slug and
+ * pre-seeds the associated Product / SaleProduct / Inventory so that
+ * bootstrap()'s getSaleProduct(saleId) returns real data at boot.
  *
  *  Timing defaults to the time-fixtures constants (START_MS / END_MS, ~1970).
  *  Tests that use 2026-era clocks MUST pass { startMs, endMs } explicitly —

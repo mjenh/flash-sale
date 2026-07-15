@@ -7,13 +7,13 @@
 // fail-closed-on-compose-failure, and future-boundaries-only timers with
 // chunked re-arm below Node's setTimeout ceiling.
 //
-// Story 4.4: getStatus(saleId, window) now takes both per call, and the
-// broadcaster's pubsub/heartbeat-driven paths (emit, the sold-out safety
-// net) resolve them via the injected getActiveSale() rather than a frozen
-// window dep. SALE_ID/WINDOW below stand in for "the currently active sale"
-// throughout — getActiveSale() always resolves to them unless a test
-// overrides it, so every existing timer/coalescing/heartbeat invariant is
-// unchanged; only the wiring that feeds getStatus() its saleId/window moved.
+// getStatus(saleId, window) takes both per call, and the broadcaster's
+// pubsub/heartbeat-driven paths (emit, the sold-out safety net) resolve
+// them via the injected getActiveSale() rather than a frozen window dep.
+// SALE_ID/WINDOW below stand in for "the currently active sale" throughout —
+// getActiveSale() always resolves to them unless a test overrides it, so
+// every existing timer/coalescing/heartbeat invariant is unchanged; only
+// the wiring that feeds getStatus() its saleId/window moved.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   COALESCE_MS,
@@ -298,7 +298,7 @@ describe("sale-events broadcaster — snapshot + coalescing/serialization", () =
   });
 });
 
-describe("Story 4.4 — dynamic active-sale resolution for pubsub/heartbeat-driven composition", () => {
+describe("dynamic active-sale resolution for pubsub/heartbeat-driven composition", () => {
   it("emit() re-derives the active sale via getActiveSale() on every call, then composes getStatus() with that saleId/window", async () => {
     const { status, getActiveSale, broadcaster } = build();
     const sink = makeSink();

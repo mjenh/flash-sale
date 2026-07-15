@@ -1,4 +1,4 @@
-// Fake client, zero I/O. Proves the three Story 4.6 branches: flat-keys-only
+// Fake client, zero I/O. Proves the three migration branches: flat-keys-only
 // (RENAME + warn), both namespaced and flat present (DEL flat + warn), and a
 // fresh v1.1 install (no flat keys — no-op).
 import { describe, expect, it, vi } from "vitest";

@@ -14,7 +14,7 @@ services:
       PORT: "3000"
       REDIS_URL: redis://redis:6379
       MONGODB_URI: mongodb://mongo:27017/flash-sale
-      # Story 6-1: sale timing, stock, and product config live in MongoDB.
+      # Sale timing, stock, and product config live in MongoDB.
       # Run `node db/scripts/seed-db.ts` before the first `make deploy`.
       # false (default) → write-behind worker runs in the separate `worker` service.
       # true            → worker runs inside this process; omit the worker profile.

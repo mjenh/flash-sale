@@ -10,8 +10,8 @@
 // RedisUnavailableError, which rejects bootstrap() and exits the process
 // non-zero before listen().
 //
-// Story 4.2: keys are namespaced by saleId. The v1.0 flat keys are no longer
-// written or read here — Story 4.6 owns migrating any surviving flat-key data.
+// Keys are namespaced by saleId. The v1.0 flat keys are no longer written or
+// read here — the flat-key migrator (migrate.ts) handles any surviving flat-key data.
 import { bounded, stockKeyFor } from "./stock.ts";
 import { ordersKeyFor } from "./orders.ts";
 

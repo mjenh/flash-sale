@@ -49,16 +49,16 @@ async function boot(opts: {
   nowMs?: number;
   clock?: () => number;
   stock?: string;
-  /** Story 6-1: boundary-timer tests pass real-time startMs/endMs here so
+  /** Boundary-timer tests pass real-time startMs/endMs here so
    *  armWindowTimers fires at the correct wall-clock boundaries. All other
    *  tests default to the 2026 constants (startMs / endMs above). */
   startMs?: number;
   endMs?: number;
 }) {
   const mongo = createFakeMongo();
-  // Story 6-1: sale timing comes from DB (reserveSaleId). Default to the 2026
-  // constants so the pinned clock sees an active sale. Real-timer tests supply
-  // their own startMs/endMs computed from Date.now().
+  // Sale timing comes from DB (reserveSaleId). Default to the 2026 constants
+  // so the pinned clock sees an active sale. Real-timer tests supply their
+  // own startMs/endMs computed from Date.now().
   const saleId = await reserveSaleId(mongo, SALE_SLUG, {
     startMs: opts.startMs ?? startMs,
     endMs: opts.endMs ?? endMs,
@@ -117,11 +117,11 @@ describe("GET /api/sale/events — stream contract", () => {
   });
 });
 
-// Story 4.4 (AC4, AC5, AC6): the slug-scoped SSE route must be byte-for-byte
-// identical to the v1.0 alias — both flow through the same broadcaster and
-// resolve the same req.sale (forSlug() on the one valid slug vs.
-// forActiveSale() on the alias mount), so their snapshots, live updates, and
-// terminal frames must never diverge.
+// The slug-scoped SSE route must be byte-for-byte identical to the v1.0
+// alias — both flow through the same broadcaster and resolve the same
+// req.sale (forSlug() on the one valid slug vs. forActiveSale() on the
+// alias mount), so their snapshots, live updates, and terminal frames must
+// never diverge.
 describe("GET /api/sales/:slug/events — identical to the v1.0 alias", () => {
   it("the connect-time snapshot is byte-for-byte identical to GET /api/sale/events", async () => {
     const { app } = await boot({ nowMs: IN_WINDOW, stock: "37" });
@@ -329,8 +329,8 @@ describe("window-boundary timers through boot", () => {
     // Real short-delay timers: boundaries ~250/750 ms after boot (generous
     // gaps against event-loop jitter). The clock override is real time, so
     // armWindowTimers and the status composer agree.
-    // Story 6-1: boundary timing now comes from the DB (reserveSaleId), not
-    // from env vars. We pass startMs/endMs directly to boot().
+    // Boundary timing comes from the DB (reserveSaleId), not from env vars.
+    // We pass startMs/endMs directly to boot().
     const now = Date.now();
     const { fake, app } = await boot({
       clock: () => Date.now(),

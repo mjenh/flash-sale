@@ -1,7 +1,7 @@
 // Pure, no I/O.
-// Story 6-1: sale timing, stock quantity, slugs, names, and pricing are now
-// read from MongoDB at boot — not from env vars. This file tests only the
-// infra env vars that AppConfig still validates (port, URLs, timeouts).
+// Sale timing, stock quantity, slugs, names, and pricing are read from
+// MongoDB at boot — not from env vars. This file tests only the infra env
+// vars that AppConfig still validates (port, URLs, timeouts).
 import { describe, expect, it } from "vitest";
 import { ConfigError, loadConfig } from "../src/adapters/config.ts";
 

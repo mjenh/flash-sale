@@ -12,7 +12,7 @@
 // The stock BASIS is the API's own seeded `sales.stockQuantity`, cross-checked
 // against the harness config — the verifier never marks its own homework by
 // asserting against a number the harness chose. The same seeded sale document
-// also resolves {saleId} (Story 4.6) for the namespaced Redis keys below.
+// also resolves {saleId} for the namespaced Redis keys below.
 //
 // The fairness equalities keep a no-`<=` discipline: 99 accepts out of 5,000
 // against stock 100 fails as loudly as 101. The ONE place a tolerance is
@@ -241,7 +241,7 @@ export async function observe(config: StressConfig): Promise<Observed> {
         `sale document "${SALE_SLUG}" has no integer stockQuantity — cannot establish the authoritative stock basis`,
       );
     }
-    // Story 4.6: the resolved sale's own Mongo ObjectId string is {saleId} —
+    // The resolved sale's own Mongo ObjectId string is {saleId} —
     // the same identity server/src/adapters/redis namespaces its keys by.
     const saleId = String(sale._id);
     const filter = { saleId: sale._id, status: "confirmed" };

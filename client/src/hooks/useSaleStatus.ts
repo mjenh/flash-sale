@@ -11,16 +11,16 @@
 //   offline    — stream down AND the last poll failed; the page stops
 //                claiming liveness (the number may be stale)
 //
-// Story 5.1: the hook now takes a `slug` and threads it into every URL
-// (`/api/sales/${slug}/status`, `/api/sales/${slug}/events`) instead of the
-// v1.0 implicit-sale paths. It also grows a `notFound` flag, orthogonal to
-// `channel`: a 404 for the given slug is a TERMINAL outcome (this slug names
-// no sale, so retrying is pointless) rather than a transient "unreachable"
-// one — once set, every timer is torn down and the stream stays closed. The
-// caller (SalePage) renders a friendly "Sale not found" page instead of the
-// Noon Poster shell when `notFound` is true. `channel`'s own four states are
-// left untouched so every existing consumer (SaleStatusZone, StatusChip,
-// etc.) keeps its current meaning.
+// The hook takes a `slug` and threads it into every URL
+// (`/api/sales/${slug}/status`, `/api/sales/${slug}/events`) rather than
+// the v1.0 implicit-sale paths. It also exposes a `notFound` flag,
+// orthogonal to `channel`: a 404 for the given slug is a TERMINAL outcome
+// (this slug names no sale, so retrying is pointless) rather than a
+// transient "unreachable" one — once set, every timer is torn down and the
+// stream stays closed. The caller (SalePage) renders a friendly "Sale not
+// found" page instead of the Noon Poster shell when `notFound` is true.
+// `channel`'s own four states are left untouched so every existing consumer
+// (SaleStatusZone, StatusChip, etc.) keeps its current meaning.
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   SaleNotFoundError,

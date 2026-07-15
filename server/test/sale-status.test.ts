@@ -2,11 +2,10 @@
 // load-bearing: now === start is INSIDE the [start, end) window;
 // now === end is OUTSIDE (ended).
 //
-// Story 4.4: getStatus(saleId, window) takes both as per-call arguments
-// instead of a window frozen at construction — SALE_ID/window below are
-// passed to every getStatus() call, proving the service is saleId-agnostic
-// at construction time (StockReader.getRemaining is asserted against the
-// exact saleId it was called with).
+// getStatus(saleId, window) takes both as per-call arguments instead of a
+// window frozen at construction — SALE_ID/window below are passed to every
+// getStatus() call, proving the service is saleId-agnostic at construction
+// time (StockReader.getRemaining is asserted against the exact saleId).
 import { describe, expect, it } from "vitest";
 import { createSaleStatusService, type StockReader } from "../src/services/sale-status.ts";
 

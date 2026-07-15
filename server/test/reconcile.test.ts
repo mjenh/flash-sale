@@ -3,7 +3,7 @@
 // LAST), the empty-set shortcut, and fail-closed wrapping of
 // timeouts/rejections into RedisUnavailableError.
 //
-// Story 4.2: keys are namespaced by saleId.
+// Keys are namespaced by saleId.
 import { describe, expect, it, vi } from "vitest";
 import { createReconciler, type ReconcileCommands } from "../src/adapters/redis/reconcile.ts";
 import { RedisUnavailableError, stockKeyFor } from "../src/adapters/redis/stock.ts";

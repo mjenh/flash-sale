@@ -6,11 +6,11 @@
 // sale.sold_out exactly once, by the draining request; SOLD_OUT verdicts
 // never publish; publish failures never alter the outcome).
 //
-// Story 4.4: attempt() takes a SaleContext ({ saleId, window }) as its first
-// argument instead of window living in the service's deps — SALE_ID/ctx
-// below are threaded through every attempt() call, and the saleId-
-// parameterized ports (orders.attempt/hasOrdered, audit.recordOrder,
-// events.publish) are asserted against the exact saleId passed through.
+// attempt() takes a SaleContext ({ saleId, window }) as its first argument
+// instead of window living in the service's deps — SALE_ID/ctx below are
+// threaded through every attempt() call, and the saleId-parameterized ports
+// (orders.attempt/hasOrdered, audit.recordOrder, events.publish) are
+// asserted against the exact saleId passed through.
 import { describe, expect, it, vi } from "vitest";
 import { createOrderService, type OrderAttemptPort, type SaleContext } from "../src/services/order.ts";
 import { START_MS, END_MS, WINDOW } from "./helpers/time-fixtures.ts";

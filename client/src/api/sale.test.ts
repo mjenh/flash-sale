@@ -115,7 +115,7 @@ const DETAILS = {
   }],
 };
 
-describe("fetchSaleDetails (Story 5.2)", () => {
+describe("fetchSaleDetails", () => {
   it("resolves the sale envelope's inner `sale` object", async () => {
     const fetchSpy = respond({ success: true, sale: DETAILS });
     vi.stubGlobal("fetch", fetchSpy);

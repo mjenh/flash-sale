@@ -5,16 +5,14 @@
 // (the caller renders the honest "can't reach the sale" treatment) rather than
 // invent a status.
 //
-// Story 5.1: every URL is now slug-scoped (`/api/sales/${slug}/...`) instead
-// of the v1.0 implicit-sale paths (`/api/sale/...`). The v1.0 constants are
-// gone — a caller with no slug is a caller with a bug, so there is no
-// unparameterized fallback to silently fall back to.
+// Every URL is slug-scoped (`/api/sales/${slug}/...`) rather than the v1.0
+// implicit-sale paths (`/api/sale/...`). The v1.0 constants are gone — a
+// caller with no slug is a caller with a bug, so there is no unparameterized
+// fallback.
 //
-// Story 5.2: adds `fetchSaleDetails(slug)` (GET /api/sales/:slug — the
-// Story 4.3 endpoint) and dedicated URL-construction coverage for every
-// builder in this file. Not yet consumed by any component — ProductTile is
-// still static/decorative — this is the API-layer capability Epic 4 shipped;
-// wiring a component to it is out of scope here.
+// Also exposes `fetchSaleDetails(slug)` (GET /api/sales/:slug) and dedicated
+// URL-construction helpers for every endpoint. Not yet consumed by any
+// component — ProductTile is still static/decorative.
 
 export type SaleState = "upcoming" | "active" | "sold_out" | "ended";
 
@@ -106,9 +104,9 @@ export async function fetchSaleStatus(slug: string, signal?: AbortSignal): Promi
   return body;
 }
 
-/** Shape of a single product in `GET /api/sales/:slug` (Story 4.3's join).
+/** Shape of a single product in `GET /api/sales/:slug`.
  *  `remaining` is `null` when the endpoint degrades gracefully on a
- *  Redis-down read — see the server-side Dev Notes on Story 4.3. */
+ *  Redis-down read — the server returns the catalog but omits live stock. */
 export interface SaleProductDetails {
   sku: string;
   name: string;
@@ -200,8 +198,7 @@ export function parseSaleDetails(raw: unknown): SaleDetails | null {
   };
 }
 
-/** GET /api/sales/:slug (Story 4.3). Same 404/shape-refusal discipline as
- *  `fetchSaleStatus`. */
+/** GET /api/sales/:slug — same 404/shape-refusal discipline as `fetchSaleStatus`. */
 export async function fetchSaleDetails(slug: string, signal?: AbortSignal): Promise<SaleDetails> {
   const res = await fetch(saleDetailsUrl(slug), { signal });
   if (res.status === 404) {

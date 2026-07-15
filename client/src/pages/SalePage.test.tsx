@@ -1,8 +1,8 @@
-// Story 5.1: renamed/relocated from App.test.tsx. Every existing behavioral
-// assertion is preserved verbatim — only the import, the render call (now
-// `<SalePage slug={SLUG} />` instead of `<App />`), and the fetch router's
-// URL matching (now slug-scoped `/api/sales/${SLUG}/...`) changed. A new
-// "Sale not found" describe block at the bottom covers AC3.
+// Renamed/relocated from App.test.tsx. Every existing behavioral assertion
+// is preserved — only the import, the render call (now `<SalePage slug={SLUG} />`
+// instead of `<App />`), and the fetch router's URL matching (now
+// slug-scoped `/api/sales/${SLUG}/...`) changed. A "Sale not found" describe
+// block at the bottom covers the terminal-404 state.
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

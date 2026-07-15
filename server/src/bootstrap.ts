@@ -172,7 +172,7 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
   }
   const { productId, flashSalePrice } = saleProduct;
 
-  // saleId drives Redis key namespacing (Story 4.2).
+  // saleId drives Redis key namespacing across all adapters.
   const saleId = activeSale._id;
 
   // Sale resolution middleware — slug -> Sale doc with in-memory cache.
@@ -190,8 +190,7 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
     cacheTtlMs: config.saleResolverCacheTtlMs,
   });
 
-  // Story 4.6: one-time v1.0 -> v1.1 flat-key migration, strictly BEFORE
-  // reconciliation below.
+  // One-time v1.0 -> v1.1 flat-key migration, strictly BEFORE reconciliation below.
   const flatKeyMigrator = createFlatKeyMigrator(redis, logger, {
     commandTimeoutMs: config.redisCommandTimeoutMs,
   });
@@ -269,7 +268,7 @@ export async function bootstrap(overrides: BootstrapOverrides = {}): Promise<Boo
 
   const catalog = createCatalogReader(mongoOps.catalog ?? mongoCatalogModelOps);
 
-  // App assembly — saleId-parameterized ports (per Story 4.4).
+  // App assembly — saleId-parameterized ports wired through bootstrap.
   const orderAttemptPort: OrderAttemptPort = {
     attempt: (id, email) => orderStore.attempt(id, email),
     hasOrdered: (id, email) => orderStore.hasOrdered(id, email),

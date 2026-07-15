@@ -1,6 +1,5 @@
-// Story 5.1/5.3: the root `/` route (AC1) — a defensive redirect against
-// `GET /api/sales/active` (live since Story 4.1, confirmed correct by Story
-// 5.3). These tests pin the behavior: a successful discovery navigates to
+// The root `/` route — a defensive redirect using `GET /api/sales/active`.
+// These tests pin the behavior: a successful discovery navigates to
 // `/sale/${slug}`, and any failure (network error, 404, a malformed body)
 // renders the "No active sale" fallback rather than hanging.
 import "@testing-library/jest-dom/vitest";

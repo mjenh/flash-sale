@@ -4,10 +4,10 @@
 // so a Redis-down rejection still becomes the 503 envelope through the
 // central middleware.
 //
-// Story 4.4: both handlers read req.sale (attached by the sale-resolver
-// middleware — forSlug() for /api/sales/:slug/*, forActiveSale() for the
-// v1.0 alias mounts) instead of a bootstrap-frozen saleId/window, so the
-// same handler serves both route shapes identically.
+// Both handlers read req.sale (attached by the sale-resolver middleware —
+// forSlug() for /api/sales/:slug/*, forActiveSale() for the v1.0 alias
+// mounts) instead of a bootstrap-frozen saleId/window, so the same handler
+// serves both route shapes identically.
 import { Router } from "express";
 import type { SaleStatusService } from "../services/sale-status.ts";
 import type { SaleEventsBroadcaster, SseSink } from "../services/sale-events.ts";

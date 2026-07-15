@@ -1,5 +1,5 @@
-// Tests for the SaleBootstrapOps implementation (Story 6-1) and the seed
-// constants exported from seed.ts that tests use as fixture values.
+// Tests for the SaleBootstrapOps implementation and the seed constants
+// exported from seed.ts that tests use as fixture values.
 //
 // The real mongoSaleBootstrapOps uses Mongoose models and cannot be tested
 // without a live Mongo connection. These tests cover the in-memory fake
@@ -29,7 +29,7 @@ describe("seed.ts constants (exported for test fixtures)", () => {
   });
 });
 
-describe("fake SaleBootstrapOps (Story 6-1 in-memory implementation)", () => {
+describe("fake SaleBootstrapOps (in-memory implementation)", () => {
   it("listAllSales: returns all sales as BootstrapSaleDoc[]", async () => {
     const mongo = createFakeMongo();
     await reserveSaleId(mongo, SALE_SLUG, { startMs: START_MS, endMs: END_MS, stockQuantity: 7 });

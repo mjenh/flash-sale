@@ -2,8 +2,8 @@
 // (upsert User -> insert Order -> insert OrderLine), the exact audit
 // fields, and the duplicate-key (E11000) benign no-op.
 //
-// Story 4.4: recordOrder(saleId, email) takes saleId per call — the
-// recorder only closes over productId now.
+// recordOrder(saleId, email) takes saleId per call — the recorder only
+// closes over productId.
 import { describe, expect, it, vi } from "vitest";
 import { createOrderRecorder, type AuditModelOps } from "../src/adapters/mongo/audit.ts";
 

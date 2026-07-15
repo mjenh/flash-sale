@@ -3,7 +3,7 @@
 // in-memory fake, but the REAL createOrderRecorder / createDomainSeeder /
 // createReconciler compositions run over them.
 //
-// Story 4.2: Redis keys are namespaced by saleId. boot() always reserves the
+// Redis keys are namespaced by saleId. boot() always reserves the
 // (idempotent) saleId up front from the shared mongo — reused across boots
 // so the sale-scoped keys stay identical across restarts.
 import { Writable } from "node:stream";
@@ -44,7 +44,7 @@ function captureLogger(): { lines: string[]; logger: Logger } {
 async function boot(opts: {
   nowMs: number;
   stock?: string;
-  /** Story 6-1: stockQuantity now comes from MongoDB (the fake sale), not env.
+  /** stockQuantity comes from MongoDB (the fake sale), not env vars.
    *  reserveSaleId is called with this value so bootstrap's cold rebuild uses it.
    *  $set semantics: a repeat call with the same mongo updates the sale's qty. */
   stockQuantity?: string;
@@ -85,9 +85,9 @@ async function boot(opts: {
   return { fake, mongo, saleId, app };
 }
 
-describe("boot: DB-driven sale + cold rebuild (Story 6-1)", () => {
+describe("boot: DB-driven sale + cold rebuild", () => {
   it("pre-seeded domain docs drive cold rebuild and are idempotent across boots", async () => {
-    // Story 6-1: sale/product data comes from the DB (reserveSaleId pre-seeds
+    // Sale/product data comes from the DB (reserveSaleId pre-seeds
     // the fake), not from env vars. Bootstrap reads and cold-rebuilds Redis.
     const mongo = createFakeMongo();
     const first = await boot({ nowMs: IN_WINDOW, mongo, stockQuantity: "5" });

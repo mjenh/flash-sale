@@ -7,9 +7,9 @@
 // lives on a dedicated duplicated connection, because Redis's subscriber mode
 // blocks normal commands on that connection.
 //
-// Story 4.2: the channel is namespaced by saleId so SSE subscribers for a
-// given sale only ever hear that sale's domain events. The v1.0 flat
-// `sale:events` channel is no longer published to or subscribed on.
+// The channel is namespaced by saleId so SSE subscribers for a given sale
+// only ever hear that sale's domain events. The v1.0 flat `sale:events`
+// channel is no longer published to or subscribed on.
 import { bounded, RedisUnavailableError } from "./stock.ts";
 import type { SaleEventType } from "../../services/sale-events.ts";
 

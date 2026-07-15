@@ -1,11 +1,10 @@
-// Story 4.2 AC5 — two different saleIds must produce fully isolated Redis
-// namespaces: an order accepted for sale A must not appear in sale B's
-// membership set, and stock decrements for one sale must never affect the
-// other. Exercised against the shared in-memory fake Redis test double (see
-// helpers/fake-redis.ts) — the same fake used by every endpoint test in this
-// suite — one level below bootstrap() so the isolation claim is proven
-// directly against the adapters (orders.ts, stock.ts, reconcile.ts,
-// events.ts) rather than incidentally through an HTTP round trip.
+// Two different saleIds must produce fully isolated Redis namespaces: an
+// order accepted for sale A must not appear in sale B's membership set, and
+// stock decrements for one sale must never affect the other. Exercised
+// against the shared in-memory fake Redis test double (see helpers/fake-redis.ts)
+// — one level below bootstrap() so the isolation claim is proven directly
+// against the adapters (orders.ts, stock.ts, reconcile.ts, events.ts) rather
+// than incidentally through an HTTP round trip.
 import { describe, expect, it } from "vitest";
 import { createOrderStore } from "../src/adapters/redis/orders.ts";
 import { createStockStore } from "../src/adapters/redis/stock.ts";
@@ -17,7 +16,7 @@ const OPTS = { commandTimeoutMs: 50 };
 const SALE_A = "sale-aaaaaaaaaaaaaaaaaaaaaaaa";
 const SALE_B = "sale-bbbbbbbbbbbbbbbbbbbbbbbb";
 
-describe("Story 4.2 AC5 — Redis key namespace isolation across saleIds", () => {
+describe("Redis key namespace isolation across saleIds", () => {
   it("stock:{saleId}:remaining is independent per sale — a decrement in A never touches B", async () => {
     const fake = createFakeRedis();
     fake.kv.set(stockKeyFor(SALE_A), "5");

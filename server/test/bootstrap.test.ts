@@ -4,15 +4,15 @@
 // duplicate()d connection (subscribed before returning) with
 // future-boundaries-only window timers; teardown closes the subscriber.
 //
-// Story 4.2: Redis keys/channel are namespaced by saleId. fakeOverrides()
-// reserves the (idempotent) saleId up front from the fresh fake mongo so
-// tests can pre-seed a scoped `stock:{saleId}:remaining` key before
-// bootstrap() runs (the warm-boot test) and assert against the exact
-// sale-scoped key/channel names elsewhere.
+// Redis keys/channel are namespaced by saleId. fakeOverrides() reserves the
+// (idempotent) saleId up front from the fresh fake mongo so tests can
+// pre-seed a scoped `stock:{saleId}:remaining` key before bootstrap() runs
+// (the warm-boot test) and assert against the exact sale-scoped key/channel
+// names elsewhere.
 //
-// Story 6-1: Sale timing and stock come from MongoDB (listAllSales at boot),
-// not from env vars. The "fails fast" test now uses an invalid PORT to trigger
-// a ConfigError from loadConfig rather than missing sale env vars.
+// Sale timing and stock come from MongoDB (listAllSales at boot), not from
+// env vars. The "fails fast" test uses an invalid PORT to trigger a
+// ConfigError from loadConfig rather than missing sale env vars.
 import { describe, expect, it, vi } from "vitest";
 import { Writable } from "node:stream";
 import request from "supertest";
@@ -68,16 +68,16 @@ async function fakeOverrides(
   env: Record<string, string | undefined>,
   buildInitialKv?: (saleId: string) => Map<string, string>,
   opts?: {
-    /** Story 4.6: pre-seed initial Redis SET membership (e.g. a flat
-     *  `orders:users` set) keyed by whatever the caller wants — independent
-     *  of the saleId-keyed `kv`/string map above. */
+    /** Pre-seed initial Redis SET membership (e.g. a flat `orders:users` set)
+     *  keyed by whatever the caller wants — independent of the saleId-keyed
+     *  `kv`/string map above. */
     buildInitialSets?: (saleId: string) => Map<string, Set<string>>;
     logger?: Logger;
   },
 ) {
   // In-memory command surface for the stock adapter (get), the order store's
   // boot-time registration (scriptLoad), the reconciler (exists/del/sAdd/set),
-  // Story 4.6's flat-key migrator (exists/rename/del), the sale:{saleId}:events
+  // the flat-key migrator (exists/rename/del), the sale:{saleId}:events
   // publisher (publish) + the duplicate()d subscriber connection + isOpen for
   // teardown.
   const mongo = createFakeMongo();
@@ -136,8 +136,8 @@ async function fakeOverrides(
 
 describe("bootstrap", () => {
   it("fails fast on invalid config before touching any store", async () => {
-    // Story 6-1: sale env vars are gone; invalid PORT is the reliable trigger
-    // for a loadConfig() ConfigError before any connection is attempted.
+    // Invalid PORT is the reliable trigger for a loadConfig() ConfigError
+    // before any connection is attempted.
     const { overrides } = await fakeOverrides({ PORT: "99999" });
     await expect(bootstrap(overrides)).rejects.toBeInstanceOf(ConfigError);
     expect(overrides.createRedis).not.toHaveBeenCalled();
@@ -169,9 +169,9 @@ describe("bootstrap", () => {
   });
 
   it("pre-seeded domain docs exist and cold rebuild sets stock:{saleId}:remaining from DB", async () => {
-    // Story 6-1: bootstrap reads sale/product data from MongoDB (via
-    // reserveSaleId pre-seeding); it does NOT write to Mongo at boot. Cold
-    // rebuild then sets Redis stock from activeSale.stockQuantity.
+    // Bootstrap reads sale/product data from MongoDB (via reserveSaleId
+    // pre-seeding); it does NOT write to Mongo at boot. Cold rebuild then
+    // sets Redis stock from activeSale.stockQuantity.
     const { kv, mongo, saleId, overrides } = await fakeOverrides({});
     await bootstrap({ ...overrides, clock: () => IN_WINDOW });
 
@@ -201,9 +201,9 @@ describe("bootstrap", () => {
   });
 
   it("boot order: mongo connect → script registration → DB reads → reconcile, all inside bootstrap()", async () => {
-    // Story 6-1: the "seed" step (upsertProduct/upsertSale) is replaced by
-    // three DB reads (listAllSales / getSaleProduct / listConfirmedOrderEmails).
-    // We spy on listAllSales as the representative DB-read sentinel.
+    // The boot sequence performs three DB reads (listAllSales / getSaleProduct
+    // / listConfirmedOrderEmails) rather than seeding. Spy on listAllSales as
+    // the representative DB-read sentinel for ordering assertions.
     const { fakeRedis, mongo, overrides } = await fakeOverrides({});
     const listAllSales = vi.spyOn(mongo.saleBootstrap, "listAllSales");
     await bootstrap({ ...overrides, clock: () => IN_WINDOW });
@@ -282,8 +282,8 @@ describe("bootstrap", () => {
     expect(publish).not.toHaveBeenCalled();
   });
 
-  // Story 4.5: boot-time active-sale identification is multi-sale-safe.
-  describe("multi-sale boot reconciliation (Story 4.5)", () => {
+  // Boot-time active-sale identification is multi-sale-safe.
+  describe("multi-sale boot reconciliation", () => {
     it("AC4: fails fast with a ConfigError when two Sale documents have overlapping active windows", async () => {
       // The default flash-sale is seeded with ~1970 timing (ended at nowMs=2026)
       // so it's NOT "currently active". Only sale-a and sale-b overlap at nowMs.
@@ -351,9 +351,9 @@ describe("bootstrap", () => {
     });
   });
 
-  // Story 4.6: one-time v1.0 -> v1.1 flat-key migration, wired strictly
-  // before Story 4.5's warm/cold reconciliation.
-  describe("v1.0 flat-key migration (Story 4.6)", () => {
+  // One-time v1.0 -> v1.1 flat-key migration, wired strictly before the
+  // warm/cold reconciliation.
+  describe("v1.0 flat-key migration", () => {
     it("AC1: surviving flat keys are RENAMEd onto the namespaced keys, warn-logged, and reconciliation then sees a WARM boot (no cold rebuild)", async () => {
       const { lines, logger } = captureLogger();
       const { fakeRedis, kv, sets, saleId, overrides } = await fakeOverrides(

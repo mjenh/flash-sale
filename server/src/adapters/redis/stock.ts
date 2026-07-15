@@ -6,10 +6,10 @@
 // or any command rejection surfaces as RedisUnavailableError, which the
 // central error middleware maps to 503.
 //
-// Story 4.2: keys are namespaced by saleId (the resolved Sale's Mongo
-// ObjectId string) so multiple sale records can coexist without collision.
-// The v1.0 flat `stock:remaining` key is no longer written or read by the
-// live request path — Story 4.6 owns migrating any surviving flat-key data.
+// Keys are namespaced by saleId (the resolved Sale's Mongo ObjectId string)
+// so multiple sale records can coexist without collision. The v1.0 flat
+// `stock:remaining` key is no longer written or read by the live request
+// path — the flat-key migrator (migrate.ts) handles any surviving flat-key data.
 
 export function stockKeyFor(saleId: string): string {
   return `stock:${saleId}:remaining`;

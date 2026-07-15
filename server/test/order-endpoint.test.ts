@@ -3,10 +3,10 @@
 // faithful, atomic-per-call port of order.lua; swap it for a real client
 // against compose-run Redis and this file runs unchanged.
 //
-// Story 4.2: Redis keys are namespaced by saleId (the resolved Sale's Mongo
-// ObjectId string). reserveSaleId() learns the boot-time id up front so the
-// fake Redis can be pre-seeded with the correctly scoped `stock:{saleId}:
-// remaining` key before bootstrap() runs (see helpers/fake-mongo.ts).
+// Redis keys are namespaced by saleId (the resolved Sale's Mongo ObjectId
+// string). reserveSaleId() learns the boot-time id up front so the fake
+// Redis can be pre-seeded with the correctly scoped `stock:{saleId}:remaining`
+// key before bootstrap() runs (see helpers/fake-mongo.ts).
 import { describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { pino } from "pino";

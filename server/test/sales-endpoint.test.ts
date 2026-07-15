@@ -34,14 +34,14 @@ async function boot(opts: {
    *  addCatalogProduct(). Products added here appear AFTER KEYCAP-ONE in the
    *  SaleProduct insertion order (and thus the response order). */
   beforeBootstrap?: (mongo: ReturnType<typeof createFakeMongo>, saleId: string) => Promise<void>;
-  /** Story 5.3: overrides the sale-resolver's lookup ops entirely — used to
-   *  simulate "no sales exist" for GET /api/sales/active's 404 branch, a
-   *  state the normal boot path can never reach. */
+  /** Overrides the sale-resolver's lookup ops entirely — used to simulate
+   *  "no sales exist" for GET /api/sales/active's 404 branch, a state the
+   *  normal boot path can never reach. */
   saleLookupOps?: SaleLookupOps;
 }) {
   const mongo = createFakeMongo();
-  // Story 6-1: sale timing comes from DB. Pass 2026 timing so the clock
-  // (which is pinned to the 2026 window) sees an active sale.
+  // Sale timing comes from DB. Pass 2026 timing so the clock (which is
+  // pinned to the 2026 window) sees an active sale.
   const saleId = await reserveSaleId(mongo, SALE_SLUG, { startMs, endMs });
   await opts.beforeBootstrap?.(mongo, saleId);
   const fake: FakeRedis = createFakeRedis(opts.stock === undefined ? {} : { stock: opts.stock, saleId });
@@ -76,9 +76,9 @@ describe("GET /api/sales/active (discovery endpoint)", () => {
     expect(res.body.slug).toBe("flash-sale");
   });
 
-  // Story 5.3 (v1.1-FR-6/AC1): "No sales configured." — a state the normal
-  // boot path can never produce (seed() always upserts one Sale document),
-  // reached here only by overriding the resolver's lookup ops directly.
+  // "No sales configured." is a state the normal boot path can never produce
+  // (a Sale document is always seeded at boot) — reached here only by
+  // overriding the resolver's lookup ops directly.
   it("returns 404 'No sales configured.' when the resolver finds no sale", async () => {
     const { app } = await boot({
       nowMs: IN_WINDOW,
@@ -98,7 +98,7 @@ describe("GET /api/sales/active (discovery endpoint)", () => {
   });
 });
 
-describe("GET /api/sales/:slug (sale details with inventory, Story 4.3)", () => {
+describe("GET /api/sales/:slug (sale details with inventory)", () => {
   it("returns sale info + the joined product with remaining from Redis (AC1)", async () => {
     const { app } = await boot({ nowMs: IN_WINDOW, stock: "42" });
     const res = await request(app).get("/api/sales/flash-sale");
@@ -136,9 +136,9 @@ describe("GET /api/sales/:slug (sale details with inventory, Story 4.3)", () => 
 
     const res = await request(app).get("/api/sales/flash-sale");
     expect(res.status).toBe(200);
-    // Story 6-1: reserveSaleId pre-seeds KEYCAP-ONE first (before beforeBootstrap
-    // runs), so KEYCAP-ONE appears first in SaleProduct insertion order and thus
-    // in the response. EXTRA-1, added by beforeBootstrap, appears second.
+    // reserveSaleId pre-seeds KEYCAP-ONE first (before beforeBootstrap runs),
+    // so KEYCAP-ONE appears first in SaleProduct insertion order and thus in
+    // the response. EXTRA-1, added by beforeBootstrap, appears second.
     // This proves the join preserves SaleProduct insertion order.
     expect(res.body.sale.products).toEqual([
       { sku: PRODUCT_SKU, name: PRODUCT_NAME, initialQuantity: 100, remaining: 7, originalPrice: PRODUCT_ORIGINAL_PRICE, flashSalePrice: PRODUCT_FLASH_SALE_PRICE },
