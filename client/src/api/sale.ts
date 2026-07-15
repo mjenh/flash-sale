@@ -4,19 +4,46 @@
 // become a painted state. If we cannot prove what the sale is doing, we say so
 // (the caller renders the honest "can't reach the sale" treatment) rather than
 // invent a status.
-
-export const SALE_STATUS_URL = "/api/sale/status";
-export const SALE_EVENTS_URL = "/api/sale/events";
+//
+// Story 5.1: every URL is now slug-scoped (`/api/sales/${slug}/...`) instead
+// of the v1.0 implicit-sale paths (`/api/sale/...`). The v1.0 constants are
+// gone — a caller with no slug is a caller with a bug, so there is no
+// unparameterized fallback to silently fall back to. Story 5.2 will extend
+// this file further (a `fetchSaleDetails(slug)`, dedicated URL-construction
+// tests); this story's job was making every existing call actually work
+// end-to-end with a slug in the URL.
 
 export type SaleState = "upcoming" | "active" | "sold_out" | "ended";
 
-/** Shape shared by GET /api/sale/status and every SSE status frame. */
+/** Shape shared by GET /api/sales/:slug/status and every SSE status frame. */
 export interface SaleStatusBody {
   success: true;
   status: SaleState;
   stock: number;
   startTime: string;
   endTime: string;
+}
+
+/** URL builders — the one place that knows the slug-scoped path shape. The
+ *  slug is a route param, never trusted raw into a path segment. */
+export function saleStatusUrl(slug: string): string {
+  return `/api/sales/${encodeURIComponent(slug)}/status`;
+}
+
+export function saleEventsUrl(slug: string): string {
+  return `/api/sales/${encodeURIComponent(slug)}/events`;
+}
+
+/** Thrown by `fetchSaleStatus` when the API answers 404 for the given slug —
+ *  a distinct, terminal outcome from "unreachable": the slug names no sale,
+ *  so retrying the same URL can never succeed. The caller (useSaleStatus)
+ *  uses this to stop polling/reconnecting and render "Sale not found"
+ *  instead of endlessly retrying a request that can never come back true. */
+export class SaleNotFoundError extends Error {
+  constructor(slug: string) {
+    super(`sale not found: ${slug}`);
+    this.name = "SaleNotFoundError";
+  }
 }
 
 const STATES: readonly string[] = ["upcoming", "active", "sold_out", "ended"];
@@ -54,9 +81,14 @@ export function parseSaleStatus(raw: unknown): SaleStatusBody | null {
 }
 
 /** Rejects on any non-2xx (incl. the 503 fail-closed envelope) and on any body
- *  we cannot prove. The caller decides what an unreachable sale means. */
-export async function fetchSaleStatus(signal?: AbortSignal): Promise<SaleStatusBody> {
-  const res = await fetch(SALE_STATUS_URL, { signal });
+ *  we cannot prove. A 404 rejects with the distinguished `SaleNotFoundError`
+ *  so the caller can tell "this slug names no sale" apart from "the sale is
+ *  temporarily unreachable" — the two states get different UI treatments. */
+export async function fetchSaleStatus(slug: string, signal?: AbortSignal): Promise<SaleStatusBody> {
+  const res = await fetch(saleStatusUrl(slug), { signal });
+  if (res.status === 404) {
+    throw new SaleNotFoundError(slug);
+  }
   if (!res.ok) {
     throw new Error(`sale status unavailable (${res.status})`);
   }

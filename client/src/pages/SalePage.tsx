@@ -2,22 +2,34 @@
 // field and a click on the button are literally the same submit path — and
 // Enter is inert while the button is disabled, for free, because browsers do
 // not submit a form through a disabled submit button.
-import "./App.css";
-import { MarqueeBand } from "./components/MarqueeBand.tsx";
-import { Masthead } from "./components/Masthead.tsx";
-import { Panel } from "./components/Panel.tsx";
-import { ProductTile } from "./components/ProductTile.tsx";
-import { RulesChips } from "./components/RulesChips.tsx";
+//
+// Story 5.1: this file is the renamed/relocated `App.tsx` — the full Noon
+// Poster experience, now parameterized by `slug` instead of assuming one
+// implicit sale. `SalePage` itself takes `slug` as a plain prop (rather than
+// calling `useParams()` internally) so it stays trivially testable in
+// isolation, exactly as `App` was; `SalePageRoute` below is the thin
+// route-level wrapper that extracts `slug` from the URL via `useParams()`
+// (AC2) and hands it down. Every behavioral/accessibility invariant from
+// Epics 1-3 is unchanged — only the URL construction (via the slug) and the
+// new "Sale not found" state (AC3) are new.
+import { useParams } from "react-router-dom";
+import "./SalePage.css";
+import { MarqueeBand } from "../components/MarqueeBand.tsx";
+import { Masthead } from "../components/Masthead.tsx";
+import { Panel } from "../components/Panel.tsx";
+import { ProductTile } from "../components/ProductTile.tsx";
+import { RulesChips } from "../components/RulesChips.tsx";
 import {
   ENDED_FRAME,
   SOLD_OUT_FRAME,
   SaleStatusZone,
-} from "./components/SaleStatusZone.tsx";
-import { VerdictPanel } from "./components/VerdictPanel.tsx";
-import { useSaleStatus } from "./hooks/useSaleStatus.ts";
-import { useOrder } from "./hooks/useOrder.ts";
-import { useEmailField } from "./hooks/useEmailField.ts";
-import type { SaleStatusBody } from "./api/sale.ts";
+} from "../components/SaleStatusZone.tsx";
+import { VerdictPanel } from "../components/VerdictPanel.tsx";
+import { useSaleStatus } from "../hooks/useSaleStatus.ts";
+import { useOrder } from "../hooks/useOrder.ts";
+import { useEmailField } from "../hooks/useEmailField.ts";
+import type { SaleStatusBody } from "../api/sale.ts";
+import { NotFoundPage } from "./NotFoundPage.tsx";
 
 export const UPCOMING_BUTTON_REASON =
   "The button naps until noon — type your email now so you're ready when it wakes.";
@@ -27,6 +39,12 @@ export const PROCESSING_LINE = "Hang tight — checking stock for you…";
  *  body yet (`degraded` with no body). Confirmed offline fails open instead:
  *  the button is enabled, so there is no dead button to explain. */
 export const COLD_LOAD_BUTTON_REASON = "Hang tight — reading the sale before the button opens.";
+
+/** AC3: the friendly, non-broken state for a slug that names no sale. Kept
+ *  simple and deliberately distinct from the generic `*` 404 (NotFoundPage) —
+ *  this one is a `/sale/:slug` route result, not an unmatched path, so it
+ *  names the slug the buyer typed/followed. */
+export const SALE_NOT_FOUND_HEADLINE = "Sale not found.";
 
 /** The honest reason a dead button is dead. Never a fake affordance, never a
  *  disappearing act — and never color alone. When the status is unknown
@@ -50,12 +68,19 @@ function buttonReason(body: SaleStatusBody | null): string | null {
   }
 }
 
-export function App() {
-  const { body, channel, refetch } = useSaleStatus();
+export interface SalePageProps {
+  /** The sale this page renders — extracted from the route by `SalePageRoute`,
+   *  or passed directly in tests. */
+  slug: string;
+}
+
+export function SalePage({ slug }: SalePageProps) {
+  const { body, channel, notFound, refetch } = useSaleStatus(slug);
   const [email, setEmail] = useEmailField();
   // Re-fetch sale status after every attempt — win, loss, or error.
   const { phase, verdict, verdictSource, fieldError, submit, clearFieldError, clearVerdict } =
     useOrder({
+      slug,
       onAttemptSettled: refetch,
     });
 
@@ -84,6 +109,22 @@ export function App() {
   // button is still disabled (connecting / degraded before a body lands) it is
   // the cold-load line. Offline fails open — canBuy is true, so no reason.
   const reason = canBuy ? null : (buttonReason(body) ?? COLD_LOAD_BUTTON_REASON);
+
+  // AC3: a slug that names no sale renders a friendly, non-broken state
+  // instead of the Noon Poster shell. This is a terminal outcome from
+  // useSaleStatus (a confirmed 404, not a transient outage), so it takes
+  // priority over every other channel/body state.
+  if (notFound) {
+    return (
+      <div className="frame sale-not-found">
+        <h1 className="t-display sale-not-found__headline">{SALE_NOT_FOUND_HEADLINE}</h1>
+        <p className="t-body sale-not-found__body" data-testid="sale-not-found">
+          There&apos;s no sale at &ldquo;{slug}&rdquo;. Double-check the link, or ask whoever
+          shared it for the right one.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -213,4 +254,17 @@ export function App() {
       </div>
     </>
   );
+}
+
+/** AC2: the route-level wrapper — extracts `slug` from `useParams()` and hands
+ *  it to `SalePage`. Kept separate from `SalePage` so the presentational
+ *  component stays free of any router dependency and is directly testable
+ *  with a plain `slug` prop. A route pattern of `/sale/:slug` always supplies
+ *  a non-empty `slug`; the `NotFoundPage` fallback below is defensive-only. */
+export function SalePageRoute() {
+  const { slug } = useParams<{ slug: string }>();
+  if (typeof slug !== "string" || slug === "") {
+    return <NotFoundPage />;
+  }
+  return <SalePage slug={slug} />;
 }

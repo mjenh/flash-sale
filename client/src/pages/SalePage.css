@@ -180,6 +180,24 @@
   white-space: nowrap;
 }
 
+/* ── AC3: "Sale not found" — a friendly, minimal state for a slug that names
+ * no sale. Deliberately plain (no marquee, no status zone, no form) — there
+ * is no sale here to dress the page around. ────────────────────────────── */
+
+.sale-not-found {
+  padding-top: var(--sp-zone);
+}
+
+.sale-not-found__headline {
+  margin: 0 0 var(--sp-stack);
+  color: var(--ink);
+}
+
+.sale-not-found__body {
+  max-width: 34em;
+  color: var(--ink-soft);
+}
+
 /* ── Reflow floor: 768–1159px. Nothing hides. ───────────────────────── */
 
 @media (max-width: 1159px) {
