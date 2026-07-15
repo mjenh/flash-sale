@@ -361,45 +361,45 @@ catalog live in
 These are accepted properties of the v1 design, not overlooked bugs. Each is
 documented so a future maintainer inherits the reasoning.
 
-**Audit under-count window.** A crash between "Redis accepted the order" (Lua
+- **Audit under-count window.** A crash between "Redis accepted the order" (Lua
 script returns `OK`) and "order enqueued to the Redis Stream" (`XADD
 queue:orders`) permanently loses that audit row. Once in the stream, at-least-once
 delivery guarantees eventual persistence. The buyer keeps their order (Redis is
 correct; a retry returns 200), but Mongo under-counts by one. This window is
 smaller than a plain fire-and-forget write but not zero.
 
-**Single Redis primary is the throughput ceiling.** The API tier scales
+- **Single Redis primary is the throughput ceiling.** The API tier scales
 horizontally (stateless, shared Redis), but every accepted order is one
 round-trip to one Redis primary. A single primary handles a flash sale's write
 rate comfortably; it is the bottleneck by design.
 
-**Email aliasing bypass.** Email is NFC-normalized and case-folded
+- **Email aliasing bypass.** Email is NFC-normalized and case-folded
 (`A@x.com` = `a@x.com`), but provider-specific aliases (Gmail dots, `+tags`)
 are not folded — a determined buyer can order twice with `a@gmail.com` and
 `a+1@gmail.com`. Correct alias handling is provider-specific and easy to get
 subtly wrong; an authenticated account id is the production fix.
 
-**No rate limiting.** The API has no per-client throttle. The Lua script's
+- **No rate limiting.** The API has no per-client throttle. The Lua script's
 atomicity prevents oversell regardless of request volume, but an abusive client
 can waste bandwidth. Rate limiting is an operational concern layered above the
 correctness guarantee.
 
-**No authentication or payment.** Identity is an email string; payment is a
+- **No authentication or payment.** Identity is an email string; payment is a
 no-op adapter. Both are explicit non-goals for v1, with the architecture
 designed so real implementations slot in without disturbing the decision core.
 
-**SSE connection cap.** HTTP/1.1 limits browsers to roughly 6 concurrent
+- **SSE connection cap.** HTTP/1.1 limits browsers to roughly 6 concurrent
 connections per origin. A single-tab demo is unaffected, but multiple tabs from
 one browser will exhaust the budget. HTTP/2 or a managed WebSocket tier removes
 the limit.
 
-**Redis command timeout can 503 a committed order.** A network timeout may
+- **Redis command timeout can 503 a committed order.** A network timeout may
 return 503 for an order that actually committed server-side. The idempotent
 retry recovers on the next attempt, but the first response was wrong.
 
-**`stockQuantity` changes are silently ignored on a warm restart.** `make deploy` re-seeds MongoDB with the new `sales.json` values and recreates the API container, but leaves Redis running. Because `stock:{saleId}:remaining` already exists, the boot reconciler takes the warm path and never reads the updated `stockQuantity` from MongoDB — the change lands in the database but has no effect on the live stock counter. To apply a stock change against a running stack, flush Redis state first (`docker compose down -v` or the stress harness's offline reset) so the next boot takes the cold path and rebuilds from Mongo.
+- **`stockQuantity` changes are silently ignored on a warm restart.** `make deploy` re-seeds MongoDB with the new `sales.json` values and recreates the API container, but leaves Redis running. Because `stock:{saleId}:remaining` already exists, the boot reconciler takes the warm path and never reads the updated `stockQuantity` from MongoDB — the change lands in the database but has no effect on the live stock counter. To apply a stock change against a running stack, flush Redis state first (`docker compose down -v` or the stress harness's offline reset) so the next boot takes the cold path and rebuilds from Mongo.
 
-**Sale identity is resolved once at boot.** The active sale's `_id` and slug
+- **Sale identity is resolved once at boot.** The active sale's `_id` and slug
 are selected by `bootstrap()` and held in-process for the lifetime of the
 server. The slug resolver returns only the boot-resolved sale; a new sale
 document added to MongoDB after the server starts will not be served until the
@@ -407,7 +407,7 @@ API is restarted. Only one sale may be active at boot — the server rejects
 startup if two sales overlap in time. This is a deliberate simplification for
 v1; true runtime multi-sale support requires a per-request Mongo lookup.
 
-**Payment declines are unactionable post-acceptance.** The payment charge fires
+- **Payment declines are unactionable post-acceptance.** The payment charge fires
 fire-and-forget after the Redis `OK` — it is never awaited and cannot alter the
 HTTP response. If a real payment adapter is wired in and the charge is declined,
 the buyer's slot in Redis is not released. There is no reversal path. A
@@ -435,38 +435,35 @@ RPS estimates assume a sustained 10-second peak (`Concurrent Users × 2 ÷ 10 s`
 
 ## Roadmap
 
-Improvements below are ordered by value, with the highest-impact items first.
-Each builds on the current architecture without disturbing the decision core.
-
-**Payment integration.** The `PaymentProvider` port already exists with a no-op
+- **Payment integration.** The `PaymentProvider` port already exists with a no-op
 implementation. A real adapter (Stripe, etc.) slots in after the Redis `OK`,
 with a reserve-then-confirm flow requiring a new `Reservation` collection
 (schema to be designed alongside the payment adapter).
 This is the first feature that turns the system from a demo into a real sale.
 
-**Authentication and account identity.** Replace the raw email with an
+- **Authentication and account identity.** Replace the raw email with an
 authenticated user id. The set-membership mechanism is unchanged — only the value
 stored in `orders:{saleId}:users` changes. Eliminates the email aliasing bypass entirely.
 
-**Rate limiting.** A per-IP or per-email throttle at the API edge (or via a
+- **Rate limiting.** A per-IP or per-email throttle at the API edge (or via a
 reverse proxy). Prevents bandwidth waste from abusive clients without affecting
 the fairness guarantee.
 
-**Observability.** Structured metrics (Prometheus counters for orders, stock,
+- **Observability.** Structured metrics (Prometheus counters for orders, stock,
 latency histograms), distributed tracing (OpenTelemetry), and alerting.
 Currently the system logs one pino line per request.
 
-**CI pipeline.** Automated gates: lint, typecheck, unit tests, integration
+- **CI pipeline.** Automated gates: lint, typecheck, unit tests, integration
 tests, and the stress harness on every push. Lint (`npm run lint` / `make lint`)
 and typecheck (`npm run typecheck`) are wired; test and stress remain manual
 (`npm test`, `make stress`).
 
-**Multi-node scale-out.** Redis Cluster or Redlock for write distribution across
+- **Multi-node scale-out.** Redis Cluster or Redlock for write distribution across
 nodes. The single-writer Lua script is the correct design for one primary; at
 true horizontal scale, per-node sub-inventories with a coordinator become
 necessary.
 
-**Runtime sale administration.** An admin endpoint to adjust the sale window or
+- **Runtime sale administration.** An admin endpoint to adjust the sale window or
 stock without restarting the API. Sale config now lives in MongoDB, so the data
 layer is ready; the missing piece is a write endpoint + live reconfiguration of
 the in-process timer and Redis keys. This also closes the warm-restart gap (see
@@ -474,11 +471,11 @@ Known Limitations): a `PATCH /admin/sales/:id` endpoint that atomically updates
 both `sale.stockQuantity` in MongoDB and `stock:{saleId}:remaining` in Redis
 would make stock changes effective immediately without requiring a Redis flush.
 
-**Multi-sale dynamic resolution.** The current sale resolver is derived from a
+- **Multi-sale dynamic resolution.** The current sale resolver is derived from a
 single sale locked in at boot. Serving a portfolio of scheduled sales without
 restarts requires wiring a per-request Mongo query through `SaleLookupOps` —
 the port already exists; the adapter is the missing piece.
 
-**Service decomposition.** If the system grows beyond a single product and sale,
+- **Service decomposition.** If the system grows beyond a single product and sale,
 the monolith splits along its existing layer boundaries: an order service, an
 inventory service, and a notification service, each owning its store.
