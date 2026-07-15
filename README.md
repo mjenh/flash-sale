@@ -34,20 +34,21 @@ flowchart LR
     end
 
     subgraph Redis["Redis 8 · AOF"]
-        Decision["DECISION STATE<br/>stock:remaining (int)<br/>orders:users (set)"]
-        Channel["PUB/SUB · sale:events"]
+        Decision["DECISION STATE<br/>stock:{saleId}:remaining (int)<br/>orders:{saleId}:users (set)"]
+        Channel["PUB/SUB · sale:{saleId}:events"]
     end
 
     Mongo[("MongoDB 8 · AUDIT<br/>users · orders · orderlines · …")]
 
-    Browser -- "POST /api/order" --> Routes
-    Browser -- "GET /api/sale/status" --> Routes
-    Browser -- "GET /api/order/:email" --> Routes
-    Browser == "SSE GET /api/sale/events" ==> Broadcaster
+    Browser -- "GET /api/sales/active" --> Routes
+    Browser -- "POST /api/sales/:slug/order" --> Routes
+    Browser -- "GET /api/sales/:slug/status" --> Routes
+    Browser -- "GET /api/sales/:slug/order/:email" --> Routes
+    Browser == "SSE GET /api/sales/:slug/events" ==> Broadcaster
     Routes --> Services
     Services -- "EVALSHA order.lua (atomic)" --> Decision
     Services -. "async audit write" .-> Mongo
-    Services -- "PUBLISH sale:events" --> Channel
+    Services -- "PUBLISH sale:{saleId}:events" --> Channel
     Channel -- "SUBSCRIBE (dedicated connection)" --> Broadcaster
     Broadcaster -- "fresh status read at emit" --> Decision
     Mongo -. "cold start only: rebuild" .-> Decision
@@ -59,6 +60,10 @@ single Lua script as the sole writer while serving); **MongoDB** is the audit
 layer (written asynchronously after a decision, read only at cold start to
 rebuild Redis); and the **clock** is the API server's own UTC `Date.now()`, never
 the client's.
+
+Redis keys are namespaced by the MongoDB `ObjectId` of the active sale document
+(`stock:{saleId}:remaining`, `orders:{saleId}:users`, `sale:{saleId}:events`), so
+multiple sales can coexist in the same Redis instance.
 
 The full design — layers, request flows, the restart gate, failure behavior, and
 trade-offs — lives in [`docs/architecture.md`](docs/architecture.md).
@@ -99,8 +104,8 @@ is no runtime admin endpoint.
 
 | Variable | Required | Default | Meaning |
 | --- | --- | --- | --- |
-| `SALE_START_TIME` | **yes** | — | ISO 8601; parsed to UTC epoch ms at boot |
-| `SALE_END_TIME` | **yes** | — | ISO 8601; must be strictly after the start |
+| `SALE_START_TIME` | **yes** | — | ISO 8601 with explicit UTC offset (`Z` or `±HH:MM`); parsed to UTC epoch ms at boot |
+| `SALE_END_TIME` | **yes** | — | ISO 8601 with explicit UTC offset; must be strictly after the start |
 | `STOCK_QUANTITY` | no | `100` | Positive integer; units on sale |
 | `REDIS_URL` | no | `redis://localhost:6379` | Redis 8, AOF enabled |
 | `MONGODB_URI` | no | `mongodb://localhost:27017/flash-sale` | The audit database |
@@ -157,11 +162,11 @@ npm run stress        # or: make stress
 Prerequisite: Docker. k6 runs from your `PATH` if present, otherwise from the
 `grafana/k6` image. The harness stops the API, resets the stores, restarts the
 API, drives the concurrent burst with k6, then verifies the results against the
-stores. Redis (`SCARD orders:users` + `stock:remaining`) is the authoritative
-fairness record: every fairness count is an exact equality against the API's own
-seeded stock (the harness never asserts against a quantity it chose). The async
-Mongo audit is reconciled with a tolerance — an accepted under-count (a Redis
-accept whose durable write was lost) passes with a note, while an
+stores. Redis (`SCARD orders:{saleId}:users` + `stock:{saleId}:remaining`) is the
+authoritative fairness record: every fairness count is an exact equality against
+the API's own seeded stock (the harness never asserts against a quantity it chose).
+The async Mongo audit is reconciled with a tolerance — an accepted under-count (a
+Redis accept whose durable write was lost) passes with a note, while an
 over-count (a phantom order Mongo holds but Redis never accepted) hard-fails. It
 then re-checks that a past-window sale rejects every attempt.
 Buyer count (`ATTEMPTS`, default 5,000), virtual users (`VUS`, default 500), and
@@ -195,8 +200,9 @@ server/   Express 5 + TypeScript API (Node 24 native type stripping — no bundl
 client/   React 19 + Vite SPA — built into the api image, served at /
           src/
             components/     presentational UI
-            hooks/          realtime status + order state machines
-            api/            typed wire clients (sale, order)
+            hooks/          active-sale redirect · realtime status · order state machines
+            api/            typed wire clients (sale, order) — slug-parameterized
+            router.tsx      React Router: / → /sale/:slug redirect · /sale/:slug · * → 404
 
 stress/   the fairness proof (imports no server code — an independent observer)
             run.ts          orchestrator: stop → reset → start → k6 → verify → window
@@ -227,9 +233,9 @@ ship; Redis holds the runtime truth.
 
 | Key | Type | Purpose |
 | --- | --- | --- |
-| `stock:remaining` | integer | Units left; also the warm/cold boot sentinel |
-| `orders:users` | set | Buyer emails with confirmed orders |
-| `sale:events` | pub/sub | Type-only event strings (`order.accepted`, `sale.sold_out`, `sale.started`, `sale.ended`) |
+| `stock:{saleId}:remaining` | integer | Units left; also the warm/cold boot sentinel. `{saleId}` is the MongoDB `ObjectId` of the active sale. |
+| `orders:{saleId}:users` | set | Buyer emails with confirmed orders |
+| `sale:{saleId}:events` | pub/sub | Type-only event strings (`order.accepted`, `sale.sold_out`, `sale.started`, `sale.ended`) |
 
 The Lua script, the boot rebuild, and the offline reset script are the only
 permitted writers of the two state keys. The full ER diagram and interface
@@ -293,8 +299,8 @@ the list to Mongo. Closes the audit under-count window (the one known data-loss
 path) without putting Mongo on the hot path.
 
 **Authentication and account identity.** Replace the raw email with an
-authenticated user id. The set-membership mechanism is unchanged — only the key
-stored in `orders:users` changes. Eliminates the email aliasing bypass entirely.
+authenticated user id. The set-membership mechanism is unchanged — only the value
+stored in `orders:{saleId}:users` changes. Eliminates the email aliasing bypass entirely.
 
 **Rate limiting.** A per-IP or per-email throttle at the API edge (or via a
 reverse proxy). Prevents bandwidth waste from abusive clients without affecting

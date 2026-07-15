@@ -26,20 +26,21 @@ flowchart LR
     end
 
     subgraph Redis["Redis 8 · AOF"]
-        Decision["DECISION STATE<br/>stock:remaining (int)<br/>orders:users (set)"]
-        Channel["PUB/SUB · sale:events"]
+        Decision["DECISION STATE<br/>stock:{saleId}:remaining (int)<br/>orders:{saleId}:users (set)"]
+        Channel["PUB/SUB · sale:{saleId}:events"]
     end
 
     Mongo[("MongoDB 8 · AUDIT<br/>users · orders · orderlines · …")]
 
-    Browser -- "POST /api/order" --> Routes
-    Browser -- "GET /api/sale/status" --> Routes
-    Browser -- "GET /api/order/:email" --> Routes
-    Browser == "SSE GET /api/sale/events" ==> Broadcaster
+    Browser -- "GET /api/sales/active" --> Routes
+    Browser -- "POST /api/sales/:slug/order" --> Routes
+    Browser -- "GET /api/sales/:slug/status" --> Routes
+    Browser -- "GET /api/sales/:slug/order/:email" --> Routes
+    Browser == "SSE GET /api/sales/:slug/events" ==> Broadcaster
     Routes --> Services
     Services -- "EVALSHA order.lua (atomic)" --> Decision
     Services -. "async audit write" .-> Mongo
-    Services -- "PUBLISH sale:events" --> Channel
+    Services -- "PUBLISH sale:{saleId}:events" --> Channel
     Channel -- "SUBSCRIBE (dedicated connection)" --> Broadcaster
     Broadcaster -- "fresh status read at emit" --> Decision
     Mongo -. "cold start only: rebuild" .-> Decision
@@ -77,11 +78,22 @@ integration tests. Its order is fixed:
    so connect is raced against a timeout and the client is destroyed on failure.
 3. **Mongo connect.**
 4. **Lua script registration** — `SCRIPT LOAD` and SHA cache.
-5. **Seed and reconcile** — idempotent seed upserts, then the warm/cold gate (§6).
-6. **Sale-events layer** — publisher on the main connection, broadcaster, and
-   subscriber on a dedicated duplicated connection; window-boundary timers for
-   future boundaries only.
-7. **App assembly.**
+5. **Mongo seed** — idempotent upserts of Product, Sale, SaleProduct, and Inventory.
+6. **Multi-sale overlap validation** — fails boot if more than one sale's window
+   overlaps `now()`; prevents ambiguous active-sale selection.
+7. **Active sale selection** — selects the sale by priority: within-window first,
+   then nearest upcoming, then most-recently-ended.
+8. **Sale resolver** — middleware factory that resolves `:slug` URL params to a
+   `SaleSummary` with a 60-second in-memory cache.
+9. **Key migration** — one-time rename of v1.0 flat Redis keys (`stock:remaining`,
+   `orders:users`) to v1.1 namespaced keys (`stock:{saleId}:remaining`,
+   `orders:{saleId}:users`). No-op when flat keys are absent.
+10. **Warm/cold reconciliation** — the restart gate (§6): warm start touches
+    nothing; cold start rebuilds Redis from Mongo confirmed order emails.
+11. **Sale-events layer** — publisher on the main connection, broadcaster, and
+    subscriber on a dedicated duplicated connection; window-boundary timers for
+    future boundaries only.
+12. **App assembly.**
 
 `bootstrap()` returns `teardown()`, which unwinds in reverse (timers, broadcaster,
 subscriber, Mongo, Redis).
@@ -98,14 +110,26 @@ message is preserved.
 
 ### 3.3 Routes (`src/routes/`)
 
-Four endpoints; the surface is closed.
+Ten endpoints total: six v1.1 slug-scoped endpoints form the primary API surface;
+four v1.0 aliases remain for the stress harness and backward compatibility.
+
+The `:slug` parameter in v1.1 routes is resolved to a `SaleSummary` by the
+`SaleResolver` middleware before the handler runs. An unknown slug yields `404`
+on v1.1 routes. On v1.0 alias routes the resolver attaches the active sale
+without erroring; a missing sale lets the handler return `404`.
 
 | Method & path | Purpose |
 | --- | --- |
-| `GET /api/sale/status` | Sale status body: `status`, `stock`, window bounds. |
-| `POST /api/order` | Atomic order attempt. |
-| `GET /api/order/:email` | Membership read (idempotency / convenience). |
-| `GET /api/sale/events` | SSE stream of `status` frames. |
+| `GET /api/sales/active` | Discover the active sale's slug. `404` if no sales exist. |
+| `GET /api/sales/:slug` | Sale details with a product join, including live `remaining` stock. `remaining` is `null` when Redis is down — the one read path that degrades gracefully rather than failing closed. |
+| `GET /api/sales/:slug/status` | Sale status body: `status`, `stock`, window bounds. |
+| `POST /api/sales/:slug/order` | Atomic order attempt. |
+| `GET /api/sales/:slug/order/:email` | Membership read (idempotency / convenience). |
+| `GET /api/sales/:slug/events` | SSE stream of `status` frames. |
+| `GET /api/sale/status` | v1.0 alias → same handler as `GET /api/sales/:slug/status`. |
+| `POST /api/order` | v1.0 alias → same handler as `POST /api/sales/:slug/order`. |
+| `GET /api/order/:email` | v1.0 alias → same handler as `GET /api/sales/:slug/order/:email`. |
+| `GET /api/sale/events` | v1.0 alias → same handler as `GET /api/sales/:slug/events`. |
 
 The order route validates the email (trim; empty or greater than 256 characters
 is a `400` `"Email is required."`) and canonicalizes it (NFC-normalize + case-fold)
@@ -114,13 +138,14 @@ It then maps the service outcome to the wire contract. The SSE route awaits the
 snapshot frame before writing headers, so a Redis-down snapshot yields a clean
 `503` rather than a half-open stream.
 
-Full response set (both order paths can return every documented code, not just
-the happy path):
+Full response set:
 
 | Endpoint | Codes |
 | --- | --- |
-| `POST /api/order` | `201` created · `200` already ordered (outranks window/stock) · `409` sold out / sale not active · `400` empty or > 256-char email · `503` Redis loss |
-| `GET /api/order/:email` | `200 { ordered: true｜false }` · `400` empty or > 256-char email · `503` Redis loss — the membership read is a live Redis read, so it fails closed too |
+| `GET /api/sales/active` | `200 { slug }` · `404` no sales configured |
+| `GET /api/sales/:slug` | `200` sale + products · `404` unknown slug |
+| `POST /api/sales/:slug/order` (and v1.0 alias) | `201` created · `200` already ordered (outranks window/stock) · `409` sold out / sale not active · `400` empty or > 256-char email · `503` Redis loss |
+| `GET /api/sales/:slug/order/:email` (and v1.0 alias) | `200 { ordered: true｜false }` · `400` empty or > 256-char email · `503` Redis loss — the membership read is a live Redis read, so it fails closed too |
 
 ### 3.4 Services (`src/services/`)
 
@@ -166,26 +191,32 @@ timeout so a hang becomes a failure.
 **Redis (`adapters/redis/`)**
 
 - **`order.lua`** — the authoritative decision. In one atomic, single-threaded
-  unit it reads stock (erroring if the key is missing rather than fabricating a
-  `0`), returns `ALREADY` if the email is a member, returns `SOLD_OUT` if stock is
-  `≤ 0`, otherwise `SADD`s the email and `DECR`s stock, returning `OK` with the
-  post-decrement remaining. While the API serves, this script is the only writer of
-  `stock:remaining` and `orders:users`; there is no app-side lock.
+  unit it reads `stock:{saleId}:remaining` (erroring if the key is missing rather
+  than fabricating a `0`), returns `ALREADY` if the email is a member of
+  `orders:{saleId}:users`, returns `SOLD_OUT` if stock is `≤ 0`, otherwise `SADD`s
+  the email and `DECR`s stock, returning `OK` with the post-decrement remaining.
+  While the API serves, this script is the only writer of both keys; there is no
+  app-side lock.
 - **`orders.ts`** — registers the script (`SCRIPT LOAD` + SHA cache) and invokes it
   by `EVALSHA`, with automatic `EVAL` fallback and re-cache on a `NOSCRIPT` reply.
   Exposes the single `SISMEMBER` used outside the window. Every reply is validated;
-  an unparseable reply fails closed.
-- **`stock.ts`** — reads `stock:remaining`; defines `RedisUnavailableError`
+  an unparseable reply fails closed. Exports `ordersKeyFor(saleId)`.
+- **`stock.ts`** — reads `stock:{saleId}:remaining`; defines `RedisUnavailableError`
   (status `503`, `expose: true`) and the shared `bounded()` timeout wrapper. A
-  missing key throws rather than returning a number.
-- **`events.ts`** — the `sale:events` pub/sub layer. `PUBLISH` rides the main
-  client; `SUBSCRIBE` runs on a dedicated duplicated connection. Payloads are
+  missing key throws rather than returning a number. Exports `stockKeyFor(saleId)`.
+- **`events.ts`** — the `sale:{saleId}:events` pub/sub layer. `PUBLISH` rides the
+  main client; `SUBSCRIBE` runs on a dedicated duplicated connection. Payloads are
   type-only: the event string is the message, and consumers recompute truth from a
   fresh read.
-- **`reconcile.ts`** — the boot rebuild. `hasStockKey()` is the warm/cold sentinel;
-  `rebuild()` writes membership first and the stock sentinel last
-  (`DEL → SADD → SET`), so a crash mid-rebuild re-runs the cold path on the next
-  boot.
+- **`reconcile.ts`** — the boot rebuild. `hasStockKey(saleId)` is the warm/cold
+  sentinel; `rebuild(emails, remaining, saleId)` writes membership first and the
+  stock sentinel last (`DEL → SADD → SET`), so a crash mid-rebuild re-runs the cold
+  path on the next boot.
+- **`migrate.ts`** — one-time v1.0 → v1.1 flat-key migration. Renames
+  `stock:remaining` → `stock:{saleId}:remaining` and `orders:users` →
+  `orders:{saleId}:users` when the flat keys are present. No-op on a fresh install
+  or after the migration has already run. Invoked at boot before reconciliation
+  (§3.1 step 9).
 - **`client.ts`** — creates the node-redis client with offline queueing disabled
   and a bounded connect timeout.
 
@@ -201,14 +232,19 @@ timeout so a hang becomes a failure.
   insert a confirmed order, insert its order line. A duplicate-key error on
   `(saleId, email)` is swallowed as already-recorded.
 - **`seed.ts`** — idempotent boot seed of the domain documents from env config;
-  exposes `listConfirmedOrderEmails()`, the cold-rebuild source.
+  exposes `listConfirmedOrderEmails(saleId)`, the cold-rebuild source, and
+  `listAllSales()`, used at boot to validate multi-sale overlap.
+- **`catalog.ts`** — `createCatalogReader`. Joins `SaleProduct` → `Product` and
+  `Inventory` to produce the product list for `GET /api/sales/:slug`. The live
+  `remaining` value comes from a separate Redis read; a missing or unavailable
+  Redis value resolves to `null` rather than failing the whole response.
 - **`client.ts`** — connection lifecycle only, with a 5 s server-selection timeout.
 
 **Payment (`adapters/payment/noop.ts`)** — the instant-approve provider.
 
 ## 4. Request flows
 
-### 4.1 `POST /api/order` inside the window
+### 4.1 `POST /api/sales/:slug/order` inside the window
 
 ```
 route validates email (400 on empty/oversized — Redis untouched)
@@ -226,24 +262,31 @@ order holder (`200`) from everyone else (`409 "Sale is not active."`). Precedenc
 validation → already-ordered → window → stock → created — means an order holder
 always wins, including a retry after the sale ends.
 
-### 4.2 `GET /api/sale/events` (SSE)
+### 4.2 `GET /api/sales/:slug/events` (SSE)
 
 The route awaits a fresh snapshot frame (failing closed with `503` if Redis is
 down), sends SSE headers, writes the snapshot, and registers the connection.
-Thereafter the broadcaster drives the stream: events on `sale:events` trigger a
+Thereafter the broadcaster drives the stream: events on `sale:{saleId}:events` trigger a
 coalesced, freshly composed `status` frame to every connection; a 25 s heartbeat
 keeps intermediaries from closing idle streams; a lost subscriber connection closes
 every stream, and a new stream receives a `503`.
 
-### 4.3 Client realtime model (`client/src/hooks/useSaleStatus.ts`)
+### 4.3 Client realtime model
 
-The client treats an open SSE stream as the sole writer of the status view. Polling
-is a fallback whose writes are discarded while the stream is live. A `channel` axis
-(`connecting` / `live` / `degraded` / `offline`) tracks liveness independently of
-sale status, so the page never claims "live" over a frozen value. After every order
-attempt the client re-syncs status once. `placeOrder` is total: a `409`, `503`,
-dropped socket, or 10 s stall all resolve to a verdict, so no UI path strands a
-spinner.
+The browser SPA is a React 19 app with three routes: `/` redirects to `/sale/:slug`
+via `useActiveSaleRedirect` (which calls `GET /api/sales/active`); `/sale/:slug` is
+the main sale page; and `*` is a 404 page. All client API functions
+(`fetchSaleStatus`, `fetchSaleDetails`, `placeOrder`, `checkOrder`, `saleEventsUrl`)
+are slug-parameterized and call the v1.1 `/api/sales/:slug/…` paths exclusively.
+
+`useSaleStatus(slug)` treats an open SSE stream as the sole writer of the status
+view. Polling is a fallback whose writes are discarded while the stream is live. A
+`channel` axis (`connecting` / `live` / `degraded` / `offline`) tracks liveness
+independently of sale status, so the page never claims "live" over a frozen value. A
+`notFound` flag is set on a `404` response from the slug lookup and is terminal —
+polling and reconnects stop. After every order attempt the client re-syncs status
+once. `placeOrder` is total: a `409`, `503`, dropped socket, or 10 s stall all
+resolve to a verdict, so no UI path strands a spinner.
 
 ## 5. Data and state model
 
@@ -321,9 +364,12 @@ All schemas use `timestamps: true`. Unique indexes guard `users.identifier`,
 
 ### 5.2 Redis state (runtime truth)
 
-- `stock:remaining` — integer unit count; also the warm/cold sentinel.
-- `orders:users` — set of buyer emails holding a confirmed order.
-- `sale:events` — pub/sub channel of type-only event strings.
+Keys are namespaced by the MongoDB `ObjectId` of the active sale document
+(`{saleId}`), so multiple sales can coexist in the same Redis instance.
+
+- `stock:{saleId}:remaining` — integer unit count; also the warm/cold sentinel.
+- `orders:{saleId}:users` — set of buyer emails holding a confirmed order.
+- `sale:{saleId}:events` — pub/sub channel of type-only event strings.
 
 Permitted writers of the two state keys are exactly three: the Lua script while
 serving, the boot rebuild before `listen()`, and the offline reset script.
@@ -338,22 +384,25 @@ serving, the boot rebuild before `listen()`, and the offline reset script.
 | `OrderOutcome` | `services/order.ts` | `created \| already \| sold_out \| inactive` — the service-level verdicts mapped to HTTP. |
 | `PaymentProvider` | `services/payment.ts` | Charge port; `noop.ts` is the sole v1 impl (instant-approve, cannot fail). |
 | `Clock` | `services/clock.ts` | `() => number` — injected into services so routes/adapters never call `Date.now()`. |
+| `SaleSummary` | `adapters/mongo/seed.ts` | Boot-resolved sale context: `{ _id, slug, name, startTime, endTime, stockQuantity }`. Attached to `req.sale` by the `SaleResolver` middleware; passed to service calls as `saleId` and window bounds. |
+| `SaleNotFoundError` | `client/src/api/sale.ts` | Thrown on a `404` from `GET /api/sales/:slug`. Signals `useSaleStatus` to set `notFound: true` and stop all reconnect attempts. |
 
 **MongoDB (durable audit)** — the domain documents above. It records outcomes;
 it never decides them. Its only runtime read is the cold-start rebuild.
 
 ## 6. Restart safety: the warm/cold gate
 
-On boot, after seeding, the reconciler checks whether `stock:remaining` exists.
+On boot, after the active sale is selected and key migration runs, the reconciler
+checks whether `stock:{saleId}:remaining` exists.
 
 - **Warm start (key present):** surviving Redis state is authoritative — nothing is
   touched. Consequently, changing `STOCK_QUANTITY` against surviving state is a
   no-op; a true reset occurs only via the offline reset script or
   `docker compose down -v`.
 - **Cold start (key absent):** Redis is rebuilt from Mongo truth — list confirmed
-  order emails, set `stock:remaining = STOCK_QUANTITY − count` (clamped at 0, with
-  a warning if orders exceed stock), and repopulate `orders:users`. Redis is
-  rebuilt from Mongo, never the reverse.
+  order emails, set `stock:{saleId}:remaining = STOCK_QUANTITY − count` (clamped at
+  0, with a warning if orders exceed stock), and repopulate `orders:{saleId}:users`.
+  Redis is rebuilt from Mongo, never the reverse.
 
 Because the rebuild writes the sentinel last, a crash mid-rebuild is safe: the next
 boot sees no sentinel and re-runs the cold path.
@@ -385,8 +434,9 @@ order key is canonicalized (NFC-normalized and case-folded) so `A@x.com` and
 
 Configuration is environment variables only, parsed and validated once at boot
 (`adapters/config.ts`), fail-fast; there is no runtime admin surface.
-`SALE_START_TIME` and `SALE_END_TIME` are required ISO-8601 datetimes (end strictly
-after start), parsed to UTC epoch ms once. `STOCK_QUANTITY` (default 100) and `PORT`
+`SALE_START_TIME` and `SALE_END_TIME` are required ISO-8601 datetimes with an
+explicit UTC offset (`Z` or `±HH:MM`; a bare local-time string is rejected); end
+must be strictly after start; both are parsed to UTC epoch ms once. `STOCK_QUANTITY` (default 100) and `PORT`
 (default 3000) must be positive integers; `REDIS_URL` and `MONGODB_URI` default to
 local. The Redis timeouts (2 s connect, 1 s per command) are fixed constants, not
 tunables.
@@ -403,23 +453,27 @@ The `stress/` workspace is an independent observer: it imports no server code an
 speaks only the wire and store contracts. `run.ts` orchestrates the protocol — stop
 the API (a reset against a serving API would race the Lua script) → reset the stores
 (guarded to refuse if anything answers) → start the API and wait for
-`GET /api/sale/status` to return 200 → drive `ATTEMPTS` unique emails (default
-5,000) at `POST /api/order` with k6, across `VUS` virtual users (default 500), with
-thresholds failing on any 5xx or any status outside `{201, 409}` → verify against
-Mongo and Redis by equality (confirmed orders == target == distinct emails ==
-`SCARD orders:users`, and `stock:remaining == 0`) → restart with a past window and
-confirm attempts are rejected `409`. Under-acceptance fails as loudly as oversell.
-The combined exit code is the pass/fail signal.
+`GET /api/sale/status` (v1.0 alias) to return 200 → drive `ATTEMPTS` unique emails
+(default 5,000) at `POST /api/order` (v1.0 alias) with k6, across `VUS` virtual
+users (default 500), with thresholds failing on any 5xx or any status outside
+`{201, 409}` → verify against Mongo and Redis by equality (confirmed orders ==
+target == distinct emails == `SCARD orders:{saleId}:users`, and
+`stock:{saleId}:remaining == 0`) → restart with a past window and confirm attempts
+are rejected `409`. Under-acceptance fails as loudly as oversell. The combined exit
+code is the pass/fail signal.
 
 ## 10. Deployment
 
 A multi-stage `Dockerfile` builds the client bundle, then runs the server on
 `node:24-alpine` via native TypeScript type stripping — no server build step, no
-bundler. `docker-compose.yml` runs the API alongside `redis:8-alpine` (AOF enabled)
-and `mongo:8`, both health-gated, with an API healthcheck polling
-`GET /api/sale/status` so dependents and the stress harness have a truthful
-boot-complete signal. `docker compose up` serves SPA and API on port 3000. The
-`Makefile` wraps the common flows (`make deploy`, `make stress`, `make clean`).
+bundler. The `CLIENT_DIST_DIR` environment variable is set to `/app/client/dist`
+in the image so the API serves the built SPA as static files at `/`. In
+development, Vite serves the SPA separately; `CLIENT_DIST_DIR` is unset.
+`docker-compose.yml` runs the API alongside `redis:8-alpine` (AOF enabled) and
+`mongo:8`, both health-gated, with an API healthcheck polling `GET /api/sale/status`
+(the v1.0 alias) so dependents and the stress harness have a truthful boot-complete
+signal. `docker compose up` serves SPA and API on port 3000. The `Makefile` wraps
+the common flows (`make deploy`, `make stress`, `make clean`).
 
 ## 11. Trade-offs
 
@@ -434,7 +488,7 @@ revisited.
 **Decision.** The membership check, stock check, `SADD`, and `DECR` live in a
 single `order.lua` script (`§3.5`), executed by Redis as one indivisible unit.
 While the API serves traffic, that script is the *only* writer of
-`stock:remaining` and `orders:users`.
+`stock:{saleId}:remaining` and `orders:{saleId}:users`.
 
 **Why.** Redis runs scripts single-threaded, so the four steps cannot interleave
 with another request. This is what makes "no oversell" and "one item per user"
@@ -547,8 +601,8 @@ decision becomes worthwhile.
 
 ### 11.5 Email as the idempotency key
 
-**Decision.** A buyer's email is their identity. `orders:users` is a set of
-emails; a repeat attempt is recognized by set membership (`§4.1`).
+**Decision.** A buyer's email is their identity. `orders:{saleId}:users` is a set
+of emails; a repeat attempt is recognized by set membership (`§4.1`).
 
 **Why.** It satisfies the idempotent-identity invariant with the identifier the
 buyer already supplies — no session, no account system, no server-issued token to
