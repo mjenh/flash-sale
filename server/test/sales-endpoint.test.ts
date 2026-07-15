@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { pino } from "pino";
 import { bootstrap, type BootstrapOverrides } from "../src/bootstrap.ts";
+import type { SaleLookupOps } from "../src/middleware/sale-resolver.ts";
 import { PRODUCT_NAME, PRODUCT_SKU, SALE_NAME, SALE_SLUG } from "../src/adapters/mongo/seed.ts";
 import { createFakeRedis, stockKeyFor, type FakeRedis } from "./helpers/fake-redis.ts";
 import { addCatalogProduct, createFakeMongo, reserveSaleId } from "./helpers/fake-mongo.ts";
@@ -25,6 +26,11 @@ async function boot(opts: {
    *  default product — lets tests add extra catalog products via
    *  addCatalogProduct() ahead of the real seeder's own upsert. */
   beforeBootstrap?: (mongo: ReturnType<typeof createFakeMongo>, saleId: string) => Promise<void>;
+  /** Story 5.3: overrides the sale-resolver's lookup ops entirely — used to
+   *  simulate "no sales exist" for GET /api/sales/active's 404 branch, a
+   *  state the normal boot path can never reach (seed() always upserts one
+   *  Sale document before this override would matter for anything else). */
+  saleLookupOps?: SaleLookupOps;
 }) {
   const mongo = createFakeMongo();
   const saleId = await reserveSaleId(mongo, SALE_SLUG);
@@ -44,6 +50,7 @@ async function boot(opts: {
     connectMongoDb: vi.fn(async () => {}),
     disconnectMongoDb: vi.fn(async () => {}),
     mongoModelOps: mongo.ops,
+    saleLookupOps: opts.saleLookupOps,
   };
   const { app } = await bootstrap(overrides);
   return { fake, mongo, saleId, app };
@@ -62,6 +69,27 @@ describe("GET /api/sales/active (discovery endpoint)", () => {
     const res = await request(app).get("/api/sales/active");
     expect(res.status).toBe(200);
     expect(res.body.slug).toBe("flash-sale");
+  });
+
+  // Story 5.3 (v1.1-FR-6/AC1): "No sales configured." — a state the normal
+  // boot path can never produce (seed() always upserts one Sale document),
+  // reached here only by overriding the resolver's lookup ops directly.
+  it("returns 404 'No sales configured.' when the resolver finds no sale", async () => {
+    const { app } = await boot({
+      nowMs: IN_WINDOW,
+      stock: "50",
+      saleLookupOps: {
+        async findBySlug() {
+          return null;
+        },
+        async findActiveSale() {
+          return null;
+        },
+      },
+    });
+    const res = await request(app).get("/api/sales/active");
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ success: false, error: "No sales configured." });
   });
 });
 

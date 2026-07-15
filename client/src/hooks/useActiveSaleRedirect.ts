@@ -1,15 +1,14 @@
 // AC1's `/` root route: discover "the active sale" and redirect to
-// `/sale/${slug}`. `GET /api/sales/active` is Story 5.3's endpoint to build
-// out fully (richer fallback copy, etc) — this hook calls it defensively
-// today (the response shape it expects — `{ success, slug }` — is exactly
-// Story 5.3's documented AC) and treats ANY failure (network error, 404 "no
-// sales configured", a malformed body) the same way: give up gracefully and
-// report `"unavailable"` rather than leaving the caller on a spinner forever.
+// `/sale/${slug}`. Calls `GET /api/sales/active` (live since Story 4.1,
+// confirmed correct by Story 5.3 — see routes/sales.ts) and treats ANY
+// failure (network error, 404 "no sales configured", a malformed body) the
+// same way: give up gracefully and report `"unavailable"` rather than
+// leaving the caller on a spinner forever.
 //
 // Deliberately isolated in its own hook (rather than inlined in a page
-// component) per the Story 5.1 design guidance: Story 5.3 can swap this
-// hook's internals (nicer fallback copy, a loader route, etc.) without
-// touching `RootRedirect.tsx`'s render logic at all.
+// component) so a future richer fallback (a dedicated loader route, etc.)
+// can swap this hook's internals without touching `RootRedirect.tsx`'s
+// render logic at all.
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 

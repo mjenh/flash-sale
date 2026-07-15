@@ -30,8 +30,15 @@ export function createSalesRouter({
 }: SalesRouterDeps): Router {
   const router = Router();
 
-  // Discovery endpoint — must come before :slug to avoid shadowing.
-  // Full implementation in Story 5.3; scaffolded here with the resolver.
+  // Discovery endpoint — must come before :slug to avoid shadowing. Scaffolded
+  // in Story 4.1 on top of saleResolver.findActive(); Story 5.3 confirmed this
+  // implementation already satisfies its AC1 (within-window > nearest-upcoming
+  // > most-recently-ended priority, 404 "No sales configured." when none
+  // exist) and added the missing HTTP-level 404 test — no code change needed
+  // here. `findActive()`'s current single-sale-derived ops (bootstrap.ts) are
+  // behaviorally exact for N=1 sale (the only case reachable today, since
+  // nothing creates a second Sale document); a real per-request Mongo query
+  // is future work for true multi-sale, not required by any shipped AC.
   router.get("/active", async (_req, res) => {
     const sale = await saleResolver.findActive();
     if (sale === null) {

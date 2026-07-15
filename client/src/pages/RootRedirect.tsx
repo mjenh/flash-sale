@@ -1,10 +1,12 @@
-// AC1's `/` route. Story 5.3 owns the real backend integration and final
-// copy/behavior; this story wires the shape it will extend: a dedicated hook
-// (useActiveSaleRedirect) does the fetch + navigate, and this component only
-// renders the placeholder for each of that hook's states. No flash of
-// content while loading — the noon-yellow field (styles/base.css) is already
-// the page background, so an empty/near-empty body reads as "still loading",
-// not broken.
+// AC1's `/` route. Story 5.1 wired this shape (useActiveSaleRedirect does the
+// fetch + navigate; this component only renders the placeholder for each of
+// that hook's states) against the not-yet-built GET /api/sales/active. Story
+// 5.3 confirmed the endpoint (shipped in Story 4.1's scaffold) matches this
+// hook's expectations exactly and that NO_ACTIVE_SALE_MESSAGE already reads
+// verbatim as its AC's "No active sale right now. Check back soon." — no
+// code change needed here. No flash of content while loading — the
+// noon-yellow field (styles/base.css) is already the page background, so an
+// empty/near-empty body reads as "still loading", not broken.
 import { useActiveSaleRedirect } from "../hooks/useActiveSaleRedirect.ts";
 import "./RootRedirect.css";
 
