@@ -12,6 +12,7 @@ import exec from "k6/execution";
 import { Counter, Rate } from "k6/metrics";
 
 const API_URL = (__ENV.API_URL || "http://localhost:3000").replace(/\/$/, "");
+const SALE_SLUG = __ENV.SALE_SLUG || "flash-sale";
 const ATTEMPTS = Number(__ENV.ATTEMPTS || 5000);
 const VUS = Number(__ENV.VUS || 500);
 const RETRY = __ENV.RETRY === "1" || __ENV.RETRY === "true";
@@ -102,7 +103,7 @@ export const options = {
     // These catch event loop starvation and write-behind queue backpressure
     // that correctness checks cannot detect (a stalled system that eventually
     // returns the right status code would otherwise pass silently).
-    "http_req_duration{name:'POST /api/order'}": ["p(95)<500", "p(99)<2000"],
+    "http_req_duration{name:'POST /api/sales/:slug/order'}": ["p(95)<500", "p(99)<2000"],
     // The spam fan-out must produce AT MOST one 202 for the shared email.
     // 0 wins is also valid — the sale may have sold out before spam ran.
     // The verifier's SCARD check independently catches any oversell.
@@ -111,9 +112,9 @@ export const options = {
 };
 
 function post(email) {
-  return http.post(`${API_URL}/api/order`, JSON.stringify({ email }), {
+  return http.post(`${API_URL}/api/sales/${SALE_SLUG}/order`, JSON.stringify({ email }), {
     headers: { "Content-Type": "application/json" },
-    tags: { name: "POST /api/order" },
+    tags: { name: "POST /api/sales/:slug/order" },
   });
 }
 

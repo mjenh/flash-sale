@@ -1,0 +1,10 @@
+# Compose override for stress runs — layered on top of docker-compose.yml by
+# `make stress`. Redirects the api and worker containers to the isolated stress
+# database so a stress run never touches the flash-sale dev/prod database.
+services:
+  api:
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/flash-sale-stress
+  worker:
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/flash-sale-stress
