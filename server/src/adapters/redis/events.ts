@@ -57,8 +57,6 @@ export const SALE_EVENTS_PATTERN = "sale:*:events";
  *  structurally satisfied by node-redis RedisClientType. */
 export interface SubscriberCommands {
   connect(): Promise<unknown>;
-  subscribe(channel: string, listener: (message: string) => void): Promise<unknown>;
-  unsubscribe(channel: string): Promise<unknown>;
   /** Pattern subscription — listener receives (message, channel). */
   pSubscribe(pattern: string, listener: (message: string, channel: string) => void): Promise<unknown>;
   pUnsubscribe(pattern?: string): Promise<unknown>;

@@ -6,14 +6,19 @@
 //   node db/scripts/seed-db.ts [options]
 //
 // Options:
-//   --mongoUri  MongoDB connection string
-//               (default: $MONGODB_URI or mongodb://localhost:27017/flash-sale)
-//   --dataDir   Directory containing the JSON seed files
-//               (default: db/data relative to cwd)
+//   --mongoUri       MongoDB connection string
+//                    (default: $MONGODB_URI or mongodb://localhost:27017/flash-sale)
+//   --dataDir        Directory containing the JSON seed files
+//                    (default: db/data relative to cwd)
+//   --dynamic-times  Ignore startTime/endTime in sales.json and instead set
+//                    startTime=now, endTime=now+2h for every sale row. Intended
+//                    for stress runs where a fixed date would drift out of the
+//                    active window over time.
 //
 // Data files (each a JSON array):
 //   products.json     — { sku, name, originalPrice }
-//   sales.json        — { slug, name, startTime, endTime, stockQuantity }
+//   sales.json        — { slug, name, startTime?, endTime?, stockQuantity }
+//                         startTime/endTime are optional when --dynamic-times is set
 //   saleproducts.json — { saleSlug, productSku, flashSalePrice }
 //                         (saleSlug / productSku are resolved to ObjectIds)
 //   inventories.json  — { productSku, initialQuantity }
@@ -50,6 +55,11 @@ function parseArgs(argv: string[]): Record<string, string> {
 
 const args = parseArgs(process.argv.slice(2));
 
+// Whether to ignore JSON dates and seed a fresh 2-hour window anchored to now.
+// The 2-hour span prevents the active window from expiring mid-run when a stress
+// test starts near the top of an hour.
+const dynamicTimes = process.argv.includes("--dynamic-times");
+
 const mongoUri =
   args["mongoUri"] ??
   process.env["MONGODB_URI"] ??
@@ -59,6 +69,22 @@ const dataDir = path.resolve(
   process.cwd(),
   args["dataDir"] ?? "db/data",
 );
+
+// ── Dynamic window helper ─────────────────────────────────────────────────────
+
+/**
+ * Computes a sale window anchored to the current instant.
+ *
+ * @remarks
+ * The 2-hour span gives stress runs a safe margin: a run starting at HH:59
+ * still has a full hour before the window closes, preventing spurious
+ * rejections that would break k6's `http_req_failed` threshold.
+ */
+function computeDynamicWindow(): { startTime: Date; endTime: Date } {
+  const startTime = new Date();
+  const endTime = new Date(startTime.getTime() + 2 * 60 * 60 * 1000);
+  return { startTime, endTime };
+}
 
 // ── JSON file helpers ─────────────────────────────────────────────────────────
 
@@ -131,8 +157,9 @@ interface ProductRow {
 interface SaleRow {
   slug: string;
   name: string;
-  startTime: string;
-  endTime: string;
+  // Optional when --dynamic-times is passed; required otherwise.
+  startTime?: string;
+  endTime?: string;
   stockQuantity: number;
 }
 
@@ -152,12 +179,21 @@ async function seed(): Promise<void> {
   console.log(`[seed-db] mongo    : ${mongoUri.replace(/\/\/[^@]+@/, "//***@")}`);
   console.log();
 
-  // ── Read all JSON files up-front so a missing/malformed file fails before
-  //    we open a Mongo connection.
+  // Read all JSON files up-front so a missing/malformed file fails before
+  // we open a Mongo connection.
   const productRows = readJson<ProductRow>("products.json");
   const saleRows = readJson<SaleRow>("sales.json");
   const saleProductRows = readJson<SaleProductRow>("saleproducts.json");
   const inventoryRows = readJson<InventoryRow>("inventories.json");
+
+  // Compute the dynamic window once so all sale rows in this run share the same
+  // [startTime, endTime) boundaries — avoids drift between rows on a slow host.
+  const dynamicWindow = dynamicTimes ? computeDynamicWindow() : null;
+  if (dynamicWindow !== null) {
+    console.log(
+      `[seed-db] --dynamic-times: startTime=${dynamicWindow.startTime.toISOString()} endTime=${dynamicWindow.endTime.toISOString()}`,
+    );
+  }
 
   await mongoose.connect(mongoUri, { serverSelectionTimeoutMS: 5000 });
   console.log("[seed-db] Connected.\n");
@@ -180,14 +216,34 @@ async function seed(): Promise<void> {
   const saleIdBySlug = new Map<string, Types.ObjectId>();
 
   for (const row of saleRows) {
-    const startTime = new Date(row.startTime);
-    const endTime = new Date(row.endTime);
-    if (isNaN(startTime.getTime())) {
-      throw new Error(`sales.json: invalid startTime "${row.startTime}" for slug "${row.slug}"`);
+    let startTime: Date;
+    let endTime: Date;
+
+    if (dynamicWindow !== null) {
+      startTime = dynamicWindow.startTime;
+      endTime = dynamicWindow.endTime;
+    } else {
+      // Static path: both fields are required when --dynamic-times is absent.
+      if (row.startTime === undefined || row.startTime === "") {
+        throw new Error(
+          `sales.json: missing startTime for slug "${row.slug}" — provide it or pass --dynamic-times`,
+        );
+      }
+      if (row.endTime === undefined || row.endTime === "") {
+        throw new Error(
+          `sales.json: missing endTime for slug "${row.slug}" — provide it or pass --dynamic-times`,
+        );
+      }
+      startTime = new Date(row.startTime);
+      endTime = new Date(row.endTime);
+      if (isNaN(startTime.getTime())) {
+        throw new Error(`sales.json: invalid startTime "${row.startTime}" for slug "${row.slug}"`);
+      }
+      if (isNaN(endTime.getTime())) {
+        throw new Error(`sales.json: invalid endTime "${row.endTime}" for slug "${row.slug}"`);
+      }
     }
-    if (isNaN(endTime.getTime())) {
-      throw new Error(`sales.json: invalid endTime "${row.endTime}" for slug "${row.slug}"`);
-    }
+
     if (endTime <= startTime) {
       throw new Error(`sales.json: endTime must be after startTime for slug "${row.slug}"`);
     }

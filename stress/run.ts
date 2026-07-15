@@ -13,7 +13,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve as resolvePath } from "node:path";
-import { loadStressConfig, type StressConfig } from "./config.ts";
+import mongoose from "mongoose";
+import { loadStressConfig, SALE_SLUG, type StressConfig } from "./config.ts";
 import { runReset, stockKeyFor } from "./reset.ts";
 import { runVerify } from "./verify.ts";
 
@@ -92,7 +93,7 @@ async function waitForApi(config: StressConfig, timeoutMs = 60_000): Promise<boo
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(`${config.apiUrl}/api/sale/status`, {
+      const res = await fetch(`${config.apiUrl}/api/sales/${SALE_SLUG}/status`, {
         signal: AbortSignal.timeout(2000),
       });
       if (res.status === 200) {
@@ -110,7 +111,7 @@ async function waitForApiStopped(config: StressConfig, timeoutMs = 30_000): Prom
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      await fetch(`${config.apiUrl}/api/sale/status`, { signal: AbortSignal.timeout(1000) });
+      await fetch(`${config.apiUrl}/api/sales/${SALE_SLUG}/status`, { signal: AbortSignal.timeout(1000) });
     } catch (err) {
       // ONLY a genuine connection refusal proves nothing is listening. A
       // timeout/abort means the API is wedged-but-alive — keep waiting, never
@@ -155,6 +156,7 @@ function runK6(config: StressConfig): K6Result {
     VUS: String(config.vus),
     RETRY: config.retry ? "1" : "0",
     RUN_TAG: String(Date.now()),
+    SALE_SLUG,
   };
 
   // handleSummary() writes here; k6 will not create the directory itself.
@@ -234,23 +236,71 @@ function readK6Summary(): string | undefined {
   }
 }
 
-/** Attempts outside the window are ALL rejected with
- *  { success: false }. The window is boot-parsed config, so the only
- *  honest way to prove this against the deployed stack is to restart the API
- *  with a past window and knock on the door. */
+interface WindowSnapshot {
+  startTime: Date;
+  endTime: Date;
+}
+
+/** Read the current sale window from MongoDB — snapshot before closing,
+ *  restore after the window phase. */
+async function captureSaleWindow(mongodbUri: string): Promise<WindowSnapshot> {
+  await mongoose.connect(mongodbUri, { serverSelectionTimeoutMS: 5000 });
+  try {
+    const db = mongoose.connection.db;
+    if (db === undefined) throw new Error("Mongo connection has no database handle");
+    const sale = await db.collection("sales").findOne({ slug: SALE_SLUG });
+    if (sale === null) {
+      throw new Error(
+        `no sale document with slug "${SALE_SLUG}" in ${mongodbUri} — cannot snapshot the window`,
+      );
+    }
+    return { startTime: sale.startTime as Date, endTime: sale.endTime as Date };
+  } finally {
+    await mongoose.disconnect();
+  }
+}
+
+/** Write startTime + endTime to the sale document so the API reads the
+ *  new window on its next boot. */
+async function setSaleWindow(mongodbUri: string, startTime: Date, endTime: Date): Promise<void> {
+  await mongoose.connect(mongodbUri, { serverSelectionTimeoutMS: 5000 });
+  try {
+    const db = mongoose.connection.db;
+    if (db === undefined) throw new Error("Mongo connection has no database handle");
+    await db.collection("sales").updateOne({ slug: SALE_SLUG }, { $set: { startTime, endTime } });
+  } finally {
+    await mongoose.disconnect();
+  }
+}
+
+/** Attempts outside the window are ALL rejected with { success: false }.
+ *  The window is determined by the sale document in MongoDB — not env vars.
+ *  Close it by writing a past window to the DB and restarting the API so it
+ *  boots with an ended sale; restore the original window in finally. */
 async function windowPhase(config: StressConfig): Promise<boolean> {
-  const closed = {
-    ...process.env,
-    SALE_START_TIME: "2020-01-01T00:00:00Z",
-    SALE_END_TIME: "2020-01-02T00:00:00Z",
-  };
+  let snapshot: WindowSnapshot | null = null;
+
+  try {
+    snapshot = await captureSaleWindow(config.mongodbUri);
+    await setSaleWindow(
+      config.mongodbUri,
+      new Date("2020-01-01T00:00:00Z"),
+      new Date("2020-01-02T00:00:00Z"),
+    );
+  } catch (err) {
+    return record(
+      "window phase",
+      false,
+      `could not close the sale window in MongoDB: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   // The restore is wrapped in a finally so it ALWAYS runs — even on an early
   // return or a throw. An interrupted window phase must never leave the API
-  // pinned to the 2020 closed window while the run can still print PASS
+  // pinned to the closed window while the run can still print PASS.
   // The restore is its own recorded pass/fail phase.
   try {
-    if (compose(["up", "-d", "--wait", "api"], closed) !== 0) {
+    if (compose(["up", "-d", "--force-recreate", "--wait", "api"]) !== 0) {
       return record("window phase", false, "could not restart the api with a closed window");
     }
     if (!(await waitForApi(config))) {
@@ -265,7 +315,7 @@ async function windowPhase(config: StressConfig): Promise<boolean> {
     const now = Date.now();
     const results = await Promise.all(
       Array.from({ length: 20 }, async (_, i) => {
-        const res = await fetch(`${config.apiUrl}/api/order`, {
+        const res = await fetch(`${config.apiUrl}/api/sales/${SALE_SLUG}/order`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email: `window-${now}-${i}@example.com` }),
@@ -296,6 +346,17 @@ async function windowPhase(config: StressConfig): Promise<boolean> {
     console.log('20/20 out-of-window attempts rejected: 409 { success: false, error: "Sale is not active." }');
     return record("window phase", true);
   } finally {
+    // Restore the original sale window in MongoDB BEFORE restarting the API
+    // so it boots back into the active/sold-out state, not the closed window.
+    if (snapshot !== null) {
+      try {
+        await setSaleWindow(config.mongodbUri, snapshot.startTime, snapshot.endTime);
+      } catch (err) {
+        console.error(
+          `window-phase restore: could not write original window to MongoDB: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
     await restoreOpenWindow(config);
   }
 }
@@ -303,7 +364,7 @@ async function windowPhase(config: StressConfig): Promise<boolean> {
 /** Restore the compose-default (active) window so the stack is left usable, and
  *  PROVE it landed there before the harness can declare success. */
 async function restoreOpenWindow(config: StressConfig): Promise<boolean> {
-  if (compose(["up", "-d", "--wait", "api"]) !== 0) {
+  if (compose(["up", "-d", "--force-recreate", "--wait", "api"]) !== 0) {
     return record("window restore", false, "docker compose could not restart the api on the default (open) window");
   }
   if (!(await waitForApi(config))) {
@@ -312,7 +373,7 @@ async function restoreOpenWindow(config: StressConfig): Promise<boolean> {
   // Within [start, end) the status is "active" or "sold_out"; "upcoming" or
   // "ended" would mean the 2020 closed window is still in force.
   try {
-    const res = await fetch(`${config.apiUrl}/api/sale/status`, { signal: AbortSignal.timeout(2000) });
+    const res = await fetch(`${config.apiUrl}/api/sales/${SALE_SLUG}/status`, { signal: AbortSignal.timeout(2000) });
     const body = (await res.json()) as { status?: unknown };
     if (body.status !== "active" && body.status !== "sold_out") {
       return record("window restore", false, `the api is not back on the open window (status=${JSON.stringify(body.status)})`);

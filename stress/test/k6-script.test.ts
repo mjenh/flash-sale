@@ -47,7 +47,8 @@ describe("k6-order.js", () => {
   });
 
   it("posts to the order endpoint with the `email` field (never `userId`)", () => {
-    expect(source).toContain("/api/order");
+    expect(source).toContain("/api/sales/");
+    expect(source).toContain("/order");
     expect(source).toContain("JSON.stringify({ email })");
     expect(source).not.toContain("userId");
   });

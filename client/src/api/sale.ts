@@ -11,8 +11,8 @@
 // fallback.
 //
 // Also exposes `fetchSaleDetails(slug)` (GET /api/sales/:slug) and dedicated
-// URL-construction helpers for every endpoint. Not yet consumed by any
-// component — ProductTile is still static/decorative.
+// URL-construction helpers for every endpoint. Called by SalePage to render
+// product name and price via ProductTile.
 
 export type SaleState = "upcoming" | "active" | "sold_out" | "ended";
 
