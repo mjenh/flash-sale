@@ -392,6 +392,21 @@ the limit.
 return 503 for an order that actually committed server-side. The idempotent
 retry recovers on the next attempt, but the first response was wrong.
 
+**Sale identity is resolved once at boot.** The active sale's `_id` and slug
+are selected by `bootstrap()` and held in-process for the lifetime of the
+server. The slug resolver returns only the boot-resolved sale; a new sale
+document added to MongoDB after the server starts will not be served until the
+API is restarted. Only one sale may be active at boot — the server rejects
+startup if two sales overlap in time. This is a deliberate simplification for
+v1; true runtime multi-sale support requires a per-request Mongo lookup.
+
+**Payment declines are unactionable post-acceptance.** The payment charge fires
+fire-and-forget after the Redis `OK` — it is never awaited and cannot alter the
+HTTP response. If a real payment adapter is wired in and the charge is declined,
+the buyer's slot in Redis is not released. There is no reversal path. A
+production payment integration requires a reserve-then-confirm flow with a
+`Reservation` collection (see Roadmap).
+
 ## Roadmap
 
 Improvements below are ordered by value, with the highest-impact items first.
@@ -428,6 +443,11 @@ necessary.
 stock without restarting the API. Sale config now lives in MongoDB, so the data
 layer is ready; the missing piece is a write endpoint + live reconfiguration of
 the in-process timer and Redis keys.
+
+**Multi-sale dynamic resolution.** The current sale resolver is derived from a
+single sale locked in at boot. Serving a portfolio of scheduled sales without
+restarts requires wiring a per-request Mongo query through `SaleLookupOps` —
+the port already exists; the adapter is the missing piece.
 
 **Service decomposition.** If the system grows beyond a single product and sale,
 the monolith splits along its existing layer boundaries: an order service, an
