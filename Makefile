@@ -70,7 +70,8 @@ stress: ## 5000-vs-100 fairness proof: stop api -> reset -> start api -> k6 -> v
 	$(COMPOSE) up -d --wait redis mongo
 	node db/scripts/seed-db.ts \
 	  --mongoUri mongodb://127.0.0.1:27017/flash-sale-stress \
-	  --dataDir db/data/stress
+	  --dataDir db/data/stress \
+	  --dynamic-times
 	COMPOSE_FILE=docker-compose.yml:docker-compose.stress.yml \
 	  $(COMPOSE) --profile worker up -d worker
 	COMPOSE_FILE=docker-compose.yml:docker-compose.stress.yml npm run stress

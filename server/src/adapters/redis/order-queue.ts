@@ -14,9 +14,9 @@ import { randomUUID } from "node:crypto";
 import type { RedisClient } from "./client.ts";
 import type { OrderAuditPort } from "../../services/order.ts";
 
-export const QUEUE_STREAM_KEY = "queue:orders";
-export const WORKER_GROUP = "workers";
-export const WORKER_CONSUMER_ID = "worker-1";
+const QUEUE_STREAM_KEY = "queue:orders";
+const WORKER_GROUP = "workers";
+const WORKER_CONSUMER_ID = "worker-1";
 
 /** Payload stored in every Redis Stream entry. */
 export interface QueueOrderPayload {

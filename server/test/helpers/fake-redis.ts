@@ -263,7 +263,6 @@ export function createFakeRedis(initial?: { stock?: string; saleId?: string }): 
     duplicate: () => {
       // Subscriber-side fake client sharing the bus; its commands honor
       // `failing` like every other command on the fake.
-      const mine = new Map<string, (message: string) => void>();
       const minePattern = new Map<string, (message: string, channel: string) => void>();
       const subscriber = {
         isOpen: false,
@@ -271,22 +270,7 @@ export function createFakeRedis(initial?: { stock?: string; saleId?: string }): 
           assertUp();
           subscriber.isOpen = true;
         },
-        subscribe: async (channel: string, listener: (message: string) => void) => {
-          assertUp();
-          mine.set(channel, listener);
-          const listeners = channelListeners.get(channel) ?? new Set();
-          listeners.add(listener);
-          channelListeners.set(channel, listeners);
-        },
-        unsubscribe: async (channel: string) => {
-          assertUp();
-          const listener = mine.get(channel);
-          if (listener !== undefined) {
-            channelListeners.get(channel)?.delete(listener);
-            mine.delete(channel);
-          }
-        },
-        // Finding #5: pSubscribe/pUnsubscribe for wildcard channel patterns.
+        // pSubscribe/pUnsubscribe for wildcard channel patterns.
         pSubscribe: async (pattern: string, listener: (message: string, channel: string) => void) => {
           assertUp();
           minePattern.set(pattern, listener);

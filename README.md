@@ -136,8 +136,10 @@ The data files (`db/data/*.json`) are JSON arrays — one file per collection:
 The script is **idempotent** — re-running updates mutable fields (`$set`).
 `inventories.initialQuantity` uses `$setOnInsert` and is never overwritten.
 
-Accepted CLI flags: `--mongoUri` (overrides `$MONGODB_URI`) and `--dataDir`
-(overrides the default `db/data` path).
+Accepted CLI flags: `--mongoUri` (overrides `$MONGODB_URI`), `--dataDir`
+(overrides the default `db/data` path), and `--dynamic-times` (replaces
+`startTime`/`endTime` in `sales.json` with `[now, now+2h]`; used by `make stress`
+so the window never drifts out of range between runs).
 
 > Changing `stockQuantity` in `db/data/sales.json` against a Redis that already
 > holds sale state is a warm-start **no-op** (Redis is the concurrency truth
@@ -262,9 +264,11 @@ sale window is closed.
 
 ### Stress configuration
 
-The stress harness uses `.env.stress` so the harness always agrees with the API
-container on `STOCK_QUANTITY` and the sale window. Explicit environment variables
-still override — `STOCK_QUANTITY=200 npm run stress` works as expected.
+The stress harness uses `.env.stress` so the harness and the API container always
+agree on `STOCK_QUANTITY`. The sale window is seeded dynamically by `seed-db.ts
+--dynamic-times` (`startTime=now`, `endTime=now+2h`), so it never drifts out of
+range between runs. Explicit environment variables still override —
+`STOCK_QUANTITY=200 npm run stress` works as expected.
 
 ## Project layout
 
@@ -307,7 +311,10 @@ db/       scripts/
                           (`npm run seed` / `make seed`)
           data/
             products.json     seed data — [{ sku, name, originalPrice }]
-            sales.json        seed data — [{ slug, name, startTime, endTime, stockQuantity }]
+            sales.json        seed data — [{ slug, name, startTime?, endTime?, stockQuantity }]
+                              (startTime/endTime are optional when --dynamic-times is passed;
+                               db/data/stress/sales.json omits them — the harness always seeds
+                               with --dynamic-times)
             saleproducts.json seed data — [{ saleSlug, productSku, flashSalePrice }]
             inventories.json  seed data — [{ productSku, initialQuantity }]
 
