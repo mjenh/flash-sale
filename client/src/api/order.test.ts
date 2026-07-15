@@ -42,8 +42,8 @@ describe("URL builders (AC2 — every call is slug-scoped)", () => {
 });
 
 describe("placeOrder — the verbatim verdict for every wire outcome", () => {
-  it("201 → success", async () => {
-    vi.stubGlobal("fetch", replied(201, { success: true, email: "a@b.c", message: SUCCESS }));
+  it("202 → success", async () => {
+    vi.stubGlobal("fetch", replied(202, { success: true, email: "a@b.c", message: SUCCESS }));
     await expect(placeOrder(SLUG, "a@b.c")).resolves.toEqual({
       kind: "success",
       message: "Order successful.",
@@ -106,7 +106,7 @@ describe("placeOrder — the verbatim verdict for every wire outcome", () => {
   });
 
   it("posts exactly { email } — never userId — to the slug-scoped URL", async () => {
-    const fetchSpy = replied(201, { message: SUCCESS });
+    const fetchSpy = replied(202, { message: SUCCESS });
     vi.stubGlobal("fetch", fetchSpy);
 
     await placeOrder(SLUG, "  spaced@example.com  ".trim());
@@ -119,7 +119,7 @@ describe("placeOrder — the verbatim verdict for every wire outcome", () => {
   });
 
   it("hits a different URL entirely for a different slug", async () => {
-    const fetchSpy = replied(201, { message: SUCCESS });
+    const fetchSpy = replied(202, { message: SUCCESS });
     vi.stubGlobal("fetch", fetchSpy);
 
     await placeOrder("another-sale", "a@b.c");

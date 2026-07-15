@@ -17,7 +17,7 @@ afterEach(() => {
 
 describe("submit", () => {
   it("refuses an empty email at the field and sends NOTHING", async () => {
-    const fetchSpy = replied(201, { message: "Order successful." });
+    const fetchSpy = replied(202, { message: "Order successful." });
     vi.stubGlobal("fetch", fetchSpy);
 
     const { result } = renderHook(() => useOrder({ slug: SLUG }));
@@ -31,7 +31,7 @@ describe("submit", () => {
   });
 
   it("has NO format gate — a plausible attempt is never blocked client-side", async () => {
-    const fetchSpy = replied(201, { message: "Order successful." });
+    const fetchSpy = replied(202, { message: "Order successful." });
     vi.stubGlobal("fetch", fetchSpy);
 
     const { result } = renderHook(() => useOrder({ slug: SLUG }));
@@ -69,7 +69,7 @@ describe("submit", () => {
     await act(async () => {
       release({
         ok: true,
-        status: 201,
+        status: 202,
         json: async () => ({ message: "Order successful." }),
       } as Response);
       await Promise.resolve();
@@ -85,7 +85,7 @@ describe("submit", () => {
     const onAttemptSettled = vi.fn();
 
     for (const [status, body] of [
-      [201, { message: "Order successful." }],
+      [202, { message: "Order successful." }],
       [409, { error: "Item is sold out." }],
       [503, { error: "Service temporarily unavailable." }],
     ] as [number, unknown][]) {
@@ -125,7 +125,7 @@ describe("submit", () => {
   });
 
   it("posts to the slug-scoped order URL (AC2)", async () => {
-    const fetchSpy = replied(201, { message: "Order successful." });
+    const fetchSpy = replied(202, { message: "Order successful." });
     vi.stubGlobal("fetch", fetchSpy);
 
     const { result } = renderHook(() => useOrder({ slug: SLUG }));

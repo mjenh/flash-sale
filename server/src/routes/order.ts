@@ -66,7 +66,7 @@ export function createOrderRouter({ orderService }: OrderRouterDeps): Router {
     const result = await orderService.attempt({ saleId: sale._id, window: windowFromSale(sale) }, email);
     switch (result.outcome) {
       case "created":
-        res.status(201).json({ success: true, email, message: "Order successful." });
+        res.status(202).json({ success: true, email, message: "Order accepted." });
         return;
       case "already":
         res.status(200).json({ success: true, email, message: "You have already ordered this item." });

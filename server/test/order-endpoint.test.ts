@@ -45,14 +45,14 @@ async function boot(opts: { nowMs: number; stock?: string; stockQuantity?: strin
 }
 
 describe("POST /api/order (booted via bootstrap())", () => {
-  it("201 with the exact body for a new email in-window; stock decrements; email joins the set", async () => {
+  it("202 with the exact body for a new email in-window; stock decrements; email joins the set", async () => {
     const { fake, saleId, app } = await boot({ nowMs: IN_WINDOW, stock: "3" });
     const res = await request(app).post("/api/order").send({ email: "buyer@example.com" });
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(202);
     expect(res.body).toEqual({
       success: true,
       email: "buyer@example.com",
-      message: "Order successful.",
+      message: "Order accepted.",
     });
     expect(fake.kv.get(stockKeyFor(saleId))).toBe("2");
     expect(fake.sets.get(ordersKeyFor(saleId))?.has("buyer@example.com")).toBe(true);
@@ -77,7 +77,7 @@ describe("POST /api/order (booted via bootstrap())", () => {
     const { fake, saleId, app } = await boot({ nowMs: IN_WINDOW, stock: "3" });
 
     const first = await request(app).post("/api/order").send({ email: "  Buyer@Example.COM " });
-    expect(first.status).toBe(201);
+    expect(first.status).toBe(202);
     expect(first.body.email).toBe("buyer@example.com"); // trimmed + case-folded
     expect(fake.sets.get(ordersKeyFor(saleId))?.has("buyer@example.com")).toBe(true);
 
@@ -171,7 +171,7 @@ describe("POST /api/order (booted via bootstrap())", () => {
       const { app } = await boot({ nowMs: IN_WINDOW, stock: "5" });
       const email = "a".repeat(256);
       const res = await request(app).post("/api/order").send({ email });
-      expect(res.status).toBe(201);
+      expect(res.status).toBe(202);
       expect(res.body.email).toBe(email);
     });
   });
@@ -179,7 +179,7 @@ describe("POST /api/order (booted via bootstrap())", () => {
   it("trims the email and uses the trimmed form everywhere", async () => {
     const { fake, saleId, app } = await boot({ nowMs: IN_WINDOW, stock: "5" });
     const res = await request(app).post("/api/order").send({ email: "  padded@example.com  " });
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(202);
     expect(res.body.email).toBe("padded@example.com");
     expect(fake.sets.get(ordersKeyFor(saleId))?.has("padded@example.com")).toBe(true);
 
@@ -207,20 +207,20 @@ describe("POST /api/order (booted via bootstrap())", () => {
     const { fake, app } = await boot({ nowMs: IN_WINDOW, stock: "2" });
     fake.flushScripts();
     const res = await request(app).post("/api/order").send({ email: "resilient@example.com" });
-    expect(res.status).toBe(201);
-    expect(res.body.message).toBe("Order successful.");
+    expect(res.status).toBe(202);
+    expect(res.body.message).toBe("Order accepted.");
     expect(fake.calls.eval).toBeGreaterThanOrEqual(1);
   });
 
   describe("concurrent burst", () => {
-    it("20 unique emails vs stock 5 -> exactly 5x201 + 15x409 sold out; stock 0; set size 5", async () => {
+    it("20 unique emails vs stock 5 -> exactly 5x202 + 15x409 sold out; stock 0; set size 5", async () => {
       const { fake, saleId, app } = await boot({ nowMs: IN_WINDOW, stock: "5", stockQuantity: "5" });
       const emails = Array.from({ length: 20 }, (_, i) => `burst-${i}@example.com`);
       const responses = await Promise.all(
         emails.map((email) => request(app).post("/api/order").send({ email })),
       );
 
-      const created = responses.filter((r) => r.status === 201);
+      const created = responses.filter((r) => r.status === 202);
       const soldOut = responses.filter((r) => r.status === 409);
       expect(created).toHaveLength(5);
       expect(soldOut).toHaveLength(15);
@@ -244,7 +244,7 @@ describe("POST /api/order (booted via bootstrap())", () => {
       );
       expect(second.filter((r) => r.status === 200)).toHaveLength(5);
       expect(second.filter((r) => r.status === 409)).toHaveLength(15);
-      expect(second.filter((r) => r.status === 201)).toHaveLength(0);
+      expect(second.filter((r) => r.status === 202)).toHaveLength(0);
       expect(fake.kv.get(stockKeyFor(saleId))).toBe("0");
       expect(orderSetSize(fake, saleId)).toBe(5);
     });
@@ -256,7 +256,7 @@ describe("POST /api/order (booted via bootstrap())", () => {
           request(app).post("/api/order").send({ email: "dup@example.com" }),
         ),
       );
-      expect(responses.filter((r) => r.status === 201)).toHaveLength(1);
+      expect(responses.filter((r) => r.status === 202)).toHaveLength(1);
       expect(responses.filter((r) => r.status === 200)).toHaveLength(9);
       expect(fake.kv.get(stockKeyFor(saleId))).toBe("9");
       expect(orderSetSize(fake, saleId)).toBe(1);

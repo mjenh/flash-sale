@@ -144,7 +144,7 @@ describe("GET /api/sales/:slug/events — identical to the v1.0 alias", () => {
     await scoped.waitForFrames(1);
 
     const res = await request(app).post("/api/sales/flash-sale/order").send({ email: "buyer@example.com" });
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(202);
     await drain();
 
     const aliasFrames = await alias.waitForFrames(2);
@@ -182,7 +182,7 @@ describe("live update path", () => {
     await stream.waitForFrames(1);
 
     const res = await request(app).post("/api/order").send({ email: "buyer@example.com" });
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(202);
     await drain();
     expect(fake.published).toEqual(["order.accepted"]);
 
@@ -204,7 +204,7 @@ describe("live update path", () => {
     await two.waitForFrames(1);
 
     const res = await request(app).post("/api/order").send({ email: "last@example.com" });
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(202);
     await drain();
     expect(fake.published).toEqual(["order.accepted", "sale.sold_out"]);
     expect(fake.published.filter((e) => e === "sale.sold_out")).toHaveLength(1);
@@ -241,7 +241,7 @@ describe("live update path", () => {
 
     for (let i = 0; i < 5; i += 1) {
       const res = await request(app).post("/api/order").send({ email: `burst-${i}@example.com` });
-      expect(res.status).toBe(201);
+      expect(res.status).toBe(202);
     }
     await drain();
     expect(fake.published.filter((e) => e === "order.accepted")).toHaveLength(5);
@@ -297,16 +297,16 @@ describe("fail closed", () => {
     expect(lines.some((line) => line.includes("subscriber connection lost"))).toBe(true);
   });
 
-  it("publish failures never alter the HTTP outcome: the order still returns the exact 201 body, one failure reported", async () => {
+  it("publish failures never alter the HTTP outcome: the order still returns the exact 202 body, one failure reported", async () => {
     const { fake, app, lines } = await boot({ nowMs: IN_WINDOW, stock: "3" });
     fake.failingPublish = true;
 
     const res = await request(app).post("/api/order").send({ email: "buyer@example.com" });
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(202);
     expect(res.body).toEqual({
       success: true,
       email: "buyer@example.com",
-      message: "Order successful.",
+      message: "Order accepted.",
     });
 
     await drain();

@@ -60,7 +60,7 @@ function said(body: unknown, fallback: string): string {
   return fallback;
 }
 
-/** A 200/201 is only trustworthy if the body is actually an order envelope. A
+/** A 200/201/202 is only trustworthy if the body is actually an order envelope. A
  *  captive portal or proxy can answer 200 with HTML (which fails to parse, so
  *  `body` is null) — mapping that to "already ordered" or "success" would tell a
  *  buyer who ordered nothing that they hold an order. `success: false` is never
@@ -79,6 +79,7 @@ function isOrderEnvelope(body: unknown): boolean {
 function verdictFor(status: number, body: unknown): Verdict {
   switch (status) {
     case 201:
+    case 202:
       return isOrderEnvelope(body)
         ? { kind: "success", message: said(body, SUCCESS) }
         : { kind: "network", message: NETWORK };

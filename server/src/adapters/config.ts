@@ -55,6 +55,25 @@ function positiveInt(env: Env, key: string, fallback: number): number {
   return n;
 }
 
+/** Minimal config for the standalone worker process.
+ *  Sale window and stock are irrelevant to the worker — it only drains the
+ *  queue:orders stream into MongoDB. */
+export interface WorkerConfig {
+  redisUrl: string;
+  mongodbUri: string;
+  redisConnectTimeoutMs: number;
+  redisCommandTimeoutMs: number;
+}
+
+export function loadWorkerConfig(env: Env = process.env): WorkerConfig {
+  return {
+    redisUrl: env["REDIS_URL"] ?? "redis://localhost:6379",
+    mongodbUri: env["MONGODB_URI"] ?? "mongodb://localhost:27017/flash-sale",
+    redisConnectTimeoutMs: 2000,
+    redisCommandTimeoutMs: 1000,
+  };
+}
+
 export function loadConfig(env: Env = process.env): AppConfig {
   const saleStartMs = requiredIsoMs(env, "SALE_START_TIME");
   const saleEndMs = requiredIsoMs(env, "SALE_END_TIME");

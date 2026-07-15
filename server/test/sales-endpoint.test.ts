@@ -220,17 +220,17 @@ describe("GET /api/sales/:slug/status", () => {
 });
 
 describe("POST /api/sales/:slug/order", () => {
-  it("201 for a new email inside the window — identical to v1.0", async () => {
+  it("202 for a new email inside the window — identical to v1.0", async () => {
     const { fake, saleId, app } = await boot({ nowMs: IN_WINDOW, stock: "3" });
 
     const res = await request(app)
       .post("/api/sales/flash-sale/order")
       .send({ email: "buyer@example.com" });
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(202);
     expect(res.body).toEqual({
       success: true,
       email: "buyer@example.com",
-      message: "Order successful.",
+      message: "Order accepted.",
     });
     expect(fake.kv.get(stockKeyFor(saleId))).toBe("2");
   });
@@ -327,7 +327,7 @@ describe("v1.0 alias routes still work (req.sale is set by forActiveSale middlew
     const { app } = await boot({ nowMs: IN_WINDOW, stock: "5" });
 
     const v10 = await request(app).post("/api/order").send({ email: "alias@example.com" });
-    expect(v10.status).toBe(201);
+    expect(v10.status).toBe(202);
 
     // The order placed via v1.0 is visible via v1.1 order check.
     const check = await request(app).get("/api/sales/flash-sale/order/alias@example.com");

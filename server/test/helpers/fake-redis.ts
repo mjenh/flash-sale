@@ -1,8 +1,8 @@
 // Shared in-memory fake Redis client for endpoint tests. Exposes exactly the
 // command surface production code uses (get/set/exists/del/sAdd/sIsMember/
-// scriptLoad/evalSha/eval/publish/duplicate) so tests boot through the REAL
-// bootstrap(); swap it for a real client against compose-run Redis and the
-// endpoint test files run unchanged.
+// scriptLoad/evalSha/eval/publish/duplicate/xAdd) so tests boot through the
+// REAL bootstrap(); swap it for a real client against compose-run Redis and
+// the endpoint test files run unchanged.
 //
 // Pub/sub bus: publish() delivers synchronously to listeners subscribed
 // through duplicate()d subscriber clients (all duplicates share one bus).
@@ -37,6 +37,8 @@ export interface FakeRedis {
   failingPublish: boolean;
   /** Messages successfully published to any channel, in order. */
   published: string[];
+  /** Stream entries added via xAdd, keyed by stream key. */
+  streams: Map<string, Array<{ id: string; fields: Record<string, string> }>>;
   /** Inject an event at the subscription as if it had been published —
    *  drives the broadcaster without touching the publisher. */
   deliver(channel: string, message: string): void;
@@ -77,9 +79,11 @@ export function createFakeRedis(initial?: { stock?: string; saleId?: string }): 
   const channelListeners = new Map<string, Set<(message: string) => void>>();
   const subscriberErrorListeners = new Set<(err: Error) => void>();
 
+  const streams = new Map<string, Array<{ id: string; fields: Record<string, string> }>>();
   const fake: FakeRedis = {
     kv,
     sets,
+    streams,
     failing: false,
     failingPublish: false,
     published: [],
@@ -98,6 +102,7 @@ export function createFakeRedis(initial?: { stock?: string; saleId?: string }): 
       kv.clear();
       sets.clear();
       scripts.clear();
+      streams.clear();
     },
     calls,
     client: undefined as unknown as RedisClient,
@@ -207,6 +212,14 @@ export function createFakeRedis(initial?: { stock?: string; saleId?: string }): 
         throw new Error("fake-redis only implements order.lua");
       }
       return runOrderScript(options.arguments);
+    },
+    xAdd: async (key: string, id: string, fields: Record<string, string>) => {
+      assertUp();
+      const entries = streams.get(key) ?? [];
+      const entryId = `${Date.now()}-${entries.length}`;
+      entries.push({ id: entryId, fields });
+      streams.set(key, entries);
+      return entryId;
     },
     publish: async (channel: string, message: string) => {
       assertUp();

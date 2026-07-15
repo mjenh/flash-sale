@@ -12,6 +12,7 @@ import request from "supertest";
 import { pino, type Logger } from "pino";
 import { bootstrap, type BootstrapOverrides } from "../src/bootstrap.ts";
 import { SALE_SLUG } from "../src/adapters/mongo/seed.ts";
+import { createOrderRecorder } from "../src/adapters/mongo/audit.ts";
 import type { PaymentProvider } from "../src/services/payment.ts";
 import {
   createFakeRedis,
@@ -50,6 +51,10 @@ async function boot(opts: {
   mongo?: FakeMongo;
   payment?: PaymentProvider;
   logger?: Logger;
+  /** Pass true to inject the direct Mongo recorder instead of the write-behind
+   *  queue adapter. Required for audit + cold-restart tests that assert on
+   *  immediate Mongo persistence (the worker is not running in test). */
+  directAudit?: boolean;
 }) {
   const mongo = opts.mongo ?? createFakeMongo();
   // Idempotent by slug — reserving again on a reused mongo returns the same id.
@@ -70,6 +75,10 @@ async function boot(opts: {
     disconnectMongoDb: vi.fn(async () => {}),
     mongoModelOps: mongo.ops,
     ...(opts.payment === undefined ? {} : { payment: opts.payment }),
+    // Bypass the queue adapter for tests that need immediate Mongo writes.
+    ...(opts.directAudit
+      ? { createOrderAudit: (productId) => createOrderRecorder(productId, mongo.ops.audit) }
+      : {}),
   };
   const { app } = await bootstrap(overrides);
   return { fake, mongo, saleId, app };
@@ -98,18 +107,18 @@ describe("boot seed", () => {
 });
 
 describe("async Mongo audit + payment after OK", () => {
-  it("a 201 accept audits upsert User + Order('confirmed') + one OrderLine (qty 1, unitPrice 0) and charges payment once", async () => {
+  it("a 202 accept audits upsert User + Order('confirmed') + one OrderLine (qty 1, unitPrice 0) and charges payment once", async () => {
     const charge = vi.fn(async (email: string) => ({ approved: true, reference: `noop:${email}` }));
-    const { mongo } = await boot({ nowMs: IN_WINDOW, stock: "5", payment: { charge } }).then(
+    const { mongo } = await boot({ nowMs: IN_WINDOW, stock: "5", payment: { charge }, directAudit: true }).then(
       async (booted) => {
         const res = await request(booted.app)
           .post("/api/order")
           .send({ email: "buyer@example.com" });
-        expect(res.status).toBe(201);
+        expect(res.status).toBe(202);
         expect(res.body).toEqual({
           success: true,
           email: "buyer@example.com",
-          message: "Order successful.",
+          message: "Order accepted.",
         });
         await drain();
         return booted;
@@ -135,7 +144,7 @@ describe("async Mongo audit + payment after OK", () => {
 
   it("an idempotent retry (200) does not grow the audit trail or charge again", async () => {
     const charge = vi.fn(async (email: string) => ({ approved: true, reference: `noop:${email}` }));
-    const { app, mongo } = await boot({ nowMs: IN_WINDOW, stock: "5", payment: { charge } });
+    const { app, mongo } = await boot({ nowMs: IN_WINDOW, stock: "5", payment: { charge }, directAudit: true });
     await request(app).post("/api/order").send({ email: "buyer@example.com" });
     await drain();
 
@@ -163,30 +172,30 @@ describe("async Mongo audit + payment after OK", () => {
     expect(charge).not.toHaveBeenCalled();
   });
 
-  it("a rejecting payment provider never alters the 201", async () => {
+  it("a rejecting payment provider never alters the 202", async () => {
     const charge = vi.fn(async () => {
       throw new Error("gateway exploded");
     });
     const { app } = await boot({ nowMs: IN_WINDOW, stock: "5", payment: { charge } });
     const res = await request(app).post("/api/order").send({ email: "buyer@example.com" });
-    expect(res.status).toBe(201);
-    expect(res.body.message).toBe("Order successful.");
+    expect(res.status).toBe(202);
+    expect(res.body.message).toBe("Order accepted.");
     await drain();
   });
 });
 
 describe("Mongo write failure: logged, never rolled back, response unchanged", () => {
-  it("failing audit -> exact 201 body, Redis decrement kept, one error log line", async () => {
+  it("failing audit -> exact 202 body, Redis decrement kept, one error log line", async () => {
     const { lines, logger } = captureLogger();
-    const { app, fake, saleId, mongo } = await boot({ nowMs: IN_WINDOW, stock: "5", logger });
+    const { app, fake, saleId, mongo } = await boot({ nowMs: IN_WINDOW, stock: "5", logger, directAudit: true });
     mongo.failingAudit = true;
 
     const res = await request(app).post("/api/order").send({ email: "unlucky@example.com" });
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(202);
     expect(res.body).toEqual({
       success: true,
       email: "unlucky@example.com",
-      message: "Order successful.",
+      message: "Order accepted.",
     });
     await drain();
 
@@ -220,10 +229,10 @@ describe("restart safety", () => {
   });
 
   it("cold restart rebuilds membership + stock from MongoDB; counts and idempotent retries survive", async () => {
-    const first = await boot({ nowMs: IN_WINDOW, stock: "5", stockQuantity: "5" });
+    const first = await boot({ nowMs: IN_WINDOW, stock: "5", stockQuantity: "5", directAudit: true });
     for (const email of ["w-1@x.com", "w-2@x.com", "w-3@x.com"]) {
       const res = await request(first.app).post("/api/order").send({ email });
-      expect(res.status).toBe(201);
+      expect(res.status).toBe(202);
     }
     await drain();
     expect(first.mongo.orders).toHaveLength(3);
@@ -235,6 +244,7 @@ describe("restart safety", () => {
       redis: first.fake,
       mongo: first.mongo,
       stockQuantity: "5",
+      directAudit: true,
     });
 
     // Membership and stock restored from Mongo truth.
@@ -256,14 +266,14 @@ describe("restart safety", () => {
 
     // And the sale continues where it left off.
     const fresh = await request(second.app).post("/api/order").send({ email: "w-4@x.com" });
-    expect(fresh.status).toBe(201);
+    expect(fresh.status).toBe(202);
     expect(first.fake.kv.get(stockKeyFor(first.saleId))).toBe("1");
     await drain();
     expect(first.mongo.orders).toHaveLength(4);
   });
 
   it("restart never heals Mongo from Redis: a dropped audit write stays a permanent undercount", async () => {
-    const first = await boot({ nowMs: IN_WINDOW, stock: "5", stockQuantity: "5" });
+    const first = await boot({ nowMs: IN_WINDOW, stock: "5", stockQuantity: "5", directAudit: true });
     await request(first.app).post("/api/order").send({ email: "audited-1@x.com" });
     await request(first.app).post("/api/order").send({ email: "audited-2@x.com" });
     await drain();
@@ -271,7 +281,7 @@ describe("restart safety", () => {
     // The crash window: Redis accepted, the Mongo write was lost.
     first.mongo.failingAudit = true;
     const lost = await request(first.app).post("/api/order").send({ email: "lost@x.com" });
-    expect(lost.status).toBe(201);
+    expect(lost.status).toBe(202);
     await drain();
     first.mongo.failingAudit = false;
     expect(first.mongo.orders).toHaveLength(2);
@@ -287,7 +297,7 @@ describe("restart safety", () => {
   });
 
   it("cold rebuild clamps stock:{saleId}:remaining at 0 when confirmed orders exceed STOCK_QUANTITY", async () => {
-    const first = await boot({ nowMs: IN_WINDOW, stock: "10", stockQuantity: "10" });
+    const first = await boot({ nowMs: IN_WINDOW, stock: "10", stockQuantity: "10", directAudit: true });
     for (let i = 0; i < 6; i += 1) {
       await request(first.app).post("/api/order").send({ email: `b-${i}@x.com` });
     }

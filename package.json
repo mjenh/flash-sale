@@ -11,7 +11,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "concurrently -k -n server,client -c blue,green \"npm run dev -w server\" \"npm run dev -w client\"",
+    "dev": "concurrently -k -n server,worker,client -c blue,cyan,green \"npm run dev -w server\" \"npm run dev:worker -w server\" \"npm run dev -w client\"",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "stress": "npm run stress -w stress"
