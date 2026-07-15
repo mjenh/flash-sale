@@ -264,7 +264,7 @@ oversell; the window phase confirms all attempts are rejected `409` once the
 sale window is closed.
 
 <!-- stress:latest -->
-**Latest stress report:** [20260716_0044](docs/testing/stress/20260716_0044/report.html)
+**Latest stress report:** [20260716_0155](docs/testing/stress/20260716_0155/report.html)
 <!-- /stress:latest -->
 
 ### Stress configuration
@@ -411,6 +411,25 @@ HTTP response. If a real payment adapter is wired in and the charge is declined,
 the buyer's slot in Redis is not released. There is no reversal path. A
 production payment integration requires a reserve-then-confirm flow with a
 `Reservation` collection (see Roadmap).
+
+## System Performance & Scalability Analysis
+
+The API tier is stateless and scales horizontally — all shared state lives in Redis. The concurrency core is a single atomic Lua script (`adapters/redis/order.lua`) executed via `EVALSHA`, making it race-free at any replica count. The hard ceiling is **one Redis primary**, which handles the write path for every accepted order across all API pods; this is an intentional design trade-off documented in [Known Limitations](#known-limitations).
+
+RPS estimates assume a sustained 10-second peak (`Concurrent Users × 2 ÷ 10 s`). Actual flash-sale bursts are more intense — stress test `20260716_0044` recorded **9,142 RPS** from 5,000 VUs firing in ~549 ms. SSE connections are long-lived and tracked separately. See [`docs/performance-scalability.md`](docs/performance-scalability.md) for full per-tier load profiles, bottleneck breakdowns, and architectural mitigations.
+
+### Traffic tier summary
+
+| Tier | Concurrent Users | Est. Sustained RPS | SSE Connections | Feasibility | Primary Bottleneck | Key Mitigation |
+|------|-----------------|-------------------|-----------------|-------------|--------------------|----------------|
+| 1 | 5,000 | ~1,000 RPS (burst measured: 9,142 RPS¹) | ~5,000 | ✅ Yes, out of the box | p90→p95 cliff (40ms→363ms measured); TCP handshake burst at startup (one-time, k6-side) | Add `express-rate-limit`; consider ioredis connection pooling for Redis pipeline throughput; run ≥2 replicas; add k6 ramp-up stage for staging runs |
+| 2 | 100,000 | ~20,000 RPS | ~100,000 | ⚠️ With modifications | SSE memory exhaustion (~1–3 GB RSS on one process) + event-loop saturation | Scale to 8–12 API replicas; dedicated SSE fan-out gateway; 4–8 worker replicas |
+| 3 | 500,000 | ~100,000 RPS | ~500,000 | ❌ Major changes required | Redis single-primary `EVALSHA` saturation (~30k–80k ops/s ceiling); stream `MAXLEN` data-loss risk | Redis read replicas for status reads; pre-shard inventory; CDN on status endpoint; raise `MAXLEN` to `~5 000 000` |
+| 4 | 1,000,000 | ~200,000 RPS | ~1,000,000 | ❌ Full redesign required | Redis single-process command wall; `MAXLEN ~200 000` trims ~80% of audit entries; 1M SSE requires global edge | Redis Cluster with consistent-hashed inventory; reserve-pool model per pod; global CDN SSE tier; shard MongoDB `orders` |
+
+> ¹ Stress test `20260716_0044`: 5,000 VUs · 100-item stock · localhost · 0% error rate · 100/100 orders accepted · 0 oversell. See [`docs/testing/stress/20260716_0044/report.md`](docs/testing/stress/20260716_0044/report.md).
+
+---
 
 ## Roadmap
 
