@@ -20,7 +20,7 @@ Use this to verify every requirement in `flash-sale-system.md` is implemented. C
 
 ### Flash Sale Period
 - [x] Sale has a **configurable** start time and end time
-  → PASS — `SALE_START_TIME` / `SALE_END_TIME` parsed to UTC epoch ms once at boot, fail-fast (`server/src/adapters/config.ts`).
+  → PASS — `startTime` / `endTime` provisioned in MongoDB via `db/data/sales.json`; read at boot by `mongoSaleBootstrapOps.listAllSales()` (`server/src/adapters/mongo/sale-bootstrap.ts`). Boot fails fast if no sale is found.
 - [x] Purchase attempts **before** the start time are rejected (status: upcoming)
   → PASS — `order.ts` returns `inactive` (409) when `now < startMs`; status service returns `upcoming`.
 - [x] Purchase attempts **after** the end time are rejected (status: ended)
@@ -32,7 +32,7 @@ Use this to verify every requirement in `flash-sale-system.md` is implemented. C
 - [x] System sells exactly **one product type**
   → PASS — one `stock:remaining` integer key; single seeded sale document.
 - [x] Product has a **predefined, configurable** stock quantity
-  → PASS — `STOCK_QUANTITY` (default 100), validated as a positive integer.
+  → PASS — `stockQuantity` provisioned in MongoDB via `db/data/sales.json`; read at boot by `mongoSaleBootstrapOps.listAllSales()`. Redis is initialized to `stockQuantity − confirmedOrders` on cold start.
 - [x] Stock **never goes negative** (no overselling)
   → PASS — `order.lua` checks `stock <= 0` before `DECR`; check-then-decrement is one atomic server-side unit.
 - [x] Sale reports **sold out** once stock reaches zero
@@ -62,7 +62,7 @@ Use this to verify every requirement in `flash-sale-system.md` is implemented. C
 - [x] Displays the **current sale status**
   → PASS — `SaleStatusZone` fed by `useSaleStatus` (SSE + poll fallback).
 - [x] Field to enter a **user identifier** (username/email)
-  → PASS — `<input type="email">` in `App.tsx`, remembered across loads.
+  → PASS — `<input type="email">` in `SalePage.tsx` (via `useEmailField` hook), remembered across loads.
 - [x] **"Buy Now"** button to attempt a purchase
   → PASS — submit button inside a real `<form>` (Enter == click).
 - [x] Shows feedback: **success**, **already purchased**, and **ended / sold out**

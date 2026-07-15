@@ -146,14 +146,34 @@ Accepted CLI flags: `--mongoUri` (overrides `$MONGODB_URI`) and `--dataDir`
 
 ### Infrastructure environment variables
 
-Parsed and validated once at boot; an invalid value fails fast before listen.
+Parsed and validated once at boot by `server/src/adapters/config.ts`; an invalid value fails fast before `listen()`. Sale timing, stock quantity, and product pricing are **not** env vars — they live in MongoDB and are set by `db/scripts/seed-db.ts`.
+
+**API server (`AppConfig`)**
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `REDIS_URL` | `redis://localhost:6379` | Redis 8, AOF enabled |
 | `MONGODB_URI` | `mongodb://localhost:27017/flash-sale` | Audit database and sale config |
 | `PORT` | `3000` | API listen port |
+| `REDIS_CONNECT_TIMEOUT_MS` | `2000` | Boot-time Redis connect timeout in ms. Increase for TLS/Atlas/cluster. |
+| `REDIS_COMMAND_TIMEOUT_MS` | `1000` | Per-command Redis timeout in ms. A timeout is treated as unreachable (503). |
+| `REDIS_RECONNECT_MAX_MS` | `2000` | Reconnect backoff ceiling in ms. Raise if Redis failover takes longer. |
+| `MONGO_SELECTION_TIMEOUT_MS` | `5000` | MongoDB server-selection timeout in ms. Atlas replica-set elections can exceed 5 s. |
+| `HTTP_BODY_LIMIT` | `8kb` | Express JSON body size limit. Increase if a gateway pre-aggregates chunks. |
+| `SALE_RESOLVER_CACHE_TTL_MS` | `60000` | Slug→sale in-memory cache TTL in ms (max 60 000). Lower in dev for faster iteration. |
 | `WORKER_COLOCATED` | `false` | `true`: run the write-behind worker inside the API process. `false` / unset: run the worker separately (`src/worker/index.ts` or the `worker` Compose service). |
+
+**Write-behind worker (`WorkerConfig`)**
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `REDIS_URL` | `redis://localhost:6379` | Same connection as the API. |
+| `MONGODB_URI` | `mongodb://localhost:27017/flash-sale` | Same database as the API. |
+| `REDIS_CONNECT_TIMEOUT_MS` | `2000` | Same semantics as the API. |
+| `REDIS_COMMAND_TIMEOUT_MS` | `1000` | Same semantics as the API. |
+| `REDIS_RECONNECT_MAX_MS` | `2000` | Same semantics as the API. |
+| `WORKER_CONSUMER_ID` | `worker-<hostname>` | Unique XREADGROUP consumer name per replica. Each pod must use a distinct value so PEL re-delivery is scoped per-instance. Defaults to `worker-` + the OS hostname. |
+| `WORKER_GROUP` | `workers` | Consumer group name shared by all workers draining the same stream. Override only when running independent consumer groups. |
 
 ## Development
 
@@ -239,6 +259,8 @@ server/   Express 5 + TypeScript API (Node 24 native type stripping — no bundl
             adapters/       stores & ports: redis/ · mongo/ · payment/ · config.ts
             worker/         write-behind consumer worker
               order-worker.ts  XREADGROUP polling loop · at-least-once · exp. backoff
+                               consumer group: WORKER_GROUP (default "workers")
+                               consumer id: WORKER_CONSUMER_ID (default "worker-<hostname>")
               index.ts         standalone entrypoint (node src/worker/index.ts)
           test/             unit + integration tests
 
@@ -274,7 +296,7 @@ Makefile                install / seed / dev / build / deploy / stress / clean /
 
 ## Domain model
 
-The system models a single flash sale with one product. Eight Mongo collections
+The system models a single flash sale with one product. Seven Mongo collections
 ship; Redis holds the runtime truth.
 
 **MongoDB (durable audit) — three categories:**
