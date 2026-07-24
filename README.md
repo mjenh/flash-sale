@@ -301,6 +301,7 @@ ship; Redis holds the runtime truth.
 | `orders:{saleId}:users` | set | Buyer emails with confirmed orders |
 | `sale:{saleId}:events` | pub/sub | Type-only event strings (`order.accepted`, `sale.sold_out`, `sale.started`, `sale.ended`) |
 | `queue:orders` | stream | Write-behind audit queue; the worker drains it to MongoDB via XREADGROUP / XACK. |
+
 The Lua script, the boot rebuild, and the offline reset script are the only
 permitted writers of the two state keys. The full ER diagram and interface
 catalog live in
